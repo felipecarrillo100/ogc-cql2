@@ -18,11 +18,14 @@ The first working version: the profile Basic CQL2, Advanced Comparison Operators
 - `ogc-cql2/text`: `toText`, CQL2-JSON to CQL2-text following the released grammar; `textProblem`, what the text
   can't express; `isIdentifier`.
 - `ogc-cql2/evaluate`: `toPredicate`, `toEvaluator` and `evaluate`, with CQL2's three-valued logic, Unicode full case
-  folding for `casei` and NFC normalization for strings.
+  folding for `casei`, NFC normalization for strings and code point order.
+- `ogc-cql2/sql`: `toSql`, a parameterized `WHERE` clause for SQLite following GeoPackage's types, selecting exactly
+  what `evaluate` selects; `sqliteFunctions` to register on the connection.
 - The MIT licence, and `LICENSE-UNICODE` for the case-folding table derived from Unicode data.
 - The demo is now a playground: a CQL2-JSON filter, its problems, conformance classes, CQL2-text and the sample
   features it selects, in the browser or from `demo-server`.
-- `demo-server/` (not published): a Node backend answering filters from GeoJSON files, through a store layer.
+- `demo-server/` (not published): a Node backend answering filters through a store layer: GeoJSON files, filtered
+  with `ogc-cql2/evaluate`, and GeoPackage tables, filtered in SQLite with `ogc-cql2/sql`.
 - `check:imports` and `check:bundle`, run before every publish: the package has no runtime dependencies, and a page
   importing only `ogc-cql2/evaluate` bundles nothing else.
 

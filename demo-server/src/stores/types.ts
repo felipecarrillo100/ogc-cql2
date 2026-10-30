@@ -23,6 +23,7 @@ export interface Queryable {
 export interface CollectionDescription {
   readonly id: string;
   readonly title: string;
+  readonly description?: string;
   readonly source: string;
   readonly featureCount: number;
   /** What the store had to report about its data: dropped duplicates, properties of mixed types… */

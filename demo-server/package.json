@@ -7,8 +7,8 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "start": "npm --prefix .. run build && node src/server.ts",
-    "serve": "node src/server.ts",
+    "start": "npm --prefix .. run build && node --env-file-if-exists=.env src/server.ts",
+    "serve": "node --env-file-if-exists=.env src/server.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc -p ."
   },

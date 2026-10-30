@@ -1,5 +1,6 @@
 {
   "collections": [
-    { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" }
+    { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" },
+    { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-" }
   ]
 }

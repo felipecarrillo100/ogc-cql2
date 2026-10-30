@@ -7,6 +7,7 @@ export default defineConfig({
     "validate/index": "src/validate/index.ts",
     "text/index": "src/text/index.ts",
     "evaluate/index": "src/evaluate/index.ts",
+    "sql/index": "src/sql/index.ts",
   },
   format: "esm",
   // Browsers and Node alike.

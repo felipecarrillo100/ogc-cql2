@@ -18,7 +18,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Local environment
+# Local environment (.env_sample, without secrets, is committed)
 .env
 .env.*
 

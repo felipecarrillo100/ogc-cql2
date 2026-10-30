@@ -44,7 +44,7 @@ drops the rest.
 | `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate` | 0.1.0 |
-| `ogc-cql2/sql` | `src/sql/` | CQL2-JSON → parameterized SQL (PostgreSQL / PostGIS first) | later |
+| `ogc-cql2/sql` | `src/sql/` | `toSql`, `sqliteFunctions`: CQL2-JSON → a parameterized `WHERE` clause | 0.1.0: `sqlite`; `postgres` later |
 | `ogc-cql2/parse` | `src/parse/` | CQL2-text → CQL2-JSON, for a server that receives text | later, if needed |
 
 `text` and `evaluate` validate their input first, so they load `validate` too.
@@ -101,11 +101,41 @@ What the text can't express is refused as `not-expressible`, with the reason and
 - **Compiled once:** `toPredicate` and `toEvaluator` validate the filter and prepare its patterns and literals, so
   each feature costs only the comparisons.
 
-### SQL (`ogc-cql2/sql`, later)
+### SQL (`ogc-cql2/sql`)
 
-- **Always parameterized:** values become `$1`, `$2` …, never text inside the query.
-- **Property names are checked** against the columns the caller allows, then quoted.
-- **CQL2's three-valued logic maps directly** onto SQL's NULL.
+`toSql(filter, { dialect, columns })` returns `{ where, params }`: text and values only, no driver. The rule: the SQL
+selects exactly the rows `evaluate` selects from the same values.
+
+- **Always parameterized:** values are `?` placeholders, never text inside the query.
+- **Property names are checked** against `columns` (the table's queryables), then quoted; anything else is
+  `unknown-property`. A property can map to a column of another name.
+- **CQL2's three-valued logic maps directly** onto SQL's NULL (`AND`, `OR`, `NOT`).
+- **The pattern others use:** a field mapping and a function map, as pygeofilter's SQL backend does; unlike it, values
+  are never put into the SQL text.
+
+The `sqlite` dialect follows **GeoPackage** (OGC 12-128r19, version 1.4): its declared types (Table 1, Req 5), its
+BOOLEAN as INTEGER 0 / 1, DATE as `YYYY-MM-DD`, DATETIME as `YYYY-MM-DDTHH:MM[:SS.SSS]Z`, and its note that readers
+SHOULD allow for values of an unexpected type, which SQLite permits in any column.
+
+| CQL2 | SQLite |
+|---|---|
+| `and`, `or`, `not`, `isNull`, `true` / `false` | `AND`, `OR`, `NOT`, `IS NULL`, `1` / `0` |
+| a comparison, `between`, `in` | on a **typed view** of the column: each value of another type is NULL there, as `evaluate` gives NULL for a type mismatch |
+| numbers | `CASE WHEN typeof(c) IN ('integer', 'real') THEN c END`; on a BOOLEAN column, 0 and 1 are booleans, not numbers |
+| booleans | only in a BOOLEAN column, as 0 / 1; elsewhere the comparison is `NULL` (SQLite stores no booleans) |
+| text | `cql2_text(c)`: NFC; binary order, which is code point order |
+| `casei(…)` | `cql2_casei(…)`: Unicode full case folding |
+| `{date}` | `cql2_day(c)`: a `YYYY-MM-DD` value |
+| `{timestamp}` | `cql2_instant(c)`: an ISO 8601 date-time with `Z` or an offset, in milliseconds |
+| `like` | `cql2_like(view, pattern)`: case-sensitive, `%` `_` `\` |
+
+The `cql2_*` functions are `sqliteFunctions`, which the application registers on its connection. They run the same
+code as `evaluate` (`src/evaluate/strings.ts`). SQLite's own LIKE ignores ASCII case (its `case_sensitive_like`
+pragma is deprecated) and its `lower()` folds ASCII only, so neither can be used.
+
+**The cost of exactness:** the typed views and functions stop SQLite from using an index for those predicates. An
+index-friendly mode, for tables whose values are known to match their declared types, can come later, measured
+against the same tests.
 
 ### Errors
 
@@ -126,7 +156,7 @@ What the text can't express is refused as `not-expressible`, with the reason and
 - **A Node server:**
   - accepts CQL2-JSON;
   - validates it;
-  - evaluates it against stored features (`ogc-cql2/evaluate`), or later builds SQL (`ogc-cql2/sql`);
+  - evaluates it against stored features (`ogc-cql2/evaluate`), or builds SQL (`ogc-cql2/sql`);
   - and, if it must accept CQL2-text, parses it (`ogc-cql2/parse`, later).
 
 ## The demo server (`demo-server/`, not published)
@@ -138,9 +168,12 @@ filter selects). The server never knows which store it talks to.
 | Store | Reads | Filters with | Status |
 |---|---|---|---|
 | GeoJSON | one FeatureCollection file, read once at startup | `ogc-cql2/evaluate` | 0.1.0 |
-| SQLite | the tables of a `.sqlite` file (Node's built-in `node:sqlite`) | `ogc-cql2/sql` | next |
+| GeoPackage (SQLite) | the `features` and `attributes` tables a GeoPackage lists in `gpkg_contents` (Node's built-in `node:sqlite`, read-only) | `ogc-cql2/sql` | 0.1.0 |
 | PostgreSQL / PostGIS | tables of a database; the connection in a git-ignored `.env` | `ogc-cql2/sql` | later |
 
+- A GeoPackage table: the id is its INTEGER primary key (Req 29, 119), the queryables come from its declared types
+  (Table 1), BOOLEAN 0 / 1 is served as `false` / `true`, and geometry is decoded from GeoPackageBinary (the `GP`
+  header, then WKB) to GeoJSON. A table not in WGS 84 is served without geometry, and that's reported.
 - Every store answers GeoJSON features. A GeoJSON file's ids are kept when unique; missing ones are generated
   deterministically (the position in the file, or after the largest numeric id); a duplicate id drops the later
   feature, which is reported.
@@ -188,4 +221,4 @@ checks that they agree.
 |---|---|
 | 0.0.1 | The foundation: build, tests, demo, `CQL2_VERSION`, `quoteString` |
 | 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, the playground |
-| later | `ogc-cql2/sql`; more conformance classes (spatial, temporal, arrays); `ogc-cql2/parse` if a server needs CQL2-text |
+| later | `ogc-cql2/sql` for PostgreSQL; more conformance classes (spatial, temporal, arrays); `ogc-cql2/parse` if a server needs CQL2-text |

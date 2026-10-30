@@ -119,6 +119,36 @@ The rules are the standard's:
 - **Strings** are compared after Unicode normalization (NFC). **`casei`** applies Unicode's full case folding, so
   `"Straße"` matches `"STRASSE"`; it folds exactly what it wraps.
 
+## SQL (SQLite)
+
+`ogc-cql2/sql` turns a filter into a parameterized `WHERE` clause. It only builds the text and the values; your code
+runs them with its own driver, so the package still has no dependencies.
+
+```js
+import { DatabaseSync } from "node:sqlite";
+import { sqliteFunctions, toSql } from "ogc-cql2/sql";
+
+const db = new DatabaseSync("data.gpkg");
+for (const [name, fn] of Object.entries(sqliteFunctions)) db.function(name, { deterministic: true }, fn);
+
+const columns = { name: { type: "string" }, population: { type: "integer" } }; // the table's queryables
+const { where, params } = toSql(filter, { dialect: "sqlite", columns });
+const rows = db.prepare(`SELECT * FROM places WHERE ${where}`).all(...params);
+```
+
+- **Exactly what `evaluate` selects.** The SQL follows the same rules, NULL, no type conversion, NFC, CASEI's case
+  folding, case-sensitive LIKE, and the tests check that on a real SQLite database.
+- **Columns follow GeoPackage** (OGC 12-128r19), OGC's standard for data in SQLite: give each column's type as its
+  queryable (`BOOLEAN` → `boolean`, `INTEGER` → `integer`, `DOUBLE` → `number`, `TEXT` → `string`, `DATE` → `string`
+  with `format: "date"`, `DATETIME` → `string` with `format: "date-time"`). BOOLEAN is GeoPackage's 0 / 1, so read
+  those values back as `false` / `true`.
+- **Register `sqliteFunctions` on the connection.** They run the package's own text, case-folding, LIKE and date-time
+  rules inside SQLite, whose built-in LIKE ignores ASCII case and whose `lower()` folds ASCII only.
+- **Safe by construction:** values are always `?` parameters, and a property that isn't in `columns` is refused
+  (`unknown-property`), so no name reaches the SQL unchecked.
+- **The cost of exactness:** SQLite can't use an index for these predicates, because each value's type is checked as
+  it is read (GeoPackage tells readers to allow for values of an unexpected type).
+
 ## LIKE patterns
 
 `%` matches any number of characters, `_` exactly one. To match a literal `%` or `_`, write `\%` or `\_`:
@@ -154,8 +184,10 @@ In a clone of the repository:
   query a server instead of filtering in the browser. Start it with `npm install && npm start` in `demo-server/`,
   then choose its collection under "Data" in the page.
 
-The server's collections are listed in `demo-server/collections.json`; each one is a GeoJSON FeatureCollection file
-for now (SQLite and PostgreSQL will follow). Its routes:
+The server's collections are listed in `demo-server/collections.json`. A collection is either a GeoJSON
+FeatureCollection file, filtered in memory with `ogc-cql2/evaluate`, or a table of a **GeoPackage** (OGC's SQLite
+format), filtered in the database with `ogc-cql2/sql`: one entry serves every table the GeoPackage lists in
+`gpkg_contents`. The sample `usa.gpkg` holds the states and the census sub-regions. PostgreSQL will follow. Its routes:
 
 | Route | Answer |
 |---|---|

@@ -3,7 +3,9 @@ export type Cql2ErrorCode =
   /** `assertValid`: the value isn't a valid filter in the profile; `details.problems` says why. */
   | "invalid-filter"
   /** `toText`: the filter is valid, but CQL2-text can't express it; `details.problem` says what. */
-  | "not-expressible";
+  | "not-expressible"
+  /** `toSql`: the filter references a property that isn't one of the table's columns; `details.property` names it. */
+  | "unknown-property";
 
 /**
  * The error every refusal throws.

@@ -43,8 +43,11 @@ const ids = (answer: { features: { id: unknown }[] }) => answer.features.map((f)
 describe("collections", () => {
   it("lists them, with warnings", async () => {
     const answer = await read(fetch(`${base}/collections`));
-    assert.deepEqual(answer.collections.map((c: { id: string; featureCount: number }) => [c.id, c.featureCount]), [["states", 51], ["dupes", 2]]);
-    assert.match(answer.collections[1].warnings[0], /Dropped 1 feature/);
+    assert.deepEqual(
+      answer.collections.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
+      [["states", "geojson", 51], ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["dupes", "geojson", 2]],
+    );
+    assert.match(answer.collections[3].warnings[0], /Dropped 1 feature/);
     assert.ok(log.includes(`states: 51 features from ${fileURLToPath(new URL("../data/states.geojson", import.meta.url))}`));
   });
 
@@ -77,6 +80,23 @@ describe("query", () => {
     const answer = await read(query("states", { filter: true, limit: 5, offset: 49 }));
     assert.deepEqual([answer.numberMatched, answer.numberReturned, ids(answer)], [51, 2, [50, 51]]);
     assert.equal((await read(query("states", { filter: true }))).numberReturned, 50);
+  });
+
+  it("from the GeoPackage: answered in SQL, with geometry, and a table without geometry", async () => {
+    const filter = { op: ">", args: [{ property: "POP1996" }, 10000000] };
+    const fromGpkg = await read(query("gpkg-states", { filter }));
+    const fromFile = await read(query("states", { filter }));
+    assert.deepEqual(ids(fromGpkg), ids(fromFile));
+    assert.deepEqual(fromGpkg.features[0].geometry, fromFile.features[0].geometry);
+    const west = await read(query("gpkg-sub_regions", { filter: { op: "=", args: [{ property: "region" }, "West"] } }));
+    assert.deepEqual(west.features.map((f: { properties: { code: string } }) => f.properties.code), ["Mtn", "Pacific"]);
+    assert.equal(west.features[0].geometry, null);
+  });
+
+  it("a GeoPackage collection refuses a property it doesn't have", async () => {
+    const res = await query("gpkg-sub_regions", { filter: { op: "=", args: [{ property: "STATE_NAME" }, "Texas"] } });
+    assert.equal(res.status, 400);
+    assert.equal((await read(res)).problems[0].code, "unknown-property");
   });
 
   it("CASEI and LIKE", async () => {

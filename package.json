@@ -40,6 +40,10 @@
       "types": "./dist/evaluate/index.d.ts",
       "import": "./dist/evaluate/index.js"
     },
+    "./sql": {
+      "types": "./dist/sql/index.d.ts",
+      "import": "./dist/sql/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

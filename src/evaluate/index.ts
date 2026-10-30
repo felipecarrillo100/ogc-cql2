@@ -20,12 +20,12 @@
  *   is ambiguous, so it is NULL too.
  *
  * Strings are compared after Unicode normalization (NFC; Recommendation 1, `/rec/core/string-normalization`), in code
- * point order. `CASEI` applies Unicode's full case folding (`/req/case-insensitive-comparison/casei-function` E) to
- * exactly what it wraps. A `LIKE` `_` matches one code point.
+ * point order (not JavaScript's UTF-16 order). `CASEI` applies Unicode's full case folding
+ * (`/req/case-insensitive-comparison/casei-function` E) to exactly what it wraps. A `LIKE` `_` matches one code point.
  */
 import type { CaseiProperty, CaseiString, Cql2Filter, PropertyRef, ScalarLiteral } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
-import { CASE_FOLDING } from "./caseFolding.js";
+import { caseiKey, compareCodePoints, dayOf, instantOf, likeRegExp, plainKey } from "./strings.js";
 
 /** TRUE, FALSE, or NULL (unknown). */
 export type Truth = boolean | null;
@@ -41,59 +41,9 @@ export interface EvaluateOptions<F = unknown> {
 const defaultGetProperty = (feature: unknown, name: string): unknown =>
   (feature as { properties?: Record<string, unknown> } | null | undefined)?.properties?.[name];
 
-// --- Case folding --------------------------------------------------------------------------------------------------
-
-let folding: Map<number, string> | undefined;
-
-/** Decodes the generated table (scripts/gen-case-folding.mjs) on first use. */
-function foldingTable(): Map<number, string> {
-  if (folding) return folding;
-  folding = new Map();
-  for (const token of CASE_FOLDING.split(";")) {
-    const colon = token.indexOf(":");
-    if (colon >= 0) {
-      const to = token.slice(colon + 1).split(" ").map((h) => parseInt(h, 16));
-      folding.set(parseInt(token.slice(0, colon), 16), String.fromCodePoint(...to));
-    } else {
-      const [start, count, stride, delta] = token.split(",").map((h) => parseInt(h, 16)) as [number, number, number, number];
-      for (let i = 0; i < count; i++) folding.set(start + i * stride, String.fromCodePoint(start + i * stride + delta));
-    }
-  }
-  return folding;
-}
-
-/** Unicode full case folding (CaseFolding 15.0.0, statuses C and F). ASCII folds to lower case. */
-function caseFold(text: string): string {
-  if (/^[\x00-\x7F]*$/.test(text)) return text.toLowerCase();
-  const table = foldingTable();
-  let out = "";
-  for (const char of text) out += table.get(char.codePointAt(0)!) ?? char;
-  return out;
-}
-
-/** A string's comparison key: NFC, or, under CASEI, its canonical caseless form recomposed to NFC. */
-const plainKey = (text: string): string => text.normalize("NFC");
-const caseiKey = (text: string): string => caseFold(text.normalize("NFD")).normalize("NFC");
-
 // --- Values --------------------------------------------------------------------------------------------------------
 
 type Key = string | number | boolean;
-
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-// ISO 8601 date-time with Z or an offset; seconds and their fraction optional.
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i;
-
-function dayOf(value: unknown): string | undefined {
-  if (typeof value === "string") return DAY.test(value) ? value : undefined;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-  return undefined;
-}
-
-function instantOf(value: unknown): number | undefined {
-  if (typeof value === "string") return INSTANT.test(value) ? Date.parse(value) : undefined;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.getTime();
-  return undefined;
-}
 
 /** A literal compiled once: its key, and how to read a feature value of the same type (`undefined`: a mismatch). */
 interface Operand {
@@ -114,7 +64,8 @@ function operand(literal: ScalarLiteral | CaseiString, caseiSubject: boolean): O
 
 const isNullish = (v: unknown): v is null | undefined => v === null || v === undefined;
 
-const order = (a: Key, b: Key): number => (a === b ? 0 : a < b ? -1 : 1);
+const order = (a: Key, b: Key): number =>
+  typeof a === "string" && typeof b === "string" ? compareCodePoints(a, b) : a === b ? 0 : a < b ? -1 : 1;
 
 const COMPARE: Record<string, (o: number) => boolean> = {
   "=": (o) => o === 0,
@@ -124,24 +75,6 @@ const COMPARE: Record<string, (o: number) => boolean> = {
   ">": (o) => o > 0,
   ">=": (o) => o >= 0,
 };
-
-// --- LIKE ----------------------------------------------------------------------------------------------------------
-
-const escapeRegExp = (c: string): string => c.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-
-/** A LIKE pattern as a regular expression: `%` any run, `_` one code point, `\` makes the next character literal. */
-function likeRegExp(pattern: string): RegExp {
-  let source = "";
-  const chars = [...pattern];
-  for (let i = 0; i < chars.length; i++) {
-    const c = chars[i]!;
-    if (c === "\\" && i + 1 < chars.length) source += escapeRegExp(chars[++i]!);
-    else if (c === "%") source += "[\\s\\S]*";
-    else if (c === "_") source += "[\\s\\S]";
-    else source += escapeRegExp(c);
-  }
-  return new RegExp(`^${source}$`, "u");
-}
 
 // --- Logic ---------------------------------------------------------------------------------------------------------
 

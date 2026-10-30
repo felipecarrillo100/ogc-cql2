@@ -18,6 +18,7 @@ import { filterProperties, validate } from "ogc-cql2/validate";
 import { readConfig } from "./config.ts";
 import { sendProblem } from "./problems.ts";
 import { loadGeoJsonStore } from "./stores/geojson.ts";
+import { openGeoPackage } from "./stores/geopackage.ts";
 import type { Store } from "./stores/types.ts";
 
 const DEFAULT_LIMIT = 50;
@@ -114,15 +115,24 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 /** Loads every configured collection. A collection that fails to load is reported and left out; the rest are served. */
 export function loadStores(configPath: string, log: (line: string) => void = console.log): Map<string, Store> {
   const stores = new Map<string, Store>();
+  const add = (id: string, store: Store, file: string) => {
+    if (stores.has(id)) return log(`${id}: NOT SERVED. Another collection already has this id (use a GeoPackage "prefix").`);
+    stores.set(id, store);
+    const { featureCount, warnings } = store.describe();
+    log(`${id}: ${featureCount} features from ${file}`);
+    for (const warning of warnings) log(`  warning: ${warning}`);
+  };
   for (const collection of readConfig(configPath)) {
     try {
-      const store = loadGeoJsonStore(collection, collection.file);
-      stores.set(collection.id, store);
-      const { featureCount, warnings } = store.describe();
-      log(`${collection.id}: ${featureCount} features from ${collection.file}`);
-      for (const warning of warnings) log(`  warning: ${warning}`);
+      if (collection.source === "geojson") {
+        add(collection.id, loadGeoJsonStore(collection, collection.file), collection.file);
+      } else {
+        const { stores: tables, warnings } = openGeoPackage(collection);
+        for (const { id, store } of tables) add(id, store, collection.file);
+        for (const warning of warnings) log(`${collection.file}: ${warning}`);
+      }
     } catch (error) {
-      log(`${collection.id}: NOT SERVED. ${(error as Error).message}`);
+      log(`${collection.source === "geojson" ? collection.id : collection.file}: NOT SERVED. ${(error as Error).message}`);
     }
   }
   return stores;

@@ -1,0 +1,10 @@
+code,name,region,division
+N Eng,New England,Northeast,1
+Mid Atl,Middle Atlantic,Northeast,2
+E N Cen,East North Central,Midwest,3
+W N Cen,West North Central,Midwest,4
+S Atl,South Atlantic,South,5
+E S Cen,East South Central,South,6
+W S Cen,West South Central,South,7
+Mtn,Mountain,West,8
+Pacific,Pacific,West,9

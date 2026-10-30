@@ -206,6 +206,16 @@ describe("CASEI: Unicode full case folding (casei-function E)", () => {
   });
 });
 
+describe("string order is code point order (as a binary SQL comparison on UTF-8)", () => {
+  it("U+E000 sorts before 😀 (U+1F600), although JavaScript's UTF-16 order says the opposite", () => {
+    expect("" < "😀").toBe(false); // JavaScript's own order, for the record
+    expect(evaluate(F({ op: "<", args: [p("v"), "😀"] }), f({ v: "" }))).toBe(true);
+    expect(evaluate(F({ op: ">", args: [p("v"), ""] }), f({ v: "😀" }))).toBe(true);
+    expect(evaluate(F({ op: "<", args: [p("v"), "b"] }), f({ v: "a" }))).toBe(true);
+    expect(evaluate(F({ op: "<", args: [p("v"), "ab"] }), f({ v: "a" }))).toBe(true);
+  });
+});
+
 describe("the API", () => {
   it("toEvaluator and toPredicate compile once; getProperty reads other feature shapes", () => {
     const filter = F({ op: ">", args: [p("height"), 10] });

@@ -39,16 +39,25 @@ export interface Example {
   readonly filter: unknown;
 }
 
+const STATE_EXAMPLES: readonly Example[] = [
+  { label: "Population in 1996 over 10 million", filter: { op: ">", args: [p("POP1996"), 10000000] } },
+  { label: "Name starts with “new”, any case", filter: { op: "like", args: [casei(p("STATE_NAME")), casei("new%")] } },
+  { label: "Sub-region is Pacific or Mountain", filter: { op: "in", args: [p("SUB_REGION"), ["Pacific", "Mtn"]] } },
+  { label: "Area between 100 000 and 200 000", filter: { op: "between", args: [p("AREA"), 100000, 200000] } },
+  { label: "Outside the profile: arithmetic (POP1990 − 100 000)", filter: { op: "<", args: [p("POP1996"), { op: "-", args: [p("POP1990"), 100000] }] } },
+  { label: "A property the collection doesn't have (the server refuses it)", filter: { op: "=", args: [p("population"), 1] } },
+  { label: "All states", filter: true },
+];
+
 /** Examples for a server collection, by its id. A collection without its own gets {@link ANY_COLLECTION}. */
 export const SERVER_EXAMPLES: Readonly<Record<string, readonly Example[]>> = {
-  states: [
-    { label: "Population in 1996 over 10 million", filter: { op: ">", args: [p("POP1996"), 10000000] } },
-    { label: "Name starts with “new”, any case", filter: { op: "like", args: [casei(p("STATE_NAME")), casei("new%")] } },
-    { label: "Sub-region is Pacific or Mountain", filter: { op: "in", args: [p("SUB_REGION"), ["Pacific", "Mtn"]] } },
-    { label: "Area between 100 000 and 200 000", filter: { op: "between", args: [p("AREA"), 100000, 200000] } },
-    { label: "Outside the profile: arithmetic (POP1990 − 100 000)", filter: { op: "<", args: [p("POP1996"), { op: "-", args: [p("POP1990"), 100000] }] } },
-    { label: "A property the collection doesn't have (the server refuses it)", filter: { op: "=", args: [p("population"), 1] } },
-    { label: "All states", filter: true },
+  states: STATE_EXAMPLES,
+  "gpkg-states": STATE_EXAMPLES, // the GeoPackage holds the same states
+  "gpkg-sub_regions": [
+    { label: "Divisions of the West", filter: { op: "=", args: [p("region"), "West"] } },
+    { label: "Name ends with “central”, any case", filter: { op: "like", args: [casei(p("name")), casei("%central")] } },
+    { label: "Division 1 to 4", filter: { op: "between", args: [p("division"), 1, 4] } },
+    { label: "All sub-regions", filter: true },
   ],
 };
 

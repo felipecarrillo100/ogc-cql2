@@ -34,7 +34,7 @@ try {
   const mustNotHave = {
     "CQL2-text code (its keyword list)": "MULTILINESTRING",
     "CQL2-text code (TIMESTAMP literals)": "TIMESTAMP(",
-    "SQL code (LIKE … ESCAPE)": "ESCAPE",
+    "SQL code (its registered functions)": "cql2_instant",
     "a node: import": "node:",
     "require()": "require(",
   };

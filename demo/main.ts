@@ -46,6 +46,7 @@ byId("version").textContent = CQL2_VERSION;
 interface ServerCollection {
   readonly id: string;
   readonly title: string;
+  readonly source: string;
   readonly featureCount: number;
   readonly warnings: readonly string[];
 }
@@ -65,7 +66,7 @@ async function loadServerCollections(): Promise<void> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     serverCollections = ((await res.json()) as { collections: ServerCollection[] }).collections;
     for (const c of serverCollections) {
-      const option = el("option", `${c.title}: demo-server, ${c.featureCount} features`) as HTMLOptionElement;
+      const option = el("option", `${c.title}: demo-server, ${c.source}, ${c.featureCount} features`) as HTMLOptionElement;
       option.value = c.id;
       sourceSelect.append(option);
     }
@@ -75,6 +76,9 @@ async function loadServerCollections(): Promise<void> {
     sourceSelect.append(option);
   }
 }
+
+/** What filters a server collection, by its source. */
+const engineOf = (source: string): string => (source === "geopackage" ? "ogc-cql2/sql, in SQLite" : "ogc-cql2/evaluate");
 
 async function selectSource(id: string): Promise<void> {
   const found = serverCollections.find((c) => c.id === id);
@@ -91,7 +95,7 @@ async function selectSource(id: string): Promise<void> {
   }
   resultsTitle.replaceChildren(
     collection ? `${collection.title} ` : "Sample features ",
-    el("code", collection ? "demo-server (ogc-cql2/evaluate on the server)" : "ogc-cql2/evaluate"),
+    el("code", collection ? `demo-server (${engineOf(collection.source)} on the server)` : "ogc-cql2/evaluate"),
   );
   fillExamples();
   showExample(0);
