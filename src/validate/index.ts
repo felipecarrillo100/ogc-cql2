@@ -207,11 +207,12 @@ class Checker {
     }
     if (isObject(x) && "timestamp" in x) {
       const m = typeof x.timestamp === "string" ? TIMESTAMP.exec(x.timestamp) : null;
-      // Second 60 is a leap second, which RFC 3339 allows.
-      if (m && isRealDay(+m[1]!, +m[2]!, +m[3]!) && +m[4]! <= 23 && +m[5]! <= 59 && +m[6]! <= 60) return "timestamp";
+      // A leap second (:60) is refused: RFC 3339 allows it, but no engine here can compare it (JavaScript has none,
+      // PostgreSQL rolls it over to the next minute), so it could not mean the same everywhere.
+      if (m && isRealDay(+m[1]!, +m[2]!, +m[3]!) && +m[4]! <= 23 && +m[5]! <= 59 && +m[6]! <= 59) return "timestamp";
       this.report(
         "invalid-timestamp", `${path}/timestamp`,
-        `A timestamp must be "YYYY-MM-DDThh:mm:ss[.fff]Z" (UTC) and exist, e.g. "2026-10-30T12:00:00Z".`,
+        `A timestamp must be "YYYY-MM-DDThh:mm:ss[.fff]Z" (UTC) and exist, with seconds 00-59, e.g. "2026-10-30T12:00:00Z".`,
       );
       return undefined;
     }

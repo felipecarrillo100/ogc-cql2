@@ -25,6 +25,11 @@ function foldingTable(): Map<number, string> {
   return folding;
 }
 
+/** The case-folding table's entries, as [code point, folded text], for the PostgreSQL functions of `ogc-cql2/sql`. */
+export function caseFoldingEntries(): [number, string][] {
+  return [...foldingTable()].sort((a, b) => a[0] - b[0]);
+}
+
 /** Unicode full case folding (CaseFolding 15.0.0, statuses C and F). ASCII folds to lower case. */
 function caseFold(text: string): string {
   if (/^[\x00-\x7F]*$/.test(text)) return text.toLowerCase();
@@ -61,22 +66,49 @@ export function compareCodePoints(a: string, b: string): number {
 
 // --- Dates and instants --------------------------------------------------------------------------------------------
 
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-// ISO 8601 date-time with Z or an offset; seconds and their fraction optional.
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i;
+// Strict, and the same in every engine (the PostgreSQL functions of `ogc-cql2/sql` mirror these rules): a day must
+// exist (years 0001-9999), hours are 00-23, minutes and seconds 00-59, an offset at most ±23:59. JavaScript's
+// Date.parse is lenient (it turns 2023-02-30 into 2 March, and accepts 24:00), so it is not used for strings.
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:Z|([+-])(\d{2}):(\d{2}))$/i;
 
-/** A value as a calendar day (`YYYY-MM-DD`): a string of that form, or a `Date`'s UTC day; otherwise `undefined`. */
+/** Whether year-month-day exists in the proleptic Gregorian calendar, years 1 to 9999. */
+export function isRealDay(year: number, month: number, day: number): boolean {
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+}
+
+/** A value as a calendar day (`YYYY-MM-DD`): a string of that form that exists, or a `Date`'s UTC day; else `undefined`. */
 export function dayOf(value: unknown): string | undefined {
-  if (typeof value === "string") return DAY.test(value) ? value : undefined;
+  if (typeof value === "string") {
+    const m = DAY.exec(value);
+    return m && isRealDay(+m[1]!, +m[2]!, +m[3]!) ? value : undefined;
+  }
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
   return undefined;
 }
 
-/** A value as an instant (epoch milliseconds): an ISO 8601 string with Z or an offset, or a `Date`; else `undefined`. */
+/**
+ * A value as an instant, in epoch milliseconds: an ISO 8601 date-time string with `Z` or an offset that exists
+ * (seconds optional, a fraction truncated to milliseconds), or a `Date`; else `undefined`.
+ */
 export function instantOf(value: unknown): number | undefined {
-  if (typeof value === "string") return INSTANT.test(value) ? Date.parse(value) : undefined;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.getTime();
-  return undefined;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value.getTime();
+  if (typeof value !== "string") return undefined;
+  const m = INSTANT.exec(value);
+  if (!m) return undefined;
+  const [year, month, day, hour, minute, second] = [m[1], m[2], m[3], m[4], m[5], m[6] ?? "0"].map(Number) as number[];
+  const offsetHours = m[8] ? Number(m[9]) : 0;
+  const offsetMinutes = m[8] ? Number(m[10]) : 0;
+  if (!isRealDay(year!, month!, day!) || hour! > 23 || minute! > 59 || second! > 59 || offsetHours > 23 || offsetMinutes > 59) {
+    return undefined;
+  }
+  const date = new Date(0);
+  date.setUTCFullYear(year!, month! - 1, day!); // not Date.UTC: it maps years 0-99 to 1900-1999
+  date.setUTCHours(hour!, minute!, second!, Number((m[7] ?? "").slice(0, 3).padEnd(3, "0")));
+  const offset = (m[8] === "-" ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
+  return date.getTime() - offset;
 }
 
 // --- LIKE ----------------------------------------------------------------------------------------------------------

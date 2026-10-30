@@ -127,6 +127,16 @@ describe("dates and instants", () => {
     expect(evaluate(F({ op: ">", args: [p("v"), ts("2021-06-30T12:00:00.500Z")] }), f({ v: "2021-06-30T12:00:00.501Z" }))).toBe(true);
   });
 
+  it("only real days and instants count: JavaScript's lenient Date.parse is not used", () => {
+    const at = F({ op: "=", args: [p("v"), ts("2023-03-02T00:00:00Z")] });
+    expect(evaluate(at, f({ v: "2023-02-30T00:00Z" }))).toBe(null); // Date.parse reads it as 2 March
+    expect(evaluate(F({ op: "=", args: [p("v"), ts("2023-01-02T00:00:00Z")] }), f({ v: "2023-01-01T24:00Z" }))).toBe(null);
+    expect(evaluate(F({ op: "<", args: [p("v"), ts("2024-01-01T00:00:00Z")] }), f({ v: "2023-01-01T10:00:60Z" }))).toBe(null);
+    expect(evaluate(F({ op: "=", args: [p("v"), { date: "2020-03-01" }] }), f({ v: "2020-02-30" }))).toBe(null);
+    expect(evaluate(F({ op: "=", args: [p("v"), { date: "2020-02-29" }] }), f({ v: "2020-02-29" }))).toBe(true);
+    expect(evaluate(F({ op: "=", args: [p("v"), ts("2023-01-01T10:00:00.123Z")] }), f({ v: "2023-01-01t10:00:00.123456z" }))).toBe(true);
+  });
+
   it("dates order by day", () => {
     const range = F({ op: "and", args: [
       { op: ">=", args: [p("v"), { date: "2018-01-01" }] },

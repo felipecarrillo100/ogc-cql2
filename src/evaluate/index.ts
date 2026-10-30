@@ -59,7 +59,7 @@ function operand(literal: ScalarLiteral | CaseiString, caseiSubject: boolean): O
   if (typeof literal === "boolean") return { key: literal, read: (v) => (typeof v === "boolean" ? v : undefined) };
   if ("op" in literal) return { key: caseiKey(literal.args[0]), read: readString };
   if ("date" in literal) return { key: literal.date, read: dayOf };
-  return { key: Date.parse(literal.timestamp), read: instantOf };
+  return { key: instantOf(literal.timestamp)!, read: instantOf }; // validate has checked it is an instant
 }
 
 const isNullish = (v: unknown): v is null | undefined => v === null || v === undefined;

@@ -149,6 +149,34 @@ const rows = db.prepare(`SELECT * FROM places WHERE ${where}`).all(...params);
 - **The cost of exactness:** SQLite can't use an index for these predicates, because each value's type is checked as
   it is read (GeoPackage tells readers to allow for values of an unexpected type).
 
+## SQL (PostgreSQL)
+
+The `postgres` dialect gives the same exact results on PostgreSQL (and PostGIS tables), with `$1`, `$2` … placeholders:
+
+```js
+import pg from "pg";
+import { postgresFunctions, postgresValue, toSql } from "ogc-cql2/sql";
+
+await client.query(postgresFunctions("myschema")); // once: creates cql2_casei, cql2_day, cql2_instant there
+
+const columns = {
+  name: { type: "string", sqlType: "text" },
+  opened: { type: "string", format: "date-time", sqlType: "timestamp with time zone" },
+};
+const { where, params } = toSql(filter, { dialect: "postgres", columns, functionSchema: "myschema" });
+const select = Object.entries(columns).map(([name, c]) => `${postgresValue(name, c)} AS "${name}"`).join(", ");
+const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE ${where}`, params);
+```
+
+- **`sqlType`** is the column's declared PostgreSQL type; it decides how the column is compared.
+- **Text compares in code point order** (`COLLATE "C"`) after NFC normalization: the database's own collation sorts by
+  language rules, which CQL2 doesn't.
+- **`postgresFunctions(schema)`** returns the SQL to run once: Unicode full case folding for CASEI (PostgreSQL's
+  `lower()` isn't), and strict readers of dates and instants in text columns. It needs no extension, only the right to
+  create objects in that schema.
+- **`postgresValue(column)`** is what to SELECT for each column, so that what you serve is exactly what the SQL
+  compared: dates as `YYYY-MM-DD`, instants as UTC `…Z` with milliseconds, numbers as double precision.
+
 ## LIKE patterns
 
 `%` matches any number of characters, `_` exactly one. To match a literal `%` or `_`, write `\%` or `\_`:

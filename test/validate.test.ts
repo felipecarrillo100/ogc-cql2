@@ -23,7 +23,6 @@ const accepted: [string, unknown][] = [
   ["= timestamp", { op: "=", args: [p("t"), { timestamp: "2026-10-30T12:00:00Z" }] }],
   ["timestamp with fraction", { op: "<", args: [p("t"), { timestamp: "2021-06-30T12:00:00.500Z" }] }],
   ["leap day", { op: "=", args: [p("d"), { date: "2024-02-29" }] }],
-  ["leap second", { op: "=", args: [p("t"), { timestamp: "2016-12-31T23:59:60Z" }] }],
   ["isNull", { op: "isNull", args: [p("geometry")] }],
   ["not isNull", { op: "not", args: [{ op: "isNull", args: [p("geometry")] }] }],
   ["like", { op: "like", args: [p("name"), "Smith%"] }],
@@ -85,6 +84,7 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["timestamp without Z", { op: "=", args: [p("t"), { timestamp: "2023-01-01T00:00:00" }] }, "invalid-timestamp", "/args/1/timestamp"],
   ["timestamp with a space", { op: "=", args: [p("t"), { timestamp: "2023-01-01 00:00:00Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
   ["hour 24", { op: "=", args: [p("t"), { timestamp: "2023-01-01T24:00:00Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
+  ["a leap second: no engine can compare it", { op: "=", args: [p("t"), { timestamp: "2016-12-31T23:59:60Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
   ["deep path", { op: "and", args: [true, { op: "not", args: [{ op: "=", args: [p("a"), { date: "x" }] }] }] }, "invalid-date", "/args/1/args/0/args/1/date"],
 ];
 

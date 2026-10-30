@@ -19,8 +19,10 @@ The first working version: the profile Basic CQL2, Advanced Comparison Operators
   can't express; `isIdentifier`.
 - `ogc-cql2/evaluate`: `toPredicate`, `toEvaluator` and `evaluate`, with CQL2's three-valued logic, Unicode full case
   folding for `casei`, NFC normalization for strings and code point order.
-- `ogc-cql2/sql`: `toSql`, a parameterized `WHERE` clause for SQLite following GeoPackage's types, selecting exactly
-  what `evaluate` selects; `sqliteFunctions` to register on the connection.
+- `ogc-cql2/sql`: `toSql`, a parameterized `WHERE` clause selecting exactly what `evaluate` selects: dialect `sqlite`
+  (GeoPackage's types; `sqliteFunctions` to register on the connection) and `postgres` (`postgresFunctions` to create
+  once, `postgresValue` for what to select).
+- Dates and instants are read strictly in every engine: a day must exist, seconds 00-59.
 - The MIT licence, and `LICENSE-UNICODE` for the case-folding table derived from Unicode data.
 - The demo is now a playground: a CQL2-JSON filter, its problems, conformance classes, CQL2-text and the sample
   features it selects, in the browser or from `demo-server`.

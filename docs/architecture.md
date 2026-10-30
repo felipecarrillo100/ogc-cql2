@@ -137,6 +137,30 @@ pragma is deprecated) and its `lower()` folds ASCII only, so neither can be used
 index-friendly mode, for tables whose values are known to match their declared types, can come later, measured
 against the same tests.
 
+The `postgres` dialect, for PostgreSQL: columns are statically typed, so a literal that can't match a column's type
+is `NULL::boolean` when the SQL is built, and `SqlColumn.sqlType` (the declared type) picks each column's view.
+
+| CQL2 | PostgreSQL |
+|---|---|
+| `and`, `or`, `not`, `isNull`, `true` / `false` | `AND`, `OR`, `NOT`, `IS NULL`, `TRUE` / `FALSE`; placeholders `$1`, `$2` … |
+| numbers | `c::double precision` against `$n::double precision`: compared as the numbers the application serves |
+| booleans | `c` against `$n::boolean` |
+| text | `normalize(c::text, NFC) COLLATE "C"`: code point order; the database's collation sorts by language rules |
+| text against a `date` / `timestamptz` / `timestamp` column | the served text: `to_char(…)` as `YYYY-MM-DD`, UTC `…Z` with milliseconds, or without `Z` |
+| `casei(…)` | `cql2_casei(…)` |
+| `{date}` | `c` against `$n::date` on a `date` column; `cql2_day(c)` on text |
+| `{timestamp}` | `date_trunc('milliseconds', c)` against `$n::timestamptz` on `timestamptz`; `cql2_instant(c)` on text; NULL on `timestamp` (no offset) |
+| `like` | native `LIKE` (case-sensitive, `\` escape) on the NFC text; a lone trailing `\` becomes a literal one |
+
+`postgresFunctions(schema)` is the SQL creating `cql2_casefold` (the package's case-folding table), `cql2_casei`,
+`cql2_day` and `cql2_instant`. PostgreSQL's `lower()` isn't Unicode case folding, and `casefold()` only came with
+PostgreSQL 18 and is exact only with the `PG_UNICODE_FAST` provider. `postgresValue(column)` is the SELECT expression
+that serves each column as the dialect compares it.
+
+**Dates and instants are read strictly, the same in every engine:** a day must exist, hours are 00–23, minutes and
+seconds 00–59, a fraction is truncated to milliseconds. JavaScript's `Date.parse` is lenient (it reads 2023-02-30 as
+2 March); PostgreSQL rolls a leap second into the next minute. A leap second in a filter is refused (`invalid-timestamp`).
+
 ### Errors
 
 - **Every refusal throws a `Cql2Error`:** `invalid-filter` (from `assertValid`, and from `text` and `evaluate` for an
