@@ -44,10 +44,10 @@ drops the rest.
 | `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate` | 0.1.0 |
-| `ogc-cql2/sql` | `src/sql/` | `toSql`, `sqliteFunctions`: CQL2-JSON → a parameterized `WHERE` clause | 0.1.0: `sqlite`; `postgres` later |
+| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqliteFunctions`, `postgresFunctions`, `postgresValue` | 0.1.0: dialects `sqlite` and `postgres` |
 | `ogc-cql2/parse` | `src/parse/` | CQL2-text → CQL2-JSON, for a server that receives text | later, if needed |
 
-`text` and `evaluate` validate their input first, so they load `validate` too.
+`text`, `evaluate` and `sql` validate their input first, so they load `validate` too.
 
 ## The parts
 
@@ -91,7 +91,8 @@ What the text can't express is refused as `not-expressible`, with the reason and
 - **What the standard leaves to the implementation** is decided as follows, and documented in the code:
   - a value of another type than the literal is *unknown*: values are never converted;
   - `{date}` matches a `"YYYY-MM-DD"` string or a `Date` (its UTC day); `{timestamp}` an ISO 8601 string with `Z` or
-    an offset, or a `Date`, to the millisecond. A time without an offset is ambiguous, so *unknown*;
+    an offset, or a `Date`, to the millisecond. A time without an offset is ambiguous, so *unknown*. Both are read
+    strictly (see the end of the SQL section), not with JavaScript's lenient `Date.parse`;
   - strings are compared after NFC normalization (the standard's Recommendation 1), in code point order;
   - a `LIKE` `_` matches one code point.
 - **`CASEI`** applies Unicode's full case folding (CaseFolding 15.0.0, statuses C and F), as the standard requires.
@@ -106,7 +107,8 @@ What the text can't express is refused as `not-expressible`, with the reason and
 `toSql(filter, { dialect, columns })` returns `{ where, params }`: text and values only, no driver. The rule: the SQL
 selects exactly the rows `evaluate` selects from the same values.
 
-- **Always parameterized:** values are `?` placeholders, never text inside the query.
+- **Always parameterized:** values are placeholders (`?` for `sqlite`, `$1`, `$2` … for `postgres`), never text inside
+  the query.
 - **Property names are checked** against `columns` (the table's queryables), then quoted; anything else is
   `unknown-property`. A property can map to a column of another name.
 - **CQL2's three-valued logic maps directly** onto SQL's NULL (`AND`, `OR`, `NOT`).
@@ -159,12 +161,14 @@ that serves each column as the dialect compares it.
 
 **Dates and instants are read strictly, the same in every engine:** a day must exist, hours are 00–23, minutes and
 seconds 00–59, a fraction is truncated to milliseconds. JavaScript's `Date.parse` is lenient (it reads 2023-02-30 as
-2 March); PostgreSQL rolls a leap second into the next minute. A leap second in a filter is refused (`invalid-timestamp`).
+2 March); PostgreSQL rolls a leap second into the next minute. A leap second in a filter is refused
+(`invalid-timestamp`).
 
 ### Errors
 
 - **Every refusal throws a `Cql2Error`:** `invalid-filter` (from `assertValid`, and from `text` and `evaluate` for an
-  invalid input) or `not-expressible` (from `toText`), with a message, the path inside the filter and `details`.
+  invalid input), `not-expressible` (from `toText`) or `unknown-property` (from `toSql`, for a property not in
+  `columns`), with a message, the path inside the filter and `details`.
 - **Callers test the `code`, not `instanceof`.** That keeps working even when two copies of the package end up in one
   application.
 
@@ -206,8 +210,8 @@ filter selects). The server never knows which store it talks to.
   feature, which is reported.
 - The server validates each filter (`validate`), checks its properties against the collection's queryables
   (`filterProperties`), and refuses with HTTP 400 and `application/problem+json`.
-- Only the server has dependencies (Express, later the database drivers). The package stays free of them:
-  `check:imports` and `check:bundle` (below) prove it on every publish.
+- Only the server has dependencies (Express, and `pg` for PostgreSQL; SQLite is Node's built-in `node:sqlite`). The
+  package stays free of them: `check:imports` and `check:bundle` (below) prove it on every publish.
 
 ## Testing
 
@@ -219,7 +223,13 @@ filter selects). The server never knows which store it talks to.
   - every other one is refused only as `outside-profile` or `unknown-operator`, naming a conformance class.
 - **The grammar:** identifier, keyword, escaping and number cases taken from the BNF.
 - **Truth tables:** every operator against a matching value, a non-matching value, a null and a missing property;
-  `AND` / `OR` / `NOT` as the standard's tables; case-folding cases.
+  `AND` / `OR` / `NOT` as the standard's tables; case-folding cases; strict dates and instants.
+- **SQL against real databases (differential tests):**
+  - `test/sql.test.ts`: 5,387 generated filters on a SQLite table of awkward values (NULLs, values of an unexpected
+    type, NFC and NFD, code points above U+FFFF, LIKE's special characters) select the same rows as `evaluate`;
+  - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 8,398 generated filters give the same features from
+    the GeoJSON file, the GeoPackage and PostgreSQL (when the database is set up; skipped otherwise);
+  - each rule was broken once on purpose, to show the tests catch it.
 - **Independent checks,** not part of the repository or of the package:
   - two other CQL2 parsers (cql2-rs, pycql2) read the text output back to the same CQL2-JSON;
   - real OGC API Features servers, comparing the features a server returns with those `ogc-cql2/evaluate` selects
@@ -247,5 +257,5 @@ checks that they agree.
 | Version | What |
 |---|---|
 | 0.0.1 | The foundation: build, tests, demo, `CQL2_VERSION`, `quoteString` |
-| 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, the playground |
-| later | `ogc-cql2/sql` for PostgreSQL; more conformance classes (spatial, temporal, arrays); `ogc-cql2/parse` if a server needs CQL2-text |
+| 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, `ogc-cql2/sql` (SQLite / GeoPackage, PostgreSQL / PostGIS); the playground and `demo-server` |
+| later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first), temporal, arrays; `ogc-cql2/parse` if a server needs CQL2-text; an index-friendly SQL mode |

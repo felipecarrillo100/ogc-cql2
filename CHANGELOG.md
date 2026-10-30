@@ -4,7 +4,7 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [0.1.0] - 2026-10-30
+## [0.1.0] - 2026-10-31
 
 The first working version: the profile Basic CQL2, Advanced Comparison Operators and Case-insensitive Comparison.
 
@@ -21,14 +21,15 @@ The first working version: the profile Basic CQL2, Advanced Comparison Operators
   folding for `casei`, NFC normalization for strings and code point order.
 - `ogc-cql2/sql`: `toSql`, a parameterized `WHERE` clause selecting exactly what `evaluate` selects: dialect `sqlite`
   (GeoPackage's types; `sqliteFunctions` to register on the connection) and `postgres` (`postgresFunctions` to create
-  once, `postgresValue` for what to select).
+  once, `postgresValue` for what to select). A property that isn't a column is refused (`Cql2Error`
+  `unknown-property`).
 - Dates and instants are read strictly in every engine: a day must exist, seconds 00-59.
 - The MIT licence, and `LICENSE-UNICODE` for the case-folding table derived from Unicode data.
 - The demo is now a playground: a CQL2-JSON filter, its problems, conformance classes, CQL2-text and the sample
   features it selects, in the browser or from `demo-server`.
 - `demo-server/` (not published): a Node backend answering filters through a store layer: GeoJSON files, filtered
   with `ogc-cql2/evaluate`; GeoPackage tables, filtered in SQLite; and PostgreSQL / PostGIS tables, both with
-  `ogc-cql2/sql`. A kitchen-sink sample holds the same rows in all three.
+  `ogc-cql2/sql`. A kitchen-sink sample holds the same rows in all three, and they answer every generated filter alike.
 - `check:imports` and `check:bundle`, run before every publish: the package has no runtime dependencies, and a page
   importing only `ogc-cql2/evaluate` bundles nothing else.
 

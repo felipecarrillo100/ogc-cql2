@@ -1,7 +1,7 @@
 {
   "name": "ogc-cql2",
   "version": "0.1.0",
-  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text encoding and evaluation of CQL2-JSON, in browsers and Node.",
+  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text, in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS) for CQL2-JSON filters, in browsers and Node.",
   "keywords": [
     "cql2",
     "cql2-json",
@@ -10,7 +10,12 @@
     "ogc-api",
     "ogc-api-features",
     "filter",
-    "query"
+    "query",
+    "sql",
+    "sqlite",
+    "geopackage",
+    "postgresql",
+    "postgis"
   ],
   "author": "Felipe Carrillo Romero",
   "homepage": "https://github.com/felipecarrillo100/ogc-cql2#readme",

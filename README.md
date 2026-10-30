@@ -6,7 +6,9 @@ JavaScript and TypeScript. It works on filters in the standard's JSON encoding, 
 - **`ogc-cql2/validate`** checks a filter, with a code, a location and a reason for each problem;
 - **`ogc-cql2/text`** writes it as CQL2-text, for the `filter` parameter of OGC API Features Part 3;
 - **`ogc-cql2/evaluate`** tests features against it in memory, with CQL2's three-valued logic, so it selects the
-  same features a CQL2 server would.
+  same features a CQL2 server would;
+- **`ogc-cql2/sql`** turns it into a parameterized `WHERE` clause for SQLite / GeoPackage or PostgreSQL / PostGIS that
+  selects exactly what `evaluate` selects. It builds the SQL; your own driver runs it.
 
 It runs in browsers and in Node 20 or later and has no dependencies. Each part is its own entry point, so an
 application loads only what it uses.
@@ -115,7 +117,9 @@ The rules are the standard's:
 - **Types:** both sides of a comparison must have the same type. A number property compared with the string `"5"`,
   or a non-number in `BETWEEN`, is unknown: values are never converted.
 - **Dates and timestamps:** `{ "date" }` matches a `"YYYY-MM-DD"` string or a `Date`; `{ "timestamp" }` an ISO 8601
-  string with `Z` or an offset, or a `Date`.
+  string with `Z` or an offset, or a `Date`. Values are read strictly, the same in every engine: the day must exist
+  (no 30 February), hours are 00–23, minutes and seconds 00–59, and a fraction counts to the millisecond. A leap second
+  in a filter is refused (`invalid-timestamp`): no engine can compare it.
 - **Strings** are compared after Unicode normalization (NFC). **`casei`** applies Unicode's full case folding, so
   `"Straße"` matches `"STRASSE"`; it folds exactly what it wraps.
 
@@ -157,6 +161,8 @@ The `postgres` dialect gives the same exact results on PostgreSQL (and PostGIS t
 import pg from "pg";
 import { postgresFunctions, postgresValue, toSql } from "ogc-cql2/sql";
 
+const client = new pg.Client(); // the connection from PGHOST, PGDATABASE, PGUSER, PGPASSWORD…
+await client.connect();
 await client.query(postgresFunctions("myschema")); // once: creates cql2_casei, cql2_day, cql2_instant there
 
 const columns = {
@@ -176,6 +182,8 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
   create objects in that schema.
 - **`postgresValue(column)`** is what to SELECT for each column, so that what you serve is exactly what the SQL
   compared: dates as `YYYY-MM-DD`, instants as UTC `…Z` with milliseconds, numbers as double precision.
+- **Tested on real databases:** thousands of generated filters give the same features from a GeoJSON file
+  (`evaluate`), a GeoPackage (SQLite) and PostgreSQL / PostGIS.
 
 ## LIKE patterns
 
@@ -199,7 +207,9 @@ them:
 
 ## Errors
 
-Every refusal throws a `Cql2Error` with a `code` (`invalid-filter` or `not-expressible`), a `path` and `details`.
+Every refusal throws a `Cql2Error` with a `code`, a `path` and `details`: `invalid-filter` (not a valid filter in the
+profile), `not-expressible` (`toText`: valid, but CQL2-text can't write it) or `unknown-property` (`toSql`: a property
+that isn't one of the table's columns).
 Test `error.code`, not `instanceof`: that keeps working when two copies of the package end up in one application.
 
 ## Playground and demo server
@@ -235,6 +245,7 @@ An invalid filter, or one naming a property the collection doesn't have, is refu
 
 - [docs/vision.md](docs/vision.md): what the package is for, and its principles.
 - [docs/architecture.md](docs/architecture.md): how it is built and tested.
+- [docs/spatial-research.md](docs/spatial-research.md): research for spatial support, not implemented yet.
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Licence
