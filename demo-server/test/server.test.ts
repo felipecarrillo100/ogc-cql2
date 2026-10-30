@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { toPredicate } from "ogc-cql2/evaluate";
-import { createApp, loadStores } from "../src/server.ts";
+import { closeStores, createApp, loadStores } from "../src/server.ts";
 import { createGeoJsonStore } from "../src/stores/geojson.ts";
 
 const log: string[] = [];
@@ -14,7 +14,7 @@ let server: Server;
 let base: string;
 
 before(async () => {
-  const stores = loadStores(fileURLToPath(new URL("../collections.json", import.meta.url)), (line) => log.push(line));
+  const stores = await loadStores(fileURLToPath(new URL("../collections.json", import.meta.url)), (line) => log.push(line));
   stores.set(
     "dupes",
     createGeoJsonStore({ id: "dupes", title: "Duplicates" }, {
@@ -26,7 +26,10 @@ before(async () => {
   await new Promise((done) => server.once("listening", done));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
 });
-after(() => server.close());
+after(async () => {
+  server.close();
+  await closeStores();
+});
 
 /** The answer's JSON, whose shape each test checks. */
 const read = async (res: Response | Promise<Response>): Promise<any> => (await res).json();
@@ -43,11 +46,14 @@ const ids = (answer: { features: { id: unknown }[] }) => answer.features.map((f)
 describe("collections", () => {
   it("lists them, with warnings", async () => {
     const answer = await read(fetch(`${base}/collections`));
+    // The PostgreSQL collections depend on a database being there; their own tests check them.
+    const files = answer.collections.filter((c: { source: string }) => c.source !== "postgres");
     assert.deepEqual(
-      answer.collections.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
-      [["states", "geojson", 51], ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["dupes", "geojson", 2]],
+      files.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
+      [["states", "geojson", 51], ["kitchen_sink", "geojson", 24], ["gpkg-kitchen_sink", "geopackage", 24],
+        ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["dupes", "geojson", 2]],
     );
-    assert.match(answer.collections[3].warnings[0], /Dropped 1 feature/);
+    assert.match(files[5].warnings[0], /Dropped 1 feature/);
     assert.ok(log.includes(`states: 51 features from ${fileURLToPath(new URL("../data/states.geojson", import.meta.url))}`));
   });
 

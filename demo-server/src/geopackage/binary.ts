@@ -46,6 +46,11 @@ export function decodeGeoPackageBinary(bytes: Uint8Array): Decoded {
   return geometry === null ? { kind: "empty", srsId } : { kind: "geometry", srsId, geometry };
 }
 
+/** Decodes standard WKB (as PostGIS's ST_AsBinary gives it) to GeoJSON; `null` for an empty geometry. */
+export function decodeWkb(bytes: Uint8Array): Geometry | null {
+  return new WkbReader(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), 0).geometry();
+}
+
 class WkbReader {
   readonly view: DataView;
   #offset: number;

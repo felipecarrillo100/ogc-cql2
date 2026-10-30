@@ -193,11 +193,14 @@ filter selects). The server never knows which store it talks to.
 |---|---|---|---|
 | GeoJSON | one FeatureCollection file, read once at startup | `ogc-cql2/evaluate` | 0.1.0 |
 | GeoPackage (SQLite) | the `features` and `attributes` tables a GeoPackage lists in `gpkg_contents` (Node's built-in `node:sqlite`, read-only) | `ogc-cql2/sql` | 0.1.0 |
-| PostgreSQL / PostGIS | tables of a database; the connection in a git-ignored `.env` | `ogc-cql2/sql` | later |
+| PostgreSQL / PostGIS | the tables `collections.json` lists (never discovered); the connection in a git-ignored `.env` | `ogc-cql2/sql`, `postgres` dialect | 0.1.0 |
 
 - A GeoPackage table: the id is its INTEGER primary key (Req 29, 119), the queryables come from its declared types
   (Table 1), BOOLEAN 0 / 1 is served as `false` / `true`, and geometry is decoded from GeoPackageBinary (the `GP`
   header, then WKB) to GeoJSON. A table not in WGS 84 is served without geometry, and that's reported.
+- A PostgreSQL table: the id is its primary key (or `id` in the config), the queryables come from the declared types,
+  values are selected through `postgresValue`, and a PostGIS geometry is read as WKB, converted to WGS 84 with
+  `ST_Transform` when needed.
 - Every store answers GeoJSON features. A GeoJSON file's ids are kept when unique; missing ones are generated
   deterministically (the position in the file, or after the largest numeric id); a duplicate id drops the later
   feature, which is reported.

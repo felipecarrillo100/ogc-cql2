@@ -188,7 +188,7 @@ function tableStore(db: DatabaseSync, id: string, contents: Row): Store {
   return {
     describe: description,
     queryables: () => queryables,
-    query(filter: Cql2Filter, { limit, offset }) {
+    async query(filter: Cql2Filter, { limit, offset }) {
       const { where, params } = toSql(filter, { dialect: "sqlite", columns: queryables });
       const rows = all(`SELECT ${select} FROM ${from} WHERE ${where} ORDER BY ${quote(idColumn.name)} LIMIT ? OFFSET ?`, ...params, limit, offset);
       const numberMatched = Number(all(`SELECT COUNT(*) AS n FROM ${from} WHERE ${where}`, ...params)[0]!.n);

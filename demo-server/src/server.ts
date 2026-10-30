@@ -20,6 +20,7 @@ import { readConfig } from "./config.ts";
 import { sendProblem } from "./problems.ts";
 import { loadGeoJsonStore } from "./stores/geojson.ts";
 import { openGeoPackage } from "./stores/geopackage.ts";
+import { createPool, openPostgres } from "./stores/postgres.ts";
 import type { Store } from "./stores/types.ts";
 
 const DEFAULT_LIMIT = 50;
@@ -67,7 +68,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
     );
   });
 
-  app.post("/collections/:id/query", (req, res) => {
+  app.post("/collections/:id/query", async (req, res) => {
     const store = storeOf(req, res);
     if (!store) return;
     const body = req.body as Record<string, unknown> | undefined;
@@ -95,7 +96,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
       return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter uses properties the collection doesn't have.", problems);
     }
 
-    const { features, numberMatched } = store.query(result.filter as Cql2Filter, { limit, offset });
+    const { features, numberMatched } = await store.query(result.filter as Cql2Filter, { limit, offset });
     res.type("application/geo+json").send(
       JSON.stringify({ type: "FeatureCollection", numberMatched, numberReturned: features.length, features }),
     );
@@ -113,27 +114,43 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
   return app;
 }
 
+/** One pool for the process, made on first use: only when collections.json has a postgres entry. */
+let pool: ReturnType<typeof createPool> | undefined;
+const postgresPool = () => (pool ??= createPool());
+
+/** Closes the PostgreSQL connections, if any were opened (tests, shutdown). */
+export async function closeStores(): Promise<void> {
+  await pool?.end();
+  pool = undefined;
+}
+
 /** Loads every configured collection. A collection that fails to load is reported and left out; the rest are served. */
-export function loadStores(configPath: string, log: (line: string) => void = console.log): Map<string, Store> {
+export async function loadStores(configPath: string, log: (line: string) => void = console.log): Promise<Map<string, Store>> {
   const stores = new Map<string, Store>();
   const add = (id: string, store: Store, file: string) => {
-    if (stores.has(id)) return log(`${id}: NOT SERVED. Another collection already has this id (use a GeoPackage "prefix").`);
+    if (stores.has(id)) return log(`${id}: NOT SERVED. Another collection already has this id (use a "prefix").`);
     stores.set(id, store);
     const { featureCount, warnings } = store.describe();
     log(`${id}: ${featureCount} features from ${file}`);
     for (const warning of warnings) log(`  warning: ${warning}`);
   };
   for (const collection of readConfig(configPath)) {
+    const origin = collection.source === "geojson" ? collection.id : collection.source === "geopackage" ? collection.file : "PostgreSQL";
     try {
       if (collection.source === "geojson") {
         add(collection.id, loadGeoJsonStore(collection, collection.file), collection.file);
-      } else {
+      } else if (collection.source === "geopackage") {
         const { stores: tables, warnings } = openGeoPackage(collection);
         for (const { id, store } of tables) add(id, store, collection.file);
         for (const warning of warnings) log(`${collection.file}: ${warning}`);
+      } else {
+        const { stores: tables, warnings } = await openPostgres(postgresPool(), collection);
+        const at = `PostgreSQL ${process.env.PGDATABASE ?? ""}@${process.env.PGHOST ?? "localhost"}`;
+        for (const { id, store } of tables) add(id, store, at);
+        for (const warning of warnings) log(`${at}: ${warning}`);
       }
     } catch (error) {
-      log(`${collection.source === "geojson" ? collection.id : collection.file}: NOT SERVED. ${(error as Error).message}`);
+      log(`${origin}: NOT SERVED. ${(error as Error).message}`);
     }
   }
   return stores;
@@ -141,7 +158,7 @@ export function loadStores(configPath: string, log: (line: string) => void = con
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const configPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "collections.json");
-  const stores = loadStores(configPath);
+  const stores = await loadStores(configPath);
   const port = Number(process.env.PORT ?? 3100);
   createApp(stores).listen(port, () => console.log(`demo-server: http://localhost:${port}/collections`));
 }

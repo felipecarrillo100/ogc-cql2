@@ -1,6 +1,18 @@
 {
   "collections": [
     { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" },
-    { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-" }
+    { "id": "kitchen_sink", "title": "Kitchen sink", "source": "geojson", "file": "data/kitchen_sink.geojson" },
+    { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-" },
+    {
+      "source": "postgres",
+      "prefix": "pg-",
+      "functionSchema": "cql2demo",
+      "tables": [
+        { "table": "cql2demo.states", "title": "US states" },
+        { "table": "cql2demo.sub_regions", "title": "Census sub-regions" },
+        { "table": "cql2demo.kitchen_sink", "title": "Kitchen sink" },
+        { "table": "cql2demo.kitchen_sink_3857", "title": "Kitchen sink (Web Mercator)" }
+      ]
+    }
   ]
 }

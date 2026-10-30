@@ -9,3 +9,18 @@
 - `sub_regions.csv` and `sub_regions.csvt`: the divisions, and the CSV's column types for `ogr2ogr`.
 
 To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if `ogr2ogr` isn't on the path).
+- `kitchen_sink.geojson`: every type and edge case the profile can compare (Unicode in NFC and NFD, `ß`, Greek,
+  `İ`, `ﬁ`, emoji, U+E000, LIKE's `%` `_` `\`, integers up to 2⁵³ − 1, decimals, booleans, dates, UTC instants with
+  milliseconds, local times without an offset, text that looks like dates and numbers, every geometry type, NULLs in
+  every column). The same rows go into `usa.gpkg` and into PostgreSQL, so every store must answer alike.
+
+## PostgreSQL
+
+The connection is in `demo-server/.env` (copy `.env_sample`). Then, once:
+
+1. As a superuser, in that database: `psql -U postgres -d apipeatures -f setup-postgres-admin.sql`. It installs
+   PostGIS and creates the schema `cql2demo`, owned by the demo's user.
+2. As the demo's user: `sh load-postgres.sh`. It creates the tables in `cql2demo` (`kitchen_sink` from
+   `kitchen_sink.sql` and `kitchen_sink.geojson`, `kitchen_sink_3857` in Web Mercator, `states` and `sub_regions` from
+   `usa.gpkg`) and ogc-cql2's `cql2_*` functions. Safe to run again. Set `PSQL` / `OGR2OGR` if those aren't on the
+   path; with Postgres.app they are in `/Applications/Postgres.app/Contents/Versions/17/bin`.

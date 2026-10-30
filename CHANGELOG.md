@@ -27,7 +27,8 @@ The first working version: the profile Basic CQL2, Advanced Comparison Operators
 - The demo is now a playground: a CQL2-JSON filter, its problems, conformance classes, CQL2-text and the sample
   features it selects, in the browser or from `demo-server`.
 - `demo-server/` (not published): a Node backend answering filters through a store layer: GeoJSON files, filtered
-  with `ogc-cql2/evaluate`, and GeoPackage tables, filtered in SQLite with `ogc-cql2/sql`.
+  with `ogc-cql2/evaluate`; GeoPackage tables, filtered in SQLite; and PostgreSQL / PostGIS tables, both with
+  `ogc-cql2/sql`. A kitchen-sink sample holds the same rows in all three.
 - `check:imports` and `check:bundle`, run before every publish: the package has no runtime dependencies, and a page
   importing only `ogc-cql2/evaluate` bundles nothing else.
 

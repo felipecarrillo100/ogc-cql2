@@ -217,7 +217,10 @@ In a clone of the repository:
 The server's collections are listed in `demo-server/collections.json`. A collection is either a GeoJSON
 FeatureCollection file, filtered in memory with `ogc-cql2/evaluate`, or a table of a **GeoPackage** (OGC's SQLite
 format), filtered in the database with `ogc-cql2/sql`: one entry serves every table the GeoPackage lists in
-`gpkg_contents`. The sample `usa.gpkg` holds the states and the census sub-regions. PostgreSQL will follow. Its routes:
+`gpkg_contents`. A **PostgreSQL** entry serves the tables it lists, from the database in `demo-server/.env`
+(copy `.env_sample`), filtered with the `postgres` dialect. The samples: the states, the census sub-regions and a
+"kitchen sink" of every type and edge case, the same rows in every source (`demo-server/data/README.md` says how to load
+them into PostgreSQL). Its routes:
 
 | Route | Answer |
 |---|---|

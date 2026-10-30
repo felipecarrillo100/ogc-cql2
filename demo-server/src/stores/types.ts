@@ -45,5 +45,5 @@ export interface Store {
   describe(): CollectionDescription;
   queryables(): Readonly<Record<string, Queryable>>;
   /** The features the filter selects (TRUE), in the store's order, one page of them. The filter is valid. */
-  query(filter: Cql2Filter, page: Page): QueryResult;
+  query(filter: Cql2Filter, page: Page): Promise<QueryResult>;
 }

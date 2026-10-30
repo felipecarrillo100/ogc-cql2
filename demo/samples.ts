@@ -49,16 +49,39 @@ const STATE_EXAMPLES: readonly Example[] = [
   { label: "All states", filter: true },
 ];
 
+const KITCHEN_SINK_EXAMPLES: readonly Example[] = [
+  { label: "Name equals “STRASSE”, any case (ß folds to ss)", filter: { op: "=", args: [casei(p("name")), casei("STRASSE")] } },
+  { label: "Name before “b”, in code point order", filter: { op: "<", args: [p("name"), "b"] } },
+  { label: "Name contains “é” (NFC and NFD alike)", filter: { op: "like", args: [p("name"), "%é%"] } },
+  { label: "Code contains a literal % (escaped)", filter: { op: "like", args: [p("code"), "%\\%%"] } },
+  { label: "Day is 26 July 2020", filter: { op: "=", args: [p("day"), { date: "2020-07-26" }] } },
+  { label: "An instant in 2023 or later", filter: { op: ">=", args: [p("at"), { timestamp: "2023-01-01T00:00:00Z" }] } },
+  { label: "A local time (no offset) against an instant: always NULL", filter: { op: ">", args: [p("local_at"), { timestamp: "2000-01-01T00:00:00Z" }] } },
+  { label: "A note that looks like a date is still text", filter: { op: "=", args: [p("note"), "2020-07-26"] } },
+  { label: "Amount between 1 and 10", filter: { op: "between", args: [p("amount"), 1, 10] } },
+  { label: "The largest exact integers (±2^53 − 1)", filter: { op: ">=", args: [p("big"), 9007199254740991] } },
+  { label: "Not active (NULL stays out of both)", filter: { op: "not", args: [{ op: "=", args: [p("active"), true] }] } },
+  { label: "All features", filter: true },
+];
+
+const SUB_REGION_EXAMPLES: readonly Example[] = [
+  { label: "Divisions of the West", filter: { op: "=", args: [p("region"), "West"] } },
+  { label: "Name ends with “central”, any case", filter: { op: "like", args: [casei(p("name")), casei("%central")] } },
+  { label: "Division 1 to 4", filter: { op: "between", args: [p("division"), 1, 4] } },
+  { label: "All sub-regions", filter: true },
+];
+
 /** Examples for a server collection, by its id. A collection without its own gets {@link ANY_COLLECTION}. */
 export const SERVER_EXAMPLES: Readonly<Record<string, readonly Example[]>> = {
   states: STATE_EXAMPLES,
-  "gpkg-states": STATE_EXAMPLES, // the GeoPackage holds the same states
-  "gpkg-sub_regions": [
-    { label: "Divisions of the West", filter: { op: "=", args: [p("region"), "West"] } },
-    { label: "Name ends with “central”, any case", filter: { op: "like", args: [casei(p("name")), casei("%central")] } },
-    { label: "Division 1 to 4", filter: { op: "between", args: [p("division"), 1, 4] } },
-    { label: "All sub-regions", filter: true },
-  ],
+  "gpkg-states": STATE_EXAMPLES, // the same states in every source
+  "pg-states": STATE_EXAMPLES,
+  "gpkg-sub_regions": SUB_REGION_EXAMPLES,
+  "pg-sub_regions": SUB_REGION_EXAMPLES,
+  kitchen_sink: KITCHEN_SINK_EXAMPLES,
+  "gpkg-kitchen_sink": KITCHEN_SINK_EXAMPLES,
+  "pg-kitchen_sink": KITCHEN_SINK_EXAMPLES,
+  "pg-kitchen_sink_3857": KITCHEN_SINK_EXAMPLES,
 };
 
 export const ANY_COLLECTION: readonly Example[] = [{ label: "All features", filter: true }];

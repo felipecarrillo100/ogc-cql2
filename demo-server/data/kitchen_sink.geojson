@@ -1,0 +1,728 @@
+{
+ "type": "FeatureCollection",
+ "name": "kitchen_sink",
+ "features": [
+  {
+   "type": "Feature",
+   "id": 1,
+   "properties": {
+    "name": "Straße",
+    "code": "100%",
+    "small": 1,
+    "count": 5,
+    "big": 9007199254740991,
+    "ratio": 2.5,
+    "amount": 12.34,
+    "active": true,
+    "day": "2020-07-26",
+    "at": "2023-01-01T00:00:00.000Z",
+    "local_at": "2023-01-01T10:00:00.000",
+    "note": "2020-07-26"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     4.35,
+     50.85
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 2,
+   "properties": {
+    "name": "STRASSE",
+    "code": "a_b",
+    "small": -2,
+    "count": 10,
+    "big": -5,
+    "ratio": -1.25,
+    "amount": 0.01,
+    "active": false,
+    "day": "2021-01-01",
+    "at": "2023-01-01T00:00:00.001Z",
+    "local_at": "2020-02-29T23:59:59.999",
+    "note": "5"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      0,
+      0
+     ],
+     [
+      1,
+      1
+     ],
+     [
+      2,
+      0.5
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 3,
+   "properties": {
+    "name": null,
+    "code": null,
+    "small": null,
+    "count": null,
+    "big": null,
+    "ratio": null,
+    "amount": null,
+    "active": null,
+    "day": null,
+    "at": null,
+    "local_at": null,
+    "note": null
+   },
+   "geometry": null
+  },
+  {
+   "type": "Feature",
+   "id": 4,
+   "properties": {
+    "name": "café",
+    "code": "a\\b",
+    "small": 0,
+    "count": 0,
+    "big": 0,
+    "ratio": 0.5,
+    "amount": 99.99,
+    "active": true,
+    "day": "2024-02-29",
+    "at": "2022-12-31T22:59:59.999Z",
+    "local_at": null,
+    "note": "2023-01-01T00:00:00Z"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10,
+       10
+      ],
+      [
+       14,
+       10
+      ],
+      [
+       14,
+       14
+      ],
+      [
+       10,
+       14
+      ],
+      [
+       10,
+       10
+      ]
+     ],
+     [
+      [
+       11,
+       11
+      ],
+      [
+       11,
+       12
+      ],
+      [
+       12,
+       12
+      ],
+      [
+       12,
+       11
+      ],
+      [
+       11,
+       11
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 5,
+   "properties": {
+    "name": "café",
+    "code": "",
+    "small": 7,
+    "count": 3,
+    "big": 1,
+    "ratio": 1.5e-7,
+    "amount": 5.5,
+    "active": false,
+    "day": "1999-12-31",
+    "at": "2023-06-15T08:00:00.123Z",
+    "local_at": "2023-06-15T08:00:00.000",
+    "note": "2023-02-30T00:00Z"
+   },
+   "geometry": {
+    "type": "MultiPoint",
+    "coordinates": [
+     [
+      1,
+      2
+     ],
+     [
+      3,
+      4
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 6,
+   "properties": {
+    "name": "",
+    "code": "Riv",
+    "small": 3,
+    "count": 7,
+    "big": 2,
+    "ratio": 10.5,
+    "amount": 2.5,
+    "active": null,
+    "day": "2020-01-01",
+    "at": "2023-01-01T00:00:01.000Z",
+    "local_at": null,
+    "note": "2020-02-30"
+   },
+   "geometry": {
+    "type": "MultiLineString",
+    "coordinates": [
+     [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     [
+      [
+       0,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 7,
+   "properties": {
+    "name": "😀",
+    "code": "river",
+    "small": 4,
+    "count": 8,
+    "big": 3,
+    "ratio": 3.25,
+    "amount": 1.25,
+    "active": true,
+    "day": "2022-02-02",
+    "at": "2024-02-29T07:00:00.000Z",
+    "local_at": null,
+    "note": "abc"
+   },
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        20,
+        20
+       ],
+       [
+        21,
+        20
+       ],
+       [
+        21,
+        21
+       ],
+       [
+        20,
+        21
+       ],
+       [
+        20,
+        20
+       ]
+      ]
+     ],
+     [
+      [
+       [
+        22,
+        22
+       ],
+       [
+        23,
+        22
+       ],
+       [
+        23,
+        23
+       ],
+       [
+        22,
+        23
+       ],
+       [
+        22,
+        22
+       ]
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 8,
+   "properties": {
+    "name": "Ελλάδα",
+    "code": "RIVER",
+    "small": 5,
+    "count": 9,
+    "big": 4,
+    "ratio": 0.75,
+    "amount": 3.75,
+    "active": false,
+    "day": "2020-07-27",
+    "at": "2023-01-01T00:00:00.000Z",
+    "local_at": null,
+    "note": "2023-01-01t00:00z"
+   },
+   "geometry": {
+    "type": "GeometryCollection",
+    "geometries": [
+     {
+      "type": "Point",
+      "coordinates": [
+       5,
+       5
+      ]
+     },
+     {
+      "type": "LineString",
+      "coordinates": [
+       [
+        5,
+        5
+       ],
+       [
+        6,
+        6
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 9,
+   "properties": {
+    "name": "ΕΛΛΆΔΑ",
+    "code": "x",
+    "small": 6,
+    "count": 2,
+    "big": 5,
+    "ratio": 7.5,
+    "amount": 4.5,
+    "active": true,
+    "day": "2020-07-25",
+    "at": "1999-12-31T23:59:59.000Z",
+    "local_at": null,
+    "note": "2023-01-01T24:00Z"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -3.7,
+     40.4
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 10,
+   "properties": {
+    "name": "İstanbul",
+    "code": "ﬁle",
+    "small": 8,
+    "count": 1,
+    "big": 6,
+    "ratio": 8.25,
+    "amount": 6.25,
+    "active": false,
+    "day": "2000-01-01",
+    "at": "2023-01-01T12:00:00.000Z",
+    "local_at": null,
+    "note": ""
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     28.98,
+     41.01
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 11,
+   "properties": {
+    "name": "ﬁle",
+    "code": "FILE",
+    "small": 9,
+    "count": 4,
+    "big": 7,
+    "ratio": 9.5,
+    "amount": 7.5,
+    "active": true,
+    "day": "2021-06-30",
+    "at": "2030-01-01T00:00:00.000Z",
+    "local_at": null,
+    "note": "Straße"
+   },
+   "geometry": null
+  },
+  {
+   "type": "Feature",
+   "id": 12,
+   "properties": {
+    "name": "",
+    "code": "%",
+    "small": 2,
+    "count": 6,
+    "big": 8,
+    "ratio": 4.25,
+    "amount": 8.75,
+    "active": false,
+    "day": "2020-07-26",
+    "at": "2023-01-01T00:00:00.500Z",
+    "local_at": null,
+    "note": "2023-01-01T00:00:00+00:00"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 13,
+   "properties": {
+    "name": "end\\",
+    "code": "end\\",
+    "small": 1,
+    "count": 1,
+    "big": 1,
+    "ratio": 1.5,
+    "amount": 1.5,
+    "active": true,
+    "day": "2020-07-26",
+    "at": "2023-01-01T00:00:00.000Z",
+    "local_at": null,
+    "note": "end\\"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     1,
+     1
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 14,
+   "properties": {
+    "name": "Σίσυφος",
+    "code": "ΣΊΣΥΦΟΣ",
+    "small": 10,
+    "count": 11,
+    "big": -9007199254740991,
+    "ratio": -0.5,
+    "amount": -12.5,
+    "active": null,
+    "day": "1970-01-01",
+    "at": "1970-01-01T00:00:00.000Z",
+    "local_at": "1970-01-01T00:00:00.000",
+    "note": "-1"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     23.7,
+     37.98
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 15,
+   "properties": {
+    "name": "O'Brien",
+    "code": "it's",
+    "small": 11,
+    "count": 12,
+    "big": 100,
+    "ratio": 100.125,
+    "amount": 100.25,
+    "active": true,
+    "day": "2026-10-30",
+    "at": "2026-10-30T12:34:56.789Z",
+    "local_at": "2026-10-30T12:34:56.789",
+    "note": "O'Brien"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -6.26,
+     53.35
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 16,
+   "properties": {
+    "name": "Riviera",
+    "code": "Riv%",
+    "small": 12,
+    "count": 13,
+    "big": 101,
+    "ratio": 1e+21,
+    "amount": 1234567.89,
+    "active": false,
+    "day": "2020-12-31",
+    "at": "2020-12-31T23:59:59.999Z",
+    "local_at": null,
+    "note": "2020-12-31"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     7.27,
+     43.7
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 17,
+   "properties": {
+    "name": "Ångström",
+    "code": "Å",
+    "small": 13,
+    "count": null,
+    "big": 102,
+    "ratio": 6.5,
+    "amount": 0.5,
+    "active": true,
+    "day": null,
+    "at": null,
+    "local_at": "2000-01-01T00:00:00.000",
+    "note": "Å"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     18.07,
+     59.33
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 18,
+   "properties": {
+    "name": "Zürich",
+    "code": null,
+    "small": null,
+    "count": 14,
+    "big": null,
+    "ratio": null,
+    "amount": 14.75,
+    "active": null,
+    "day": "2020-07-26",
+    "at": null,
+    "local_at": null,
+    "note": null
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     8.54,
+     47.37
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 19,
+   "properties": {
+    "name": "a b",
+    "code": "a b",
+    "small": 14,
+    "count": 15,
+    "big": 103,
+    "ratio": 0.125,
+    "amount": 15.5,
+    "active": false,
+    "day": "2020-07-26",
+    "at": "2023-01-01T00:00:00.000Z",
+    "local_at": null,
+    "note": "a b"
+   },
+   "geometry": null
+  },
+  {
+   "type": "Feature",
+   "id": 20,
+   "properties": {
+    "name": "tab\there",
+    "code": "line\nbr",
+    "small": 15,
+    "count": 16,
+    "big": 104,
+    "ratio": 2.25,
+    "amount": 16.25,
+    "active": true,
+    "day": "2023-01-01",
+    "at": "2023-01-01T00:00:00.000Z",
+    "local_at": null,
+    "note": "tab\there"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     2,
+     2
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 21,
+   "properties": {
+    "name": "DIV",
+    "code": "LIKE",
+    "small": 16,
+    "count": 17,
+    "big": 105,
+    "ratio": 3.5,
+    "amount": 17.5,
+    "active": false,
+    "day": "2023-01-02",
+    "at": "2023-01-02T00:00:00.000Z",
+    "local_at": null,
+    "note": "AND"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     3,
+     3
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 22,
+   "properties": {
+    "name": "123",
+    "code": "007",
+    "small": 17,
+    "count": 18,
+    "big": 106,
+    "ratio": 4.5,
+    "amount": 18.75,
+    "active": true,
+    "day": "2023-01-03",
+    "at": "2023-01-03T00:00:00.000Z",
+    "local_at": null,
+    "note": "123"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     4,
+     4
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 23,
+   "properties": {
+    "name": "straße",
+    "code": "riv",
+    "small": 18,
+    "count": 19,
+    "big": 107,
+    "ratio": 5.25,
+    "amount": 19.5,
+    "active": null,
+    "day": "2023-01-04",
+    "at": "2023-01-04T00:00:00.000Z",
+    "local_at": "2023-01-04T00:00:00.000",
+    "note": "straße"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     5,
+     6
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": 24,
+   "properties": {
+    "name": "New York",
+    "code": "NY",
+    "small": 19,
+    "count": 20,
+    "big": 108,
+    "ratio": 6.75,
+    "amount": 20.25,
+    "active": false,
+    "day": "2023-01-05",
+    "at": "2023-01-05T00:00:00.000Z",
+    "local_at": null,
+    "note": "New York"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -74,
+     40.71
+    ]
+   }
+  }
+ ]
+}

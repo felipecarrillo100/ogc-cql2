@@ -78,7 +78,8 @@ async function loadServerCollections(): Promise<void> {
 }
 
 /** What filters a server collection, by its source. */
-const engineOf = (source: string): string => (source === "geopackage" ? "ogc-cql2/sql, in SQLite" : "ogc-cql2/evaluate");
+const engineOf = (source: string): string =>
+  source === "geopackage" ? "ogc-cql2/sql, in SQLite" : source === "postgres" ? "ogc-cql2/sql, in PostgreSQL" : "ogc-cql2/evaluate";
 
 async function selectSource(id: string): Promise<void> {
   const found = serverCollections.find((c) => c.id === id);

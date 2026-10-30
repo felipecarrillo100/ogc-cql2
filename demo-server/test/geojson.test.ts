@@ -9,51 +9,51 @@ const f = (id: unknown, properties: Record<string, unknown> = {}) =>
 const ids = (json: unknown) => prepareFeatures(json, "test").features.map((x) => x.id);
 
 describe("ids", () => {
-  it("keeps unique ids, strings and numbers", () => {
+  it("keeps unique ids, strings and numbers", async () => {
     assert.deepEqual(ids(fc([f("a"), f(7), f("b")])), ["a", 7, "b"]);
     assert.deepEqual(prepareFeatures(fc([f("a"), f(7)]), "test").warnings, []);
   });
 
-  it("generates the position in the file when no feature has an id", () => {
+  it("generates the position in the file when no feature has an id", async () => {
     assert.deepEqual(ids(fc([f(undefined), f(undefined), f(undefined)])), [1, 2, 3]);
   });
 
-  it("generates numbers after the largest numeric id when some features have ids", () => {
+  it("generates numbers after the largest numeric id when some features have ids", async () => {
     assert.deepEqual(ids(fc([f(10), f(undefined), f("x"), f(3), f(undefined)])), [10, 11, "x", 3, 12]);
   });
 
-  it("uses positions when the only ids are strings: they can't collide with numbers", () => {
+  it("uses positions when the only ids are strings: they can't collide with numbers", async () => {
     assert.deepEqual(ids(fc([f("1"), f(undefined)])), ["1", 2]);
   });
 
-  it("drops a later feature with a duplicate id and reports it", () => {
+  it("drops a later feature with a duplicate id and reports it", async () => {
     const { features, warnings } = prepareFeatures(fc([f(1, { n: "first" }), f(2), f(1, { n: "second" }), f(2)]), "test");
     assert.deepEqual(features.map((x) => [x.id, x.properties.n]), [[1, "first"], [2, undefined]]);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0]!, /Dropped 2 feature\(s\) with a duplicate id: feature 3 \(id 1, already used by feature 1\); feature 4 \(id 2, already used by feature 2\)/);
   });
 
-  it("1 and \"1\" are different ids", () => {
+  it("1 and \"1\" are different ids", async () => {
     assert.deepEqual(ids(fc([f(1), f("1")])), [1, "1"]);
   });
 
-  it("an id that is neither a string nor a number is replaced, and reported", () => {
+  it("an id that is neither a string nor a number is replaced, and reported", async () => {
     const { features, warnings } = prepareFeatures(fc([f({ x: 1 }), f(5)]), "test");
     assert.deepEqual(features.map((x) => x.id), [6, 5]);
     assert.match(warnings.join(" "), /neither a string nor a number/);
   });
 
-  it("missing properties become {}", () => {
+  it("missing properties become {}", async () => {
     assert.deepEqual(prepareFeatures(fc([{ type: "Feature", geometry: null }]), "test").features[0]!.properties, {});
   });
 });
 
 describe("the file", () => {
-  it("must be a FeatureCollection", () => {
+  it("must be a FeatureCollection", async () => {
     assert.throws(() => prepareFeatures({ type: "Feature" }, "x.geojson"), /x\.geojson is not a GeoJSON FeatureCollection/);
   });
 
-  it("may name CRS84 in a legacy crs member, and nothing else", () => {
+  it("may name CRS84 in a legacy crs member, and nothing else", async () => {
     const crs = (name: string) => ({ crs: { type: "name", properties: { name } } });
     assert.doesNotThrow(() => prepareFeatures(fc([], crs("urn:ogc:def:crs:OGC:1.3:CRS84")), "x"));
     assert.throws(() => prepareFeatures(fc([], crs("urn:ogc:def:crs:EPSG::3857")), "x"), /only WGS 84 longitude, latitude/);
@@ -69,7 +69,7 @@ describe("queryables", () => {
     "test",
   ).features;
 
-  it("types and formats from the values", () => {
+  it("types and formats from the values", async () => {
     const { queryables, warnings } = inferQueryables(features);
     assert.deepEqual(queryables, {
       name: { type: "string" },
@@ -92,16 +92,16 @@ describe("query", () => {
     fc([f(1, { pop: 10 }), f(2, { pop: 30 }), f(3, { pop: null }), f(4, { pop: 50 }), f(5, { pop: 70 })]),
   );
 
-  it("selects with three-valued logic and pages the result", () => {
+  it("selects with three-valued logic and pages the result", async () => {
     const filter = { op: ">", args: [{ property: "pop" }, 20] } as const;
-    assert.deepEqual(store.query(filter, { limit: 10, offset: 0 }).features.map((x) => x.id), [2, 4, 5]);
-    const page = store.query(filter, { limit: 2, offset: 1 });
+    assert.deepEqual((await store.query(filter, { limit: 10, offset: 0 })).features.map((x) => x.id), [2, 4, 5]);
+    const page = await store.query(filter, { limit: 2, offset: 1 });
     assert.deepEqual([page.numberMatched, page.features.map((x) => x.id)], [3, [4, 5]]);
     // NOT on a null value is NULL too: feature 3 is in neither result.
-    assert.deepEqual(store.query({ op: "not", args: [filter] }, { limit: 10, offset: 0 }).features.map((x) => x.id), [1]);
+    assert.deepEqual((await store.query({ op: "not", args: [filter] }, { limit: 10, offset: 0 })).features.map((x) => x.id), [1]);
   });
 
-  it("describes itself", () => {
+  it("describes itself", async () => {
     assert.deepEqual(store.describe(), { id: "t", title: "Test", source: "geojson", featureCount: 5, warnings: [] });
   });
 });
