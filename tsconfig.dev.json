@@ -1,0 +1,19 @@
+{
+  // The tests, the demo and the config files. The published sources are checked by tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "isolatedDeclarations": false,
+    "declaration": false,
+    // `vitest.config.ts` imports `vite.config.ts`.
+    "allowImportingTsExtensions": true,
+    "types": ["node", "vite/client"],
+    // The demo and the tests import the package by its name, as a user does; this resolves it to the sources.
+    // `vite.config.ts` aliases the same way, for Vite and Vitest.
+    "paths": {
+      "ogc-cql2": ["./src/index.ts"],
+      "ogc-cql2/*": ["./src/*/index.ts"]
+    }
+  },
+  "include": ["src", "test", "demo", "*.config.ts"]
+}

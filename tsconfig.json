@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // No DOM: the sources must run in Node as well as in browsers.
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "isolatedModules": true,
+    // Every export carries an explicit type, so tsdown writes the `.d.ts` files with oxc, fast and exact.
+    "isolatedDeclarations": true,
+    "declaration": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    // tsc only checks; tsdown builds.
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,65 @@
+{
+  "name": "ogc-cql2",
+  "version": "0.0.1",
+  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text encoding and evaluation of CQL2-JSON, in browsers and Node. Coming soon.",
+  "keywords": [
+    "cql2",
+    "cql2-json",
+    "cql2-text",
+    "ogc",
+    "ogc-api",
+    "ogc-api-features",
+    "filter",
+    "query"
+  ],
+  "author": "Felipe Carrillo Romero",
+  "homepage": "https://github.com/felipecarrillo100/ogc-cql2#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/felipecarrillo100/ogc-cql2.git"
+  },
+  "bugs": {
+    "url": "https://github.com/felipecarrillo100/ogc-cql2/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./text": {
+      "types": "./dist/text/index.d.ts",
+      "import": "./dist/text/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.dev.json",
+    "test": "vitest run",
+    "demo": "vite",
+    "build:demo": "vite build",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "preview:demo": "vite preview"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/core": "^0.18.5",
+    "@types/node": "^24.19.2",
+    "publint": "^0.3.25",
+    "tsdown": "~0.23.4",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
