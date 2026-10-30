@@ -10,10 +10,10 @@ export const sourceAliases = [
   { find: /^ogc-cql2\/(.+)$/, replacement: fileURLToPath(new URL("./src/$1/index.ts", import.meta.url)) },
 ];
 
-/** `/api/…` → demo-server (`DEMO_SERVER`, default http://localhost:3000), in dev and preview: one origin, no CORS. */
+/** `/api/…` → demo-server (`DEMO_SERVER`, default http://localhost:3100), in dev and preview: one origin, no CORS. */
 const api = {
   "/api": {
-    target: process.env.DEMO_SERVER ?? "http://localhost:3000",
+    target: process.env.DEMO_SERVER ?? "http://localhost:3100",
     rewrite: (path: string) => path.replace(/^\/api/, ""),
   },
 };

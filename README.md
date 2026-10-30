@@ -181,8 +181,10 @@ In a clone of the repository:
 - **`npm run demo`** opens a page where you type CQL2-JSON and see the problems, the conformance classes, the
   CQL2-text and which sample features match.
 - **`demo-server/`** is a small Node backend (Express) that answers the same filters from data files, so the page can
-  query a server instead of filtering in the browser. Start it with `npm install && npm start` in `demo-server/`,
-  then choose its collection under "Data" in the page.
+  query a server instead of filtering in the browser. Start it with `npm install && npm start` in `demo-server/`
+  (it listens on port 3100; `PORT=… npm start` for another), keep that terminal open, run `npm run demo` in a second
+  one, and choose a server collection under "Data" in the page. For a server on another port, start the page with
+  `DEMO_SERVER=http://localhost:… npm run demo`.
 
 The server's collections are listed in `demo-server/collections.json`. A collection is either a GeoJSON
 FeatureCollection file, filtered in memory with `ogc-cql2/evaluate`, or a table of a **GeoPackage** (OGC's SQLite

@@ -8,7 +8,8 @@
  * | `GET /collections/{id}/queryables` | its properties and their types, as OGC API Features Part 3 queryables |
  * | `POST /collections/{id}/query` `{ filter, limit?, offset? }` | the matching features, a GeoJSON FeatureCollection |
  *
- * Refusals are `application/problem+json`. Run: `npm start` (builds the package first) or `npm run serve`.
+ * Refusals are `application/problem+json`. Run: `npm start` (builds the package first) or `npm run serve`; port 3100
+ * unless `PORT` says otherwise.
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -141,6 +142,6 @@ export function loadStores(configPath: string, log: (line: string) => void = con
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const configPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "collections.json");
   const stores = loadStores(configPath);
-  const port = Number(process.env.PORT ?? 3000);
+  const port = Number(process.env.PORT ?? 3100);
   createApp(stores).listen(port, () => console.log(`demo-server: http://localhost:${port}/collections`));
 }
