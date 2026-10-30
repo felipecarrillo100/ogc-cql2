@@ -34,7 +34,27 @@ export const COLUMNS: readonly string[] = ["name", "country", "population", "cap
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
 
-export const EXAMPLES: readonly { readonly label: string; readonly filter: unknown }[] = [
+export interface Example {
+  readonly label: string;
+  readonly filter: unknown;
+}
+
+/** Examples for a server collection, by its id. A collection without its own gets {@link ANY_COLLECTION}. */
+export const SERVER_EXAMPLES: Readonly<Record<string, readonly Example[]>> = {
+  states: [
+    { label: "Population in 1996 over 10 million", filter: { op: ">", args: [p("POP1996"), 10000000] } },
+    { label: "Name starts with “new”, any case", filter: { op: "like", args: [casei(p("STATE_NAME")), casei("new%")] } },
+    { label: "Sub-region is Pacific or Mountain", filter: { op: "in", args: [p("SUB_REGION"), ["Pacific", "Mtn"]] } },
+    { label: "Area between 100 000 and 200 000", filter: { op: "between", args: [p("AREA"), 100000, 200000] } },
+    { label: "Outside the profile: arithmetic (POP1990 − 100 000)", filter: { op: "<", args: [p("POP1996"), { op: "-", args: [p("POP1990"), 100000] }] } },
+    { label: "A property the collection doesn't have (the server refuses it)", filter: { op: "=", args: [p("population"), 1] } },
+    { label: "All states", filter: true },
+  ],
+};
+
+export const ANY_COLLECTION: readonly Example[] = [{ label: "All features", filter: true }];
+
+export const EXAMPLES: readonly Example[] = [
   { label: "Population over 1 million", filter: { op: ">", args: [p("population"), 1000000] } },
   { label: "Name starts with “s”, any case (LIKE + CASEI)", filter: { op: "like", args: [casei(p("name")), casei("s%")] } },
   { label: "Name equals “straßburg”, any case (full case folding)", filter: { op: "=", args: [casei(p("name")), casei("straßburg")] } },

@@ -18,6 +18,9 @@
 
     <main>
       <section class="input" aria-label="Filter">
+        <label for="source">Data</label>
+        <select id="source"></select>
+
         <label for="example">Example</label>
         <select id="example"></select>
 
@@ -37,7 +40,7 @@
         <h2>CQL2-text <code>ogc-cql2/text</code></h2>
         <output id="text"></output>
 
-        <h2>Sample features <code>ogc-cql2/evaluate</code></h2>
+        <h2 id="results-title">Sample features <code>ogc-cql2/evaluate</code></h2>
         <p class="muted" id="summary"></p>
         <div class="table-wrap"><table id="features"></table></div>
       </section>

@@ -56,8 +56,10 @@
     "test": "vitest run",
     "demo": "vite",
     "build:demo": "vite build",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
-    "preview:demo": "vite preview"
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run check:imports && npm run check:bundle",
+    "preview:demo": "vite preview",
+    "check:imports": "node scripts/check-imports.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",

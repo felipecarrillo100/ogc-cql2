@@ -74,7 +74,8 @@ validate(filter, { conformance: [CONFORMANCE.basic] });
 requiredConformance(filter); // the classes the filter uses
 ```
 
-`assertValid(value)` returns the filter or throws.
+`assertValid(value)` returns the filter or throws. `filterProperties(filter)` lists the property names a filter uses,
+for example to check them against a collection's queryables.
 
 ## Write CQL2-text
 
@@ -143,10 +144,27 @@ them:
 Every refusal throws a `Cql2Error` with a `code` (`invalid-filter` or `not-expressible`), a `path` and `details`.
 Test `error.code`, not `instanceof`: that keeps working when two copies of the package end up in one application.
 
-## Playground
+## Playground and demo server
 
-`npm run demo` in a clone of the repository opens a page where you type CQL2-JSON and see the problems, the
-conformance classes, the CQL2-text and which sample features match.
+In a clone of the repository:
+
+- **`npm run demo`** opens a page where you type CQL2-JSON and see the problems, the conformance classes, the
+  CQL2-text and which sample features match.
+- **`demo-server/`** is a small Node backend (Express) that answers the same filters from data files, so the page can
+  query a server instead of filtering in the browser. Start it with `npm install && npm start` in `demo-server/`,
+  then choose its collection under "Data" in the page.
+
+The server's collections are listed in `demo-server/collections.json`; each one is a GeoJSON FeatureCollection file
+for now (SQLite and PostgreSQL will follow). Its routes:
+
+| Route | Answer |
+|---|---|
+| `GET /collections` | the collections |
+| `GET /collections/{id}/queryables` | the properties and their types (a JSON Schema) |
+| `POST /collections/{id}/query` with `{ "filter": …, "limit": 50, "offset": 0 }` | the matching features, as GeoJSON |
+
+An invalid filter, or one naming a property the collection doesn't have, is refused with HTTP 400 and the problems as
+`application/problem+json`. Neither the page nor the server is part of the npm package.
 
 ## More
 

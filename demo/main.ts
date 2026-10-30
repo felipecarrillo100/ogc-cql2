@@ -1,12 +1,12 @@
 import { CONFORMANCE, CQL2_VERSION, OTHER_CONFORMANCE } from "ogc-cql2";
 import { toEvaluator, type Truth } from "ogc-cql2/evaluate";
 import { textProblem, toText } from "ogc-cql2/text";
-import { requiredConformance, validate } from "ogc-cql2/validate";
-import { COLUMNS, EXAMPLES, FEATURES } from "./samples.ts";
+import { requiredConformance, validate, type Problem } from "ogc-cql2/validate";
+import { ANY_COLLECTION, COLUMNS, EXAMPLES, FEATURES, SERVER_EXAMPLES, type Example } from "./samples.ts";
 
 const byId = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-/** An element with text content only: nothing typed by the user is ever parsed as HTML. */
+/** An element with text content only: nothing typed by the user, or sent by the server, is parsed as HTML. */
 function el(tag: string, text?: string, className?: string): HTMLElement {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
@@ -29,25 +29,88 @@ const CLASS_NAMES: Record<string, string> = {
 };
 const nameOf = (uri: string): string => CLASS_NAMES[uri] ?? uri.split("/").pop() ?? uri;
 
+const sourceSelect = byId<HTMLSelectElement>("source");
 const exampleSelect = byId<HTMLSelectElement>("example");
 const filterInput = byId<HTMLTextAreaElement>("filter");
 const conformanceBox = byId("conformance");
 const validationOut = byId("validation");
 const textOut = byId<HTMLOutputElement>("text");
+const resultsTitle = byId("results-title");
 const summaryOut = byId("summary");
 const table = byId<HTMLTableElement>("features");
 
 byId("version").textContent = CQL2_VERSION;
 
-EXAMPLES.forEach((example, i) => {
-  const option = el("option", example.label) as HTMLOptionElement;
-  option.value = String(i);
-  exampleSelect.append(option);
-});
-const edited = el("option", "(edited)") as HTMLOptionElement;
-edited.value = "";
-edited.hidden = true;
-exampleSelect.append(edited);
+// --- Data sources: the sample features in this page, or a demo-server collection -----------------------------------
+
+interface ServerCollection {
+  readonly id: string;
+  readonly title: string;
+  readonly featureCount: number;
+  readonly warnings: readonly string[];
+}
+
+/** `undefined`: the sample features in this browser. */
+let collection: (ServerCollection & { columns: readonly string[] }) | undefined;
+let examples: readonly Example[] = EXAMPLES;
+let serverCollections: ServerCollection[] = [];
+
+const local = el("option", "Sample features (in this browser)") as HTMLOptionElement;
+local.value = "";
+sourceSelect.append(local);
+
+async function loadServerCollections(): Promise<void> {
+  try {
+    const res = await fetch("api/collections");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    serverCollections = ((await res.json()) as { collections: ServerCollection[] }).collections;
+    for (const c of serverCollections) {
+      const option = el("option", `${c.title}: demo-server, ${c.featureCount} features`) as HTMLOptionElement;
+      option.value = c.id;
+      sourceSelect.append(option);
+    }
+  } catch {
+    const option = el("option", "demo-server not reachable: run npm start in demo-server") as HTMLOptionElement;
+    option.disabled = true;
+    sourceSelect.append(option);
+  }
+}
+
+async function selectSource(id: string): Promise<void> {
+  const found = serverCollections.find((c) => c.id === id);
+  if (!found) {
+    collection = undefined;
+    examples = EXAMPLES;
+  } else {
+    const schema = (await (await fetch(`api/collections/${encodeURIComponent(id)}/queryables`)).json()) as {
+      properties: Record<string, unknown>;
+    };
+    collection = { ...found, columns: Object.keys(schema.properties) };
+    examples = SERVER_EXAMPLES[id] ?? ANY_COLLECTION;
+    renderTable("id", collection.columns, []);
+  }
+  resultsTitle.replaceChildren(
+    collection ? `${collection.title} ` : "Sample features ",
+    el("code", collection ? "demo-server (ogc-cql2/evaluate on the server)" : "ogc-cql2/evaluate"),
+  );
+  fillExamples();
+  showExample(0);
+}
+
+function fillExamples(): void {
+  exampleSelect.replaceChildren();
+  examples.forEach((example, i) => {
+    const option = el("option", example.label) as HTMLOptionElement;
+    option.value = String(i);
+    exampleSelect.append(option);
+  });
+  const edited = el("option", "(edited)") as HTMLOptionElement;
+  edited.value = "";
+  edited.hidden = true;
+  exampleSelect.append(edited);
+}
+
+// --- Conformance classes the server declares (for the validation shown here) -------------------------------------
 
 const declared = new Set<string>(Object.values(CONFORMANCE));
 for (const uri of Object.values(CONFORMANCE)) {
@@ -64,6 +127,8 @@ for (const uri of Object.values(CONFORMANCE)) {
   conformanceBox.append(label);
 }
 
+// --- Rendering -----------------------------------------------------------------------------------------------------
+
 const truthLabel = (t: Truth): string => (t === null ? "NULL" : t ? "TRUE" : "FALSE");
 
 function cell(value: unknown): HTMLElement {
@@ -72,29 +137,102 @@ function cell(value: unknown): HTMLElement {
   return el("td", typeof value === "string" ? value : JSON.stringify(value));
 }
 
-function renderFeatures(results: readonly Truth[] | undefined): void {
+/** A table: a first column (the result, or the feature id), then the feature's properties. */
+function renderTable(first: string, columns: readonly string[], rows: readonly { lead: HTMLElement; selected: boolean; properties: Readonly<Record<string, unknown>> }[]): void {
   const head = el("tr");
-  head.append(el("th", "result"), ...COLUMNS.map((c) => el("th", c)));
+  head.append(el("th", first), ...columns.map((c) => el("th", c)));
   const thead = el("thead");
   thead.append(head);
   const tbody = el("tbody");
-  FEATURES.forEach((feature, i) => {
-    const row = el("tr");
-    const result = results ? (results[i] ?? null) : undefined;
-    if (result === true) row.className = "selected";
-    row.append(
-      result === undefined ? el("td", "—") : el("td", truthLabel(result), `truth truth-${truthLabel(result).toLowerCase()}`),
-      ...COLUMNS.map((c) => cell(feature.properties[c])),
-    );
-    tbody.append(row);
-  });
+  for (const row of rows) {
+    const tr = el("tr", undefined, row.selected ? "selected" : undefined);
+    tr.append(row.lead, ...columns.map((c) => cell(row.properties[c])));
+    tbody.append(tr);
+  }
   table.replaceChildren(thead, tbody);
+}
+
+function renderLocal(results: readonly Truth[] | undefined): void {
+  renderTable(
+    "result",
+    COLUMNS,
+    FEATURES.map((feature, i) => {
+      const result = results ? (results[i] ?? null) : undefined;
+      return {
+        lead: result === undefined ? el("td", "—") : el("td", truthLabel(result), `truth truth-${truthLabel(result).toLowerCase()}`),
+        selected: result === true,
+        properties: feature.properties,
+      };
+    }),
+  );
+}
+
+function problemList(problems: readonly Problem[]): HTMLElement {
+  const list = el("ul", undefined, "problems");
+  for (const problem of problems) {
+    const item = el("li");
+    item.append(el("code", problem.code), " at ", el("code", problem.path === "" ? "(the filter)" : problem.path), " ");
+    item.append(el("span", problem.message));
+    if (problem.conformance) item.append(el("span", ` Class: ${nameOf(problem.conformance)}.`, "muted"));
+    list.append(item);
+  }
+  return list;
+}
+
+// --- Running a filter ----------------------------------------------------------------------------------------------
+
+let request = 0;
+let timer: ReturnType<typeof setTimeout> | undefined;
+
+/** Sends the filter to demo-server and shows its answer; a later run supersedes an earlier one. */
+async function runOnServer(value: unknown, id: string, columns: readonly string[]): Promise<void> {
+  const mine = ++request;
+  let res: Response;
+  try {
+    res = await fetch(`api/collections/${encodeURIComponent(id)}/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filter: value, limit: 100 }),
+    });
+  } catch {
+    if (mine === request) summaryOut.textContent = "demo-server didn't answer: is it running?";
+    return;
+  }
+  const answer = (await res.json()) as {
+    numberMatched?: number;
+    numberReturned?: number;
+    features?: { id: unknown; properties: Record<string, unknown> }[];
+    title?: string;
+    detail?: string;
+    problems?: Problem[];
+  };
+  if (mine !== request) return;
+  if (!res.ok) {
+    const refusal = el("div", undefined, "server-refusal");
+    refusal.append(el("p", `The server refused it (HTTP ${res.status}): ${answer.title ?? ""}. ${answer.detail ?? ""}`, "problem"));
+    if (answer.problems) refusal.append(problemList(answer.problems));
+    validationOut.append(refusal);
+    summaryOut.textContent = "";
+    renderTable("id", columns, []);
+    return;
+  }
+  const features = answer.features ?? [];
+  summaryOut.textContent =
+    `${answer.numberMatched} matched on the server` +
+    (answer.numberMatched === features.length ? "." : `, showing the first ${features.length}.`) +
+    " NULL and FALSE alike are not returned.";
+  renderTable(
+    "id",
+    columns,
+    features.map((f) => ({ lead: el("td", String(f.id)), selected: true, properties: f.properties })),
+  );
 }
 
 function run(): void {
   validationOut.replaceChildren();
   textOut.textContent = "";
   textOut.className = "";
+  clearTimeout(timer);
 
   let value: unknown;
   try {
@@ -103,59 +241,62 @@ function run(): void {
     validationOut.append(el("p", `Not JSON: ${(error as Error).message}`, "problem"));
     textOut.textContent = "—";
     summaryOut.textContent = "";
-    renderFeatures(undefined);
+    if (collection) renderTable("id", collection.columns, []);
+    else renderLocal(undefined);
     return;
   }
 
   const result = validate(value, { conformance: [...declared] });
-  if (result.valid) {
-    validationOut.append(el("p", `Valid. It uses: ${requiredConformance(result.filter).map(nameOf).join(", ")}.`, "ok"));
-  } else {
-    const list = el("ul", undefined, "problems");
-    for (const problem of result.problems) {
-      const item = el("li");
-      item.append(el("code", problem.code), " at ", el("code", problem.path === "" ? "(the filter)" : problem.path), " ");
-      item.append(el("span", problem.message));
-      if (problem.conformance) item.append(el("span", ` Class: ${nameOf(problem.conformance)}.`, "muted"));
-      list.append(item);
-    }
-    validationOut.append(list);
-  }
+  validationOut.append(
+    result.valid
+      ? el("p", `Valid. It uses: ${requiredConformance(result.filter).map(nameOf).join(", ")}.`, "ok")
+      : problemList(result.problems),
+  );
 
   // The text and the evaluation don't depend on what the server declares: they check the filter on its own.
   const alone = validate(value);
-  if (!alone.valid) {
+  if (alone.valid) {
+    const problem = textProblem(alone.filter);
+    textOut.textContent = problem ? `Can't be written as CQL2-text: ${problem.problem} at ${problem.path}.` : toText(alone.filter);
+    textOut.className = problem ? "problem" : "";
+  } else {
     textOut.textContent = "—";
-    summaryOut.textContent = "Fix the filter to see which features it selects.";
-    renderFeatures(undefined);
+  }
+
+  if (collection) {
+    // Sent even when it's invalid here: the server validates on its own, and its refusal is part of the demo.
+    const { id, columns } = collection;
+    request++; // whatever is still on its way is now out of date
+    summaryOut.textContent = "Asking demo-server…";
+    timer = setTimeout(() => void runOnServer(value, id, columns), 250);
     return;
   }
-
-  const problem = textProblem(alone.filter);
-  if (problem) {
-    textOut.textContent = `Can't be written as CQL2-text: ${problem.problem} at ${problem.path}.`;
-    textOut.className = "problem";
-  } else {
-    textOut.textContent = toText(alone.filter);
+  if (!alone.valid) {
+    summaryOut.textContent = "Fix the filter to see which features it selects.";
+    renderLocal(undefined);
+    return;
   }
-
   const results = FEATURES.map(toEvaluator(alone.filter));
   const count = (t: Truth) => results.filter((r) => r === t).length;
   summaryOut.textContent =
     `${count(true)} selected (TRUE) · ${count(false)} FALSE · ${count(null)} NULL: unknown, so neither the filter ` +
     "nor its NOT selects them.";
-  renderFeatures(results);
+  renderLocal(results);
 }
 
 function showExample(index: number): void {
   exampleSelect.value = String(index);
-  filterInput.value = JSON.stringify(EXAMPLES[index]!.filter, null, 2);
+  filterInput.value = JSON.stringify(examples[index]!.filter, null, 2);
   run();
 }
 
+sourceSelect.addEventListener("change", () => void selectSource(sourceSelect.value));
 exampleSelect.addEventListener("change", () => showExample(Number(exampleSelect.value)));
 filterInput.addEventListener("input", () => {
   exampleSelect.value = "";
   run();
 });
+
+fillExamples();
 showExample(0);
+void loadServerCollections();

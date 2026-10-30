@@ -41,7 +41,7 @@ drops the rest.
 | Import | Folder | Gives | Status |
 |---|---|---|---|
 | `ogc-cql2` | `src/` + `src/core/` | The profile's types (`Cql2Filter` …); `Cql2Error`; `CONFORMANCE` (the profile's classes) and `OTHER_CONFORMANCE` (the ones named in refusals); `CQL2_VERSION` | 0.1.0 |
-| `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance` | 0.1.0 |
+| `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate` | 0.1.0 |
 | `ogc-cql2/sql` | `src/sql/` | CQL2-JSON → parameterized SQL (PostgreSQL / PostGIS first) | later |
@@ -129,6 +129,26 @@ What the text can't express is refused as `not-expressible`, with the reason and
   - evaluates it against stored features (`ogc-cql2/evaluate`), or later builds SQL (`ogc-cql2/sql`);
   - and, if it must accept CQL2-text, parses it (`ogc-cql2/parse`, later).
 
+## The demo server (`demo-server/`, not published)
+
+A Node backend (Express 5) that answers the playground's filters from data files, through a **store layer**: one
+store per collection, each answering the same three questions (describe yourself, your queryables, the features a
+filter selects). The server never knows which store it talks to.
+
+| Store | Reads | Filters with | Status |
+|---|---|---|---|
+| GeoJSON | one FeatureCollection file, read once at startup | `ogc-cql2/evaluate` | 0.1.0 |
+| SQLite | the tables of a `.sqlite` file (Node's built-in `node:sqlite`) | `ogc-cql2/sql` | next |
+| PostgreSQL / PostGIS | tables of a database; the connection in a git-ignored `.env` | `ogc-cql2/sql` | later |
+
+- Every store answers GeoJSON features. A GeoJSON file's ids are kept when unique; missing ones are generated
+  deterministically (the position in the file, or after the largest numeric id); a duplicate id drops the later
+  feature, which is reported.
+- The server validates each filter (`validate`), checks its properties against the collection's queryables
+  (`filterProperties`), and refuses with HTTP 400 and `application/problem+json`.
+- Only the server has dependencies (Express, later the database drivers). The package stays free of them:
+  `check:imports` and `check:bundle` (below) prove it on every publish.
+
 ## Testing
 
 - **Unit tests** (Vitest) for every part.
@@ -155,6 +175,9 @@ What the text can't express is refused as `not-expressible`, with the reason and
 | Tests | Vitest, with ajv and the official JSON Schema (development only) |
 | Demo | Vite: the playground, importing the package by name, aliased to `src/` |
 | Case folding | `node scripts/gen-case-folding.mjs <CaseFolding-15.0.0.txt>`, run when the Unicode version changes |
+| `check:imports` | fails if `package.json` declares a runtime dependency, or a file in `dist/` imports anything but the package's own files |
+| `check:bundle` | bundles a page that imports only `ogc-cql2/evaluate` and fails unless the bundle holds evaluate alone: no CQL2-text code, no SQL code, nothing Node-specific |
+| `prepublishOnly` | typecheck, tests, build, `check:imports`, `check:bundle` |
 
 Adding an entry point means adding it in two places: `tsdown.config.ts` and `exports` in `package.json`. publint
 checks that they agree.

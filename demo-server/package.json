@@ -1,0 +1,22 @@
+{
+  "name": "ogc-cql2-demo-server",
+  "private": true,
+  "description": "A query backend for the ogc-cql2 playground: CQL2-JSON filters answered from GeoJSON files, through ogc-cql2. Not published.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "npm --prefix .. run build && node src/server.ts",
+    "serve": "node src/server.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "ogc-cql2": "file:.."
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
+}

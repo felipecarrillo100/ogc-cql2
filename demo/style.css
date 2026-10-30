@@ -220,3 +220,11 @@ tr.selected {
 .truth-null {
   color: var(--null);
 }
+
+.server-refusal {
+  margin-top: 0.75rem;
+}
+
+.server-refusal p {
+  margin: 0 0 0.4rem;
+}

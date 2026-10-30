@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { CONFORMANCE, OTHER_CONFORMANCE } from "ogc-cql2";
-import { assertValid, requiredConformance, validate, type ProblemCode } from "ogc-cql2/validate";
+import { assertValid, filterProperties, requiredConformance, validate, type ProblemCode } from "ogc-cql2/validate";
 import { schemaAccepts } from "./schema.ts";
 
 const p = (property: string) => ({ property });
@@ -164,6 +164,25 @@ describe("conformance", () => {
       ["needs-conformance", "/args/0", CONFORMANCE.caseInsensitive],
       ["needs-conformance", "/args/1", CONFORMANCE.caseInsensitive],
     ]);
+  });
+});
+
+describe("filterProperties", () => {
+  it("lists each property once, in order of first appearance, at any depth and inside casei", () => {
+    const filter = assertValid({
+      op: "and",
+      args: [
+        { op: "like", args: [casei(p("name")), casei("s%")] },
+        { op: "not", args: [{ op: "or", args: [{ op: "in", args: [p("country"), ["CA"]] }, { op: "isNull", args: [p("name")] }] }] },
+        { op: "between", args: [p("pop"), 1, 2] },
+      ],
+    });
+    expect(filterProperties(filter)).toEqual(["name", "country", "pop"]);
+    expect(filterProperties(true)).toEqual([]);
+  });
+
+  it("never mistakes a literal for a property", () => {
+    expect(filterProperties(assertValid({ op: "=", args: [p("a"), "property"] }))).toEqual(["a"]);
   });
 });
 

@@ -375,6 +375,22 @@ export function assertValid(value: unknown, options: ValidateOptions = {}): Cql2
 }
 
 /**
+ * The names of the properties a valid filter references, each once, in order of first appearance: to check them
+ * against a collection's queryables, for example.
+ */
+export function filterProperties(filter: Cql2Filter): string[] {
+  const names = new Set<string>();
+  const walk = (x: unknown): void => {
+    if (Array.isArray(x)) return x.forEach(walk);
+    if (!isObject(x)) return;
+    if (typeof x.property === "string") names.add(x.property);
+    else if (Array.isArray(x.args)) walk(x.args);
+  };
+  walk(filter);
+  return [...names];
+}
+
+/**
  * The profile's conformance classes a valid filter uses, in the order of {@link CONFORMANCE}, to compare with what a
  * server declares. Basic CQL2 is always among them.
  */
