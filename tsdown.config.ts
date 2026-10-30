@@ -4,7 +4,9 @@ export default defineConfig({
   // One entry per public entry point; keep in step with `exports` in package.json (publint checks they agree).
   entry: {
     index: "src/index.ts",
+    "validate/index": "src/validate/index.ts",
     "text/index": "src/text/index.ts",
+    "evaluate/index": "src/evaluate/index.ts",
   },
   format: "esm",
   // Browsers and Node alike.

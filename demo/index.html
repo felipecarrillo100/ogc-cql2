@@ -3,20 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ogc-cql2 demo</title>
+    <title>ogc-cql2 playground</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
+    <header>
+      <h1>ogc-cql2 <span class="muted">playground</span></h1>
+      <p class="muted">
+        CQL2 <span id="version"></span> (OGC 21-065r2) · Basic CQL2, Advanced Comparison Operators, Case-insensitive
+        Comparison
+      </p>
+    </header>
+
     <main>
-      <h1>ogc-cql2</h1>
-      <p class="version">Implements CQL2 <span id="version"></span> (OGC 21-065r2)</p>
+      <section class="input" aria-label="Filter">
+        <label for="example">Example</label>
+        <select id="example"></select>
 
-      <label for="value">A string value</label>
-      <input id="value" type="text" value="it's" autocomplete="off" spellcheck="false" />
+        <label for="filter">CQL2-JSON filter</label>
+        <textarea id="filter" spellcheck="false" autocomplete="off" rows="14"></textarea>
 
-      <p class="label">As a CQL2-text literal (<code>ogc-cql2/text</code>, <code>quoteString</code>)</p>
-      <output id="literal"></output>
+        <fieldset>
+          <legend>Conformance classes the server declares</legend>
+          <div id="conformance"></div>
+        </fieldset>
+      </section>
+
+      <section class="output" aria-label="Results">
+        <h2>Validation <code>ogc-cql2/validate</code></h2>
+        <div id="validation"></div>
+
+        <h2>CQL2-text <code>ogc-cql2/text</code></h2>
+        <output id="text"></output>
+
+        <h2>Sample features <code>ogc-cql2/evaluate</code></h2>
+        <p class="muted" id="summary"></p>
+        <div class="table-wrap"><table id="features"></table></div>
+      </section>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>
