@@ -138,6 +138,13 @@ describe("refusals, as application/problem+json", () => {
     assert.equal(answer.problems[0].path, "/args/0");
   });
 
+  it("a spatial filter: the stores don't evaluate it yet, so the class is missing", async () => {
+    const filter = { op: "s_intersects", args: [{ property: "POP1996" }, { bbox: [-110, 35, -100, 45] }] };
+    const answer = await problem(await query("states", { filter }), 400, "invalid-filter");
+    assert.ok(answer.problems.some((x: { code: string; conformance?: string }) =>
+      x.code === "needs-conformance" && x.conformance === "http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-functions"));
+  });
+
   it("a literal of another type than the queryable's, instead of an empty answer", async () => {
     const answer = await problem(await query("states", { filter: { op: ">", args: [{ property: "POP1996" }, "10000000"] } }), 400, "invalid-filter");
     assert.deepEqual(answer.problems.map((x: { code: string; path: string }) => [x.code, x.path]), [["type-mismatch", "/args/1"]]);

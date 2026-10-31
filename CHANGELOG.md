@@ -4,7 +4,33 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [0.5.0] - Unreleased
+## [0.6.0] - Unreleased
+
+Spatial filters, phase A: the three spatial classes in the types, `validate` and `text`, so a client can build,
+check and send them to servers. The engines (`evaluate`, then the SQL dialects) follow in later versions.
+
+### Added
+
+- Basic Spatial Functions, Basic Spatial Functions with additional Spatial Literals and Spatial Functions:
+  `s_intersects`, `s_equals`, `s_disjoint`, `s_touches`, `s_within`, `s_overlaps`, `s_crosses`, `s_contains`, a
+  geometry property first and a geometry literal (GeoJSON) or `{ "bbox": … }` second. `CONFORMANCE.basicSpatial`,
+  `basicSpatialPlus`, `spatial`; `requiredConformance` names the class each filter needs.
+- `validate`: `invalid-geometry` for coordinates outside CRS84 (longitude −180…180, latitude −90…90), positions of
+  other than 2 or 3 numbers, rings not closed or too short, LineStrings of one position, collections of one member or
+  nested, a box of the wrong size or with its south above its north; a box across the antimeridian (west > east) and
+  heights are accepted. With queryables, a spatial predicate needs a geometry queryable.
+- `toText`: geometries as WKT per the grammar (`POINT Z(…)`, `MULTIPOINT((…), (…))`, `BBOX(…)` with 4 or 6 numbers);
+  `textProblem` reports `mixed-dimensions`.
+- `Cql2Error` code `unsupported`: `evaluate` and `toSql` refuse a spatial filter, naming the class.
+- Types for geometries, `BboxLiteral`, `SpatialLiteral`, `SpatialOperator`, `SpatialPredicate`.
+
+### Changed
+
+- The three spatial URIs moved from `OTHER_CONFORMANCE` to `CONFORMANCE`.
+- A geometry literal in a comparison is now `wrong-arguments` (CQL2 comparisons don't take geometries).
+- A geometry's own GeoJSON `bbox` member is refused: CQL2's JSON Schema refuses it.
+
+## [0.5.0] - 2026-10-31
 
 Accent-insensitive Comparison: `ACCENTI`, so `São Paulo` matches `Sao Paulo`, in every engine.
 
@@ -131,7 +157,8 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
-[0.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.4.0...HEAD
+[0.6.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.1.0...v0.2.0

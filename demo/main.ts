@@ -19,9 +19,9 @@ const CLASS_NAMES: Record<string, string> = {
   [CONFORMANCE.advancedComparison]: "Advanced Comparison Operators",
   [CONFORMANCE.caseInsensitive]: "Case-insensitive Comparison",
   [CONFORMANCE.accentInsensitive]: "Accent-insensitive Comparison",
-  [OTHER_CONFORMANCE.basicSpatial]: "Basic Spatial Functions",
-  [OTHER_CONFORMANCE.basicSpatialPlus]: "Basic Spatial Functions with additional Spatial Literals",
-  [OTHER_CONFORMANCE.spatial]: "Spatial Functions",
+  [CONFORMANCE.basicSpatial]: "Basic Spatial Functions",
+  [CONFORMANCE.basicSpatialPlus]: "Basic Spatial Functions with additional Spatial Literals",
+  [CONFORMANCE.spatial]: "Spatial Functions",
   [OTHER_CONFORMANCE.temporal]: "Temporal Functions",
   [OTHER_CONFORMANCE.arrays]: "Array Functions",
   [OTHER_CONFORMANCE.propertyProperty]: "Property-Property Comparisons",
@@ -284,7 +284,16 @@ function run(): void {
     renderLocal(undefined);
     return;
   }
-  const results = FEATURES.map(toEvaluator(alone.filter));
+  let evaluator: ReturnType<typeof toEvaluator>;
+  try {
+    evaluator = toEvaluator(alone.filter);
+  } catch (error) {
+    // A spatial filter: valid, and written as CQL2-text to send to a server, but evaluate has no spatial engine yet.
+    summaryOut.textContent = (error as Error).message;
+    renderLocal(undefined);
+    return;
+  }
+  const results = FEATURES.map(evaluator);
   const count = (t: Truth) => results.filter((r) => r === t).length;
   summaryOut.textContent =
     `${count(true)} selected (TRUE) · ${count(false)} FALSE · ${count(null)} NULL: unknown, so neither the filter ` +

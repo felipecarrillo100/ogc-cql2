@@ -189,6 +189,15 @@ describe("the SQL it builds", () => {
     );
   });
 
+  it("refuses a spatial filter with unsupported: no spatial SQL yet", () => {
+    const filter = { op: "s_within", args: [p("s"), { type: "Point", coordinates: [0, 0] }] };
+    for (const dialect of ["sqlite", "postgres", "duckdb"] as const) {
+      expect(() => toSql(filter as unknown as Cql2Filter, { dialect, columns: COLUMNS })).toThrow(
+        expect.objectContaining({ code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }),
+      );
+    }
+  });
+
   it("refuses a property that isn't a column, and an invalid filter", () => {
     expect(() => sql({ op: "=", args: [p("nope"), 1] })).toThrow(
       expect.objectContaining({ name: "Cql2Error", code: "unknown-property", path: "/args/0", details: { property: "nope" } }),

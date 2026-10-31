@@ -124,5 +124,72 @@ export interface Not {
   readonly args: readonly [Cql2Filter];
 }
 
+// --- Spatial (the classes Basic Spatial Functions, … with additional Spatial Literals, and Spatial Functions) -------
+
+/** A position: longitude, latitude (CRS84) and optionally a height. */
+export type Position = readonly [number, number] | readonly [number, number, number];
+
+/**
+ * GeoJSON geometries (RFC 7946), as CQL2-JSON writes geometry literals. Without GeoJSON's own `bbox` member: CQL2's
+ * schema would read such an object as a bbox literal too.
+ */
+export interface PointGeometry {
+  readonly type: "Point";
+  readonly coordinates: Position;
+}
+export interface LineStringGeometry {
+  readonly type: "LineString";
+  readonly coordinates: readonly Position[];
+}
+export interface PolygonGeometry {
+  readonly type: "Polygon";
+  /** The outer ring, then the holes; each ring closed (its last position equals its first). */
+  readonly coordinates: readonly (readonly Position[])[];
+}
+export interface MultiPointGeometry {
+  readonly type: "MultiPoint";
+  readonly coordinates: readonly Position[];
+}
+export interface MultiLineStringGeometry {
+  readonly type: "MultiLineString";
+  readonly coordinates: readonly (readonly Position[])[];
+}
+export interface MultiPolygonGeometry {
+  readonly type: "MultiPolygon";
+  readonly coordinates: readonly (readonly (readonly Position[])[])[];
+}
+/** Two or more geometries, none of them a collection. */
+export interface GeometryCollectionGeometry {
+  readonly type: "GeometryCollection";
+  readonly geometries: readonly Exclude<Geometry, GeometryCollectionGeometry>[];
+}
+export type Geometry =
+  | PointGeometry
+  | LineStringGeometry
+  | PolygonGeometry
+  | MultiPointGeometry
+  | MultiLineStringGeometry
+  | MultiPolygonGeometry
+  | GeometryCollectionGeometry;
+
+/**
+ * `{ "bbox": [west, south, east, north] }`, or with heights `[west, south, min, east, north, max]`. West greater than
+ * east is a box across the antimeridian.
+ */
+export interface BboxLiteral {
+  readonly bbox: readonly [number, number, number, number] | readonly [number, number, number, number, number, number];
+}
+
+export type SpatialLiteral = Geometry | BboxLiteral;
+
+export type SpatialOperator =
+  | "s_intersects" | "s_equals" | "s_disjoint" | "s_touches" | "s_within" | "s_overlaps" | "s_crosses" | "s_contains";
+
+/** `S_INTERSECTS(property, literal)` and the other spatial relations: a geometry property, a geometry literal. */
+export interface SpatialPredicate {
+  readonly op: SpatialOperator;
+  readonly args: readonly [PropertyRef, SpatialLiteral];
+}
+
 /** A CQL2-JSON filter in the profile. `true` and `false` are filters too: all features, or none. */
-export type Cql2Filter = boolean | Comparison | Like | Between | In | IsNull | AndOr | Not;
+export type Cql2Filter = boolean | Comparison | Like | Between | In | IsNull | SpatialPredicate | AndOr | Not;

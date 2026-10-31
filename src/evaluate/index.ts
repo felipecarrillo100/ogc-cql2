@@ -27,7 +27,8 @@
  */
 import { unwrap, type Fold } from "../core/folds.js";
 import type { Cql2Filter, FoldedString, ScalarLiteral } from "../core/types.js";
-import { assertValid } from "../validate/index.js";
+import { refuseUnsupported } from "../core/unsupported.js";
+import { assertValid, requiredConformance } from "../validate/index.js";
 import { compareCodePoints, dayOf, foldKey, instantOf, likeRegExp } from "./strings.js";
 
 /** TRUE, FALSE, or NULL (unknown). */
@@ -138,6 +139,15 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>): (feature: F) => Truth {
         return v >= low && v <= high;
       };
     }
+    case "s_intersects":
+    case "s_equals":
+    case "s_disjoint":
+    case "s_touches":
+    case "s_within":
+    case "s_overlaps":
+    case "s_crosses":
+    case "s_contains":
+      throw new Error("unreachable: refused before compiling"); // refuseUnsupported
     case "in": {
       const [subject, list] = filter.args;
       const { inner, folds } = unwrap(subject);
@@ -175,9 +185,12 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>): (feature: F) => Truth {
  * The filter compiled once, to the three-valued result for each feature: `true`, `false` or `null` (unknown).
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
+ * @throws Cql2Error `unsupported` for a spatial filter: `evaluate` has no spatial engine yet.
  */
 export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => Truth {
-  return compile(assertValid(filter), options.getProperty ?? (defaultGetProperty as Getter<F>));
+  const valid = assertValid(filter);
+  refuseUnsupported(requiredConformance(valid), "ogc-cql2/evaluate");
+  return compile(valid, options.getProperty ?? (defaultGetProperty as Getter<F>));
 }
 
 /**
@@ -185,6 +198,7 @@ export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOp
  * NULL alike.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
+ * @throws Cql2Error `unsupported` for a spatial filter: `evaluate` has no spatial engine yet.
  */
 export function toPredicate<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => boolean {
   const evaluator = toEvaluator(filter, options);
@@ -196,6 +210,7 @@ export function toPredicate<F = unknown>(filter: Cql2Filter, options: EvaluateOp
  * {@link toPredicate} or {@link toEvaluator}.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
+ * @throws Cql2Error `unsupported` for a spatial filter: `evaluate` has no spatial engine yet.
  */
 export function evaluate<F = unknown>(filter: Cql2Filter, feature: F, options: EvaluateOptions<F> = {}): Truth {
   return toEvaluator(filter, options)(feature);

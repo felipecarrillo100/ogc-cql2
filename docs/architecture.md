@@ -24,7 +24,9 @@ to convert from or to. That means:
 ## The profile
 
 Four conformance classes, implemented completely: Basic CQL2, Advanced Comparison Operators, Case-insensitive
-Comparison and (since 0.5.0) Accent-insensitive Comparison. `CASEI` and `ACCENTI` may each wrap the other once, as the
+Comparison and (since 0.5.0) Accent-insensitive Comparison. Since 0.6.0 the three spatial classes too (Basic Spatial
+Functions, Basic plus, Spatial Functions) in `validate` and `text`; `evaluate` and `sql` refuse them (`unsupported`)
+until their engines arrive, see [spatial-research.md](spatial-research.md). `CASEI` and `ACCENTI` may each wrap the other once, as the
 grammar allows (`CASEI(ACCENTI(name))`). Within them, the profile accepts the form every server must support: the standard lets a server accept
 only a property on the left and a literal on the right (`/per/basic-cql2/cql2filter`,
 `/per/advanced-comparison-operators/*`). So:
@@ -72,6 +74,11 @@ drops the rest.
   test's typed table: 2,950 of 4,548 generated single comparisons are refused; 2,343 of them could never select a row
   (an empty answer without a word, before), and the other 607 matched only through a cast between strings and dates
   (GeoJSON has no date type, so a date is served as text). A test checks that nothing else is ever refused.
+- **Spatial literals** (GeoJSON geometries, `{ "bbox": … }`) are checked beyond the schema: CRS84 ranges
+  (the standard's conformance test requires `POINT(90 180)` to fail), closed rings, a box's south below its north
+  (west greater than east is a box across the antimeridian), 2 or 3 numbers per position. A geometry's own GeoJSON
+  `bbox` member is refused, as the schema refuses it (`oneOf` geometry or bbox literal). The class named follows the
+  standard: S_INTERSECTS with a point or a box is Basic, with another geometry Basic plus, another relation Full.
 - **Every problem** is reported, each with a code, a JSON Pointer and a message.
 - **The official schema is used in the tests:** every filter the tests treat as valid must pass it, and every
   structurally broken one must fail it.
@@ -339,8 +346,9 @@ checks that they agree.
 | 0.3.0 | `validate` with a collection's queryables: `unknown-property` and `type-mismatch` (`/per/basic-cql2/type-casts`); the deliberate deviations documented |
 | 0.4.0 | `toText` checked against the standard's text examples (with cql2-rs); the right class for spatial literals |
 | 0.5.0 | **Accent-insensitive Comparison** (`ACCENTI`), in every engine, combined with `CASEI`; see [accent-research.md](accent-research.md) |
+| 0.6.0 | **Spatial, phase A:** the three spatial classes in the types, `validate` and `text` (WKT per the grammar), so spatial filters can be built, checked and sent; `evaluate` and `sql` refuse them (`unsupported`) |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
-| next | **spatial**: Basic and Basic plus in every engine, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
+| next | **spatial engines**: Basic and Basic plus in every engine (`evaluate` first), Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
