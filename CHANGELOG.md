@@ -4,7 +4,28 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [0.3.0] - Unreleased
+## [0.4.0] - Unreleased
+
+Correctness checked against more sources: CQL2-text against the standard's own text examples, and the right
+conformance class for spatial literals.
+
+### Added
+
+- `OTHER_CONFORMANCE.basicSpatialPlus`, the class Basic Spatial Functions with additional Spatial Literals.
+
+### Fixed
+
+- `validate` named Basic Spatial Functions for `s_intersects` with a polygon, a line or another geometry that isn't a
+  point or a box; such a literal needs `basic-spatial-functions-plus`. Three of the standard's examples are affected.
+
+### Tests
+
+- `toText` against the standard's text examples: for all 47 in the profile, our text and the standard's are read back
+  with cql2-rs (`cql2-wasm`, a development dependency) and must give the standard's JSON.
+- NaN and ±Infinity in the SQLite and DuckDB differential tables: the engines agree (NaN above every number), so
+  nothing changed; recorded in `docs/architecture.md` with PostgreSQL's check.
+
+## [0.3.0] - 2026-10-31
 
 Type checks against a collection's queryables: a filter comparing a property with a literal of another type is
 refused with an error, instead of silently matching nothing, as CQL2 permits (`/per/basic-cql2/type-casts`).
@@ -90,7 +111,8 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
-[0.3.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.2.0...HEAD
+[0.4.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.1.0
 [0.0.1]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.0.1

@@ -21,6 +21,7 @@ export const CONFORMANCE: {
 export const OTHER_CONFORMANCE: {
   readonly accentInsensitive: string;
   readonly basicSpatial: string;
+  readonly basicSpatialPlus: string;
   readonly spatial: string;
   readonly temporal: string;
   readonly arrays: string;
@@ -30,6 +31,7 @@ export const OTHER_CONFORMANCE: {
 } = {
   accentInsensitive: `${BASE}accent-insensitive-comparison`,
   basicSpatial: `${BASE}basic-spatial-functions`,
+  basicSpatialPlus: `${BASE}basic-spatial-functions-plus`,
   spatial: `${BASE}spatial-functions`,
   temporal: `${BASE}temporal-functions`,
   arrays: `${BASE}array-functions`,

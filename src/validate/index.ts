@@ -195,7 +195,11 @@ class Checker {
     if (op === "isNull") return this.isNull(args, path);
 
     if (SPATIAL.has(op)) {
-      const conformance = op === "s_intersects" ? OTHER_CONFORMANCE.basicSpatial : OTHER_CONFORMANCE.spatial;
+      // Basic Spatial Functions has S_INTERSECTS with points and boxes only; any other geometry literal needs the
+      // class "with additional Spatial Literals" (`basic-spatial-functions-plus`).
+      const otherGeometry = args.some((a) => isObject(a) && typeof a.type === "string" && a.type !== "Point");
+      const conformance = op !== "s_intersects" ? OTHER_CONFORMANCE.spatial
+        : otherGeometry ? OTHER_CONFORMANCE.basicSpatialPlus : OTHER_CONFORMANCE.basicSpatial;
       return this.report("outside-profile", path, `"${op}" is a spatial function, not in the profile yet.`, conformance);
     }
     if (TEMPORAL.has(op)) {

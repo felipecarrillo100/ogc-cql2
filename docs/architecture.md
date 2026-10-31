@@ -217,6 +217,7 @@ Where the standard leaves a choice, or recommends without requiring, the package
 |---|---|---|---|
 | Unicode normalization form | strings SHOULD be normalized before comparing, and NFD is the recommended form (Recommendation 1, `/rec/core/string-normalization` B) | normalizes, to **NFC** | the same answers for `=`, `<>`, `IN` and CASEI (canonically equivalent forms); NFD would reorder 0.8% of string pairs in the tests' data (`<`, `>`…) and break LIKE's `_` on accented letters (`'caf_'` would no longer match `café`, as `é` is two code points in NFD); NFC is the W3C's form for string matching on the web and how data is stored; DuckDB has no NFD |
 | Instants' precision | left to the server ("how this is implemented is a decision of the server") | milliseconds, a finer fraction truncated | JavaScript's precision; every engine (SQLite, PostgreSQL, DuckDB) is made to truncate the same way, so the results agree |
+| Numbers that aren't finite (NaN, ±Infinity) in the data | no literal for them (`validate` refuses one as `invalid-number`); nothing about values | ordered as SQL orders them, the same in every engine: NaN above every number, ±Infinity at the ends | measured 2026-10-31 with NaN and ±Infinity rows in the SQLite and DuckDB tests and a check in PostgreSQL: 0 of 27,487 filters differ, so nothing is converted. A server that sends them as JSON sends `null` (JSON has no NaN), which a client re-filtering what it received reads as NULL |
 | A type mismatch in the data | — | NULL | a value of an unexpected type in the data (which GeoPackage permits) is a problem of the data, not of the filter; a mismatch in the filter itself is refused by `validate` with the queryables |
 
 ## How it is used
@@ -267,7 +268,11 @@ filter selects). The server never knows which store it talks to.
 - **The standard's own examples:** the 109 JSON examples of tag `cql2-1.0.0`, with the official JSON Schema, in
   `test/fixtures/ogc/` with OGC's licence notice (tests only, not published):
   - the schema accepts every example;
-  - the ones in the profile validate and convert to CQL2-text;
+  - the ones in the profile validate and convert to CQL2-text, and **that text means what the standard's own text
+    example means**: both are read back with cql2-rs (`cql2-wasm`, a development dependency) and must give the
+    standard's JSON, for all 47. The texts differ only in presentation (spaces, keyword case, parentheses,
+    `NOT (x IN …)` for `x NOT IN …`). cql2-rs 0.5.6 misreads one standard text (`example06a`: a BETWEEN followed by
+    AND), so that one is checked through our text only;
   - every other one is refused only as `outside-profile` or `unknown-operator`, naming a conformance class.
 - **The grammar:** identifier, keyword, escaping and number cases taken from the BNF.
 - **Truth tables:** every operator against a matching value, a non-matching value, a null and a missing property;
@@ -293,9 +298,7 @@ filter selects). The server never knows which store it talks to.
     (cql2-rs casts), CASEI (cql2-rs lowercases instead of the required full Unicode case folding: `Straße` vs
     `STRASSE`), `IN` with dates or timestamps (a bug in cql2-rs: its `=` agrees), normalization (cql2-rs has none),
     and precision below a millisecond. No bug of `ogc-cql2` was found. Both accept the same 47 of the standard's 109
-    examples (those in the profile);
-  - real OGC API Features servers, comparing the features a server returns with those `ogc-cql2/evaluate` selects
-    from the same data.
+    examples (those in the profile).
 
 ## Build and tooling
 
@@ -322,6 +325,7 @@ checks that they agree.
 | 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, `ogc-cql2/sql` (SQLite / GeoPackage, PostgreSQL / PostGIS); the playground and `demo-server` |
 | 0.2.0 | The dialect interface in `src/sql` (SQLite and PostgreSQL moved onto it unchanged), and the **`duckdb`** dialect, the same SQL in Node and in the browser, tested in both; see [duckdb-case.md](duckdb-case.md) |
 | 0.3.0 | `validate` with a collection's queryables: `unknown-property` and `type-mismatch` (`/per/basic-cql2/type-casts`); the deliberate deviations documented |
+| 0.4.0 | `toText` checked against the standard's text examples (with cql2-rs); the right class for spatial literals |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first, see [spatial-research.md](spatial-research.md); DuckDB's spatial extension), temporal, arrays; an index-friendly SQL mode |
