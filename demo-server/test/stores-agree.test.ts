@@ -99,7 +99,7 @@ async function differences(a: Store, b: Store, label: string): Promise<string[]>
   return out;
 }
 
-// --- Spatial filters: GeoJSON (evaluate) and PostgreSQL (PostGIS); GeoPackage's spatial SQL comes later ------------
+// --- Spatial filters: GeoJSON (evaluate), GeoPackage (cql2_intersects) and PostgreSQL (PostGIS) -------------------
 
 /** Every position of the kitchen sink's geometries. */
 const positions: number[][] = [];
@@ -163,6 +163,10 @@ describe("the kitchen sink, three stores", () => {
     const sets = new Set<string>();
     for (const filter of FILTERS) sets.add(JSON.stringify((await fromFile.query(filter, PAGE)).features.map((f) => f.id)));
     assert.ok(sets.size > 150, `${sets.size} different results`);
+  });
+
+  it(`spatial filters: GeoJSON and GeoPackage give the same features, also exactly on vertices`, async () => {
+    assert.equal((await spatialDifferences(fromGpkg, [...SPATIAL_MARGIN, ...SPATIAL_EXACT], "geopackage")).slice(0, 10).join("\n"), "");
   });
 
   it(`spatial filters: GeoJSON and PostgreSQL (4326) give the same features, also exactly on vertices`, async (t) => {

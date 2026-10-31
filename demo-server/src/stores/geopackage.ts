@@ -11,13 +11,14 @@
  *   `false` / `true`;
  * - a feature table's geometry column is registered in `gpkg_geometry_columns` with its `srs_id` (Req 22); values are
  *   GeoPackageBinary, decoded to GeoJSON. GeoJSON is WGS 84 longitude, latitude, so a table in another SRS is served
- *   without geometry, and that's reported.
+ *   without geometry, and that's reported. Spatial filters run in the database, through `cql2_intersects`, with the
+ *   R-tree index (the `gpkg_rtree_index` extension) when the file registers one.
  *
  * The file is opened read-only.
  */
 import { DatabaseSync } from "node:sqlite";
 import type { Cql2Filter } from "ogc-cql2";
-import { sqliteFunctions, toSql } from "ogc-cql2/sql";
+import { sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeGeoPackageBinary, type Geometry } from "../geopackage/binary.ts";
 import type { CollectionDescription, Feature, Queryable, Store } from "./types.ts";
 
@@ -110,6 +111,16 @@ export function openGeoPackage(source: GeoPackageSource): { stores: { id: string
   return { stores, warnings };
 }
 
+/** Whether `gpkg_extensions` registers GeoPackage's R-tree index for the column (a file may have no such table). */
+function hasRtree(db: DatabaseSync, table: string, column: string): boolean {
+  try {
+    const sql = "SELECT 1 FROM gpkg_extensions WHERE extension_name = 'gpkg_rtree_index' AND table_name = ? AND column_name = ?";
+    return db.prepare(sql).all(table, column).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function tableStore(db: DatabaseSync, id: string, contents: Row): Store {
   const table = String(contents.table_name);
   const all = (sql: string, ...params: unknown[]) => db.prepare(sql).all(...(params as never[])) as Row[];
@@ -151,6 +162,12 @@ function tableStore(db: DatabaseSync, id: string, contents: Row): Store {
   }
 
   const propertyNames = Object.keys(queryables);
+  // Spatial filters name the geometry "geometry", as the server serves it; a table in another SRS has none to compare.
+  // The R-tree, when the extension is registered for the column, finds the candidates first.
+  const rtree = !isView && geometryColumn !== undefined && hasRtree(db, table, geometryColumn) ? `rtree_${table}_${geometryColumn}` : undefined;
+  const geometryFilter: SqlColumn = { format: "geometry-any", column: geometryColumn!, ...(rtree ? { rtree } : {}) };
+  const filterColumns: Record<string, SqlColumn> =
+    withGeometry && !Object.hasOwn(queryables, "geometry") ? { ...queryables, geometry: geometryFilter } : queryables;
   const select = [idColumn.name, ...(withGeometry ? [geometryColumn!] : []), ...propertyNames].map(quote).join(", ");
   const from = quote(table);
   let decodeProblems = 0;
@@ -188,8 +205,9 @@ function tableStore(db: DatabaseSync, id: string, contents: Row): Store {
   return {
     describe: description,
     queryables: () => queryables,
+    hasGeometry: () => withGeometry,
     async query(filter: Cql2Filter, { limit, offset }) {
-      const { where, params } = toSql(filter, { dialect: "sqlite", columns: queryables });
+      const { where, params } = toSql(filter, { dialect: "sqlite", columns: filterColumns });
       const rows = all(`SELECT ${select} FROM ${from} WHERE ${where} ORDER BY ${quote(idColumn.name)} LIMIT ? OFFSET ?`, ...params, limit, offset);
       const numberMatched = Number(all(`SELECT COUNT(*) AS n FROM ${from} WHERE ${where}`, ...params)[0]!.n);
       return { features: rows.map(toFeature), numberMatched };

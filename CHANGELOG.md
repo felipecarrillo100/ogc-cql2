@@ -4,6 +4,46 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.9.0] - 2026-10-31
+
+Spatial filters, phase D: `s_intersects` in the `sqlite` (GeoPackage) and `duckdb` dialects, exact in both.
+
+### Added
+
+- `toSql` with `dialect: "sqlite"`: `s_intersects` (Basic Spatial Functions and Basic plus) on a geometry column
+  (`format: "geometry-…"`) holding GeoPackage blobs or WKB, through `sqliteFunctions.cql2_intersects`, which runs
+  `evaluate`'s own engine; the blob's header envelope rejects most rows before decoding.
+- `SqlColumn.rtree`: GeoPackage's R-tree table for the column, used to find the candidates first, for a filter that
+  isn't negated (negate the filter, not the SQL).
+- `toSql` with `dialect: "duckdb"`: `s_intersects` with the spatial extension, as `ST_Intersects(geom, literal)`, the
+  form DuckDB documents, on a `GEOMETRY` column or a `BLOB` of WKB (`TRY(ST_GeomFromWKB(…))`); exact, measured against
+  `evaluate`; it uses an R-tree index on DuckDB 1.4 (DuckDB-WASM) and 2.0, also across the antimeridian.
+- `SqlColumn.covering`: GeoParquet's bbox covering, as the file's `geo` metadata gives it. The `duckdb` dialect then
+  compares its four fields first, which skips Parquet row groups and most rows (DuckDB doesn't use a covering by
+  itself), for a filter that isn't negated. Not for a table with an R-tree index: DuckDB 2.0 fails on that query.
+
+### Changed
+
+- The `sqlite` and `duckdb` dialects no longer refuse the two basic spatial classes; Spatial Functions stay
+  `unsupported` in every dialect.
+- `duckdb`: number parameters are now text (`"0.5"`, cast to DOUBLE in the SQL); the SQL text is unchanged.
+
+### Fixed
+
+- `duckdb` in DuckDB-WASM (since 0.2.0): about one number in ten that needs 17 significant digits was bound one unit
+  off (`0.9653517007827759` as `0.965351700782776`), so a comparison with it could select the wrong rows. Numbers are
+  now bound as text, which DuckDB reads exactly.
+- `evaluate`: an empty Point written as `{"type": "Point", "coordinates": []}` is empty (S_INTERSECTS false), not NULL.
+
+### Tests
+
+- `test/sql-spatial.test.ts`: 132 spatial filters in SQLite (GeoPackage blobs with and without the envelope, WKB,
+  extended WKB, GeoPackage's R-tree) against `evaluate`; 17-digit numbers in the DuckDB differential table; the 5,705
+  literals through demo-server's GeoPackage store; the browser check re-run, with and without a covering.
+- `test/duckdb-spatial.ts`, run on DuckDB 2.0 and on DuckDB 1.4.3, the engine DuckDB-WASM 1.32.0 ships (a new
+  devDependency, `@duckdb/node-api-1.4`): the same filters on `GEOMETRY` and `BLOB` columns, without and with a
+  covering; the R-tree index's use; and canaries that fail when a DuckDB release changes what the dialect relies on.
+
 ## [0.8.0] - 2026-10-31
 
 Spatial filters, phase C: `s_intersects` in the `postgres` dialect (PostGIS), exact and using the spatial index.

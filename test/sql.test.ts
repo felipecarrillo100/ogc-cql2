@@ -189,7 +189,7 @@ describe("the SQL it builds", () => {
     );
   });
 
-  it("refuses a spatial filter with unsupported: no spatial SQL yet", () => {
+  it("refuses the other spatial relations with unsupported (S_INTERSECTS: test/sql-spatial.test.ts)", () => {
     const filter = { op: "s_within", args: [p("s"), { type: "Point", coordinates: [0, 0] }] };
     for (const dialect of ["sqlite", "postgres", "duckdb"] as const) {
       expect(() => toSql(filter as unknown as Cql2Filter, { dialect, columns: COLUMNS })).toThrow(

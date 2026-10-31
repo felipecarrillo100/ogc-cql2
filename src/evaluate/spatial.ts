@@ -85,6 +85,7 @@ function add(g: unknown, parts: Parts, depth = 0): boolean {
   const { type, coordinates: c } = g as { type?: unknown; coordinates?: unknown };
   switch (type) {
     case "Point": {
+      if (Array.isArray(c) && c.length === 0) return true; // an empty Point, as GDAL writes it
       const p = xy(c);
       if (!p) return false;
       parts.points.push(p);

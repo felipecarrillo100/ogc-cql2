@@ -91,14 +91,15 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   // A folded literal compares text: the column's text view, or its folded view under CASEI / ACCENTI (property).
   const viewKind = (kind: Kind): Kind => (kind === "fold" ? "text" : kind);
 
-  const write = (f: Cql2Filter, path: string): string => {
+  /** `positive`: under an even number of NOTs, where a NULL and FALSE select the same rows (see Dialect.intersects). */
+  const write = (f: Cql2Filter, path: string, positive = true): string => {
     if (typeof f === "boolean") return f ? dialect.true : dialect.false;
     switch (f.op) {
       case "and":
       case "or":
-        return f.args.map((a, i) => `(${write(a, `${path}/args/${i}`)})`).join(f.op === "and" ? " AND " : " OR ");
+        return f.args.map((a, i) => `(${write(a, `${path}/args/${i}`, positive)})`).join(f.op === "and" ? " AND " : " OR ");
       case "not":
-        return `NOT (${write(f.args[0], `${path}/args/0`)})`;
+        return `NOT (${write(f.args[0], `${path}/args/0`, !positive)})`;
       case "isNull":
         return `${columnOf(f.args[0], `${path}/args/0`).sql} IS NULL`;
       case "like": {
@@ -117,7 +118,7 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       case "s_intersects": {
         const [ref, literal] = f.args;
         const { column, sql } = columnOf(ref, `${path}/args/0`);
-        return dialect.intersects!(sql, column, literal, param) ?? dialect.never;
+        return dialect.intersects!(sql, column, literal, param, positive) ?? dialect.never;
       }
       case "s_equals":
       case "s_disjoint":

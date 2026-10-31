@@ -8,11 +8,17 @@
  *   comparison reads a **typed view** of the column: a value of another type is NULL there, exactly as `evaluate`
  *   gives NULL for a type mismatch (values are never converted);
  * - text, CASEI, ACCENTI, LIKE, dates and instants go through registered functions ({@link sqliteFunctions}) that run
- *   `evaluate`'s own code. SQLite's own LIKE ignores ASCII case, and its `lower()` folds ASCII only.
+ *   `evaluate`'s own code. SQLite's own LIKE ignores ASCII case, and its `lower()` folds ASCII only;
+ * - S_INTERSECTS on a geometry column (its queryable's `format` is `geometry-…`), whose values are GeoPackage blobs
+ *   (or plain WKB), goes through `cql2_intersects`, which runs `evaluate`'s own engine: SQLite has no spatial
+ *   functions of its own.
  */
 import type { Fold } from "../../core/folds.js";
 import { accentiKey, caseiKey, dayOf, instantOf, likeRegExp, plainKey } from "../../evaluate/strings.js";
-import type { Dialect, Kind, SqlColumn, View } from "../types.js";
+import { literalParts } from "../../evaluate/spatial.js";
+import { intersectsStored } from "../intersects.js";
+import type { SpatialLiteral } from "../../core/types.js";
+import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 const likeCache = new Map<string, RegExp>();
 
@@ -39,6 +45,7 @@ export const sqliteFunctions: {
   readonly cql2_day: (value: unknown) => string | null;
   readonly cql2_instant: (value: unknown) => number | null;
   readonly cql2_like: (value: unknown, pattern: unknown) => number | null;
+  readonly cql2_intersects: (geometry: unknown, literal: unknown) => number | null;
 } = {
   /** A text value, NFC-normalized. */
   cql2_text: (value) => (typeof value === "string" ? plainKey(value) : null),
@@ -55,6 +62,11 @@ export const sqliteFunctions: {
     if (typeof value !== "string" || typeof pattern !== "string") return null;
     return cachedLike(pattern).test(value) ? 1 : 0;
   },
+  /**
+   * 1 or 0: does a stored geometry (a GeoPackage blob, or WKB) intersect the literal (its JSON)? NULL for a NULL or a
+   * value that isn't a geometry. `evaluate`'s own engine decides.
+   */
+  cql2_intersects: intersectsStored,
 };
 
 /**
@@ -86,6 +98,35 @@ function sqliteView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
   }
 }
 
+/**
+ * S_INTERSECTS(column, literal): `evaluate`'s engine through `cql2_intersects`, the literal as JSON text (one parameter,
+ * read once per query). A GeoPackage blob's header envelope rejects most rows before the WKB is decoded. `undefined`
+ * for a column that isn't a geometry.
+ *
+ * With the column's R-tree (`rtree`), and only for a leaf that isn't negated (`positive`), the candidates come first
+ * from the R-tree: `rowid IN (SELECT id FROM rtree WHERE <the boxes overlap>) AND …`. GeoPackage's R-tree leaves out
+ * NULL and empty geometries, so this gives FALSE where `evaluate` gives NULL, which selects the same rows only there;
+ * under a NOT the function alone decides. The R-tree's 32-bit floats are rounded outward, so it loses no row.
+ */
+function sqliteIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
+  if (typeof column.format !== "string" || !column.format.startsWith("geometry-")) return undefined;
+  // Placeholders are positional (`?`): each parameter is added where it stands in the SQL.
+  const exact = () => `cql2_intersects(${sql}, ${param(JSON.stringify(literal))}) = 1`;
+  if (column.rtree === undefined || !positive) return exact();
+  let boxes: number[][];
+  if ("bbox" in literal && !("type" in literal)) {
+    const b = literal.bbox;
+    const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
+    boxes = west > east ? [[west, south, 180, north], [-180, south, east, north]] : [[west, south, east, north]]; // across the antimeridian: two
+  } else {
+    const box = literalParts(literal).box;
+    if (!box) return exact(); // an empty literal: nothing to look up
+    boxes = [box];
+  }
+  const overlaps = boxes.map(([w, s, e, n]) => `(minx <= ${param(e!)} AND maxx >= ${param(w!)} AND miny <= ${param(n!)} AND maxy >= ${param(s!)})`);
+  return `(rowid IN (SELECT id FROM ${quote(column.rtree)} WHERE ${overlaps.join(" OR ")}) AND ${exact()})`;
+}
+
 export const sqlite: Dialect = {
   placeholder: () => "?",
   true: "1",
@@ -95,4 +136,5 @@ export const sqlite: Dialect = {
   instant: (ms) => ms,
   view: sqliteView,
   like: (v, pattern, param) => `cql2_like(${v.sql}, ${param(pattern)})`,
+  intersects: sqliteIntersects,
 };

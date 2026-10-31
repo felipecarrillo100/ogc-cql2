@@ -18,17 +18,19 @@ import type { Cql2Filter } from "ogc-cql2";
 import { CONFORMANCE } from "ogc-cql2";
 import { validate } from "ogc-cql2/validate";
 
-/** The classes every store evaluates. */
-const EVALUATED = [CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive];
+/** The classes every store evaluates: GeoJSON with ogc-cql2/evaluate, GeoPackage and PostgreSQL in the database. */
+const EVALUATED = [
+  CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive,
+  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus,
+];
 
-/** And by source: GeoJSON (ogc-cql2/evaluate) and PostgreSQL (PostGIS) also S_INTERSECTS; GeoPackage's comes later. */
-const evaluatedBy = (source: string): string[] =>
-  source === "geojson" || source === "postgres" ? [...EVALUATED, CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus] : EVALUATED;
-
-/** A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that name). */
+/**
+ * A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that
+ * name); a collection without geometry has none to list, so a filter on it is refused as an unknown property.
+ */
 const queryablesOf = (store: Store): Record<string, object> => {
   const own = store.queryables();
-  return Object.hasOwn(own, "geometry") ? { ...own } : { ...own, geometry: { format: "geometry-any" } };
+  return Object.hasOwn(own, "geometry") || !store.hasGeometry() ? { ...own } : { ...own, geometry: { format: "geometry-any" } };
 };
 import { readConfig } from "./config.ts";
 import { sendProblem } from "./problems.ts";
@@ -97,7 +99,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 
     // The collection's queryables: an unknown property, or a literal of another type than the property's, is refused
     // here (CQL2 lets a server answer a type mismatch with an error), instead of silently matching nothing.
-    const result = validate(body.filter, { queryables: queryablesOf(store), conformance: evaluatedBy(store.describe().source) });
+    const result = validate(body.filter, { queryables: queryablesOf(store), conformance: EVALUATED });
     if (!result.valid) {
       return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile, or doesn't fit this collection's queryables.", result.problems);
     }

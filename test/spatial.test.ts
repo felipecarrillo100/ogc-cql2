@@ -116,6 +116,7 @@ describe("S_INTERSECTS: boxes, collections, heights, and what isn't a geometry",
     expect(meets({ type: "Point", coordinates: ["a", 1] }, { bbox: [0, 0, 1, 1] })).toBe(null);
     expect(meets("POINT(0 0)", { bbox: [0, 0, 1, 1] })).toBe(null);
     expect(meets({ type: "MultiPolygon", coordinates: [] }, { bbox: [0, 0, 1, 1] })).toBe(false); // empty: nothing to meet
+    expect(meets({ type: "Point", coordinates: [] }, { bbox: [0, 0, 1, 1] })).toBe(false); // an empty Point, as GDAL writes it
   });
 
   it("geometryProperty and getProperty: where the geometry is read", () => {

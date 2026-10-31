@@ -26,6 +26,21 @@ export interface SqlColumn extends Queryable {
    * The column is then transformed to 4326, so the comparison is planar in CRS84, as CQL2's is.
    */
   readonly srid?: number;
+  /**
+   * `sqlite`: the R-tree of a geometry column (GeoPackage's `rtree_<table>_<column>`), used to find the candidate rows
+   * by their `rowid` before the exact test. Only for a filter that isn't negated: negate the filter (`{ op: "not" }`),
+   * never the SQL it gives (`NOT (…)`).
+   */
+  readonly rtree?: string;
+  /**
+   * `duckdb`: GeoParquet's bbox covering of a geometry column (GeoParquet 1.1, "bbox covering encoding"), as the
+   * file's `geo` metadata gives it (`geo.columns.<column>.covering`): each of `xmin`, `ymin`, `xmax`, `ymax` the
+   * path of a field, `[column, field]`, e.g. `["bbox", "xmin"]`. The filter then compares those fields first, which
+   * skips Parquet row groups and most rows; DuckDB doesn't use a covering by itself. Only for a filter that isn't
+   * negated: negate the filter (`{ op: "not" }`), never the SQL it gives (`NOT (…)`). Not for a table with an R-tree
+   * index on the geometry, which is faster on its own: DuckDB 2.0 then fails with an internal error.
+   */
+  readonly covering?: { readonly bbox: { readonly [K in "xmin" | "ymin" | "xmax" | "ymax"]: readonly [string, string] } };
 }
 
 export interface SqlOptions {
@@ -89,8 +104,11 @@ export interface Dialect {
   /**
    * S_INTERSECTS(column, literal), exactly as `evaluate` decides it; `undefined` when the column holds no geometry
    * (no value can match). Absent: the dialect has no spatial SQL yet, and spatial filters are `unsupported`.
+   * `positive`: the leaf is under an even number of NOTs. There, giving FALSE where `evaluate` gives NULL selects the
+   * same rows (in three-valued logic, a condition TRUE with a NULL leaf is TRUE with a FALSE one, and NOT is the only
+   * operator that turns FALSE into TRUE), so a prefilter that leaves out rows without a geometry is exact.
    */
-  intersects?(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined;
+  intersects?(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined;
 }
 
 export const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;

@@ -141,8 +141,8 @@ describe("S_INTERSECTS in PostGIS", () => {
     queryable: { format: "geometry-any" },
     name: { type: "string", sqlType: "text" },
   };
-  const s = (property: string, literal: unknown, dialect: "postgres" | "sqlite" | "duckdb" = "postgres") =>
-    toSql({ op: "s_intersects", args: [p(property), literal] } as unknown as Cql2Filter, { dialect, columns: geo });
+  const s = (property: string, literal: unknown) =>
+    toSql({ op: "s_intersects", args: [p(property), literal] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo });
 
   it("the box test uses the index, GEOS decides exactly (ST_Intersects isn't exact on edges)", () => {
     expect(s("geometry", { type: "Point", coordinates: [7.02, 49.92] })).toEqual({
@@ -175,11 +175,8 @@ describe("S_INTERSECTS in PostGIS", () => {
     expect(s("name", { bbox: [0, 0, 1, 1] })).toEqual({ where: "NULL::boolean", params: [] });
   });
 
-  it("the other relations, and the other dialects, are still unsupported", () => {
+  it("the other relations are still unsupported", () => {
     expect(() => toSql({ op: "s_within", args: [p("geometry"), { bbox: [0, 0, 1, 1] }] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }))
       .toThrow(expect.objectContaining({ code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }));
-    for (const dialect of ["sqlite", "duckdb"] as const) {
-      expect(() => s("geometry", { bbox: [0, 0, 1, 1] }, dialect)).toThrow(expect.objectContaining({ code: "unsupported" }));
-    }
   });
 });

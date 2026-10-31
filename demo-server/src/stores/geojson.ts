@@ -143,6 +143,7 @@ export function createGeoJsonStore(collection: GeoJsonCollection, json: unknown,
   return {
     describe: () => description,
     queryables: () => queryables,
+    hasGeometry: () => true, // every GeoJSON feature has a geometry member, maybe null
     async query(filter, { limit, offset }) {
       const matched = features.filter(toPredicate(filter));
       return { features: matched.slice(offset, offset + limit), numberMatched: matched.length };

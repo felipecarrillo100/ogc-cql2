@@ -1,7 +1,7 @@
 # Research: CQL2's spatial operations
 
 **Status: research and decisions, 2026-10-31; phase A implemented in 0.6.0** (the types, `validate` and `text` for
-the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS), **phase C in 0.8.0** (PostGIS); SQLite and DuckDB follow. It records what CQL2 1.0.0 defines
+the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS), **phase C in 0.8.0** (PostGIS), **phase D in 0.9.0** (SQLite / GeoPackage, DuckDB). It records what CQL2 1.0.0 defines
 for geometries, what the candidate engines do (measured), and the design decided from it (at the end, "Engines,
 measured" and "Decisions"). Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
 grammar (`cql2.bnf`, tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3:
@@ -106,7 +106,7 @@ SpatiaLite 5.1.0 (GEOS 3.15.0), and DuckDB 2.0 with its spatial extension (`@duc
 | **PostGIS** | all eight (`ST_Intersects` … `ST_Crosses`, plus `ST_Relate`) | GiST, used automatically | a point on a boundary intersects (and touches) |
 | **SQLite / GeoPackage**, plain | none | the GeoPackage R-tree extension (`gpkg_rtree_index`: tables `rtree_<table>_<column>`); SQLite's R-tree module is built into `node:sqlite` | an R-tree gives *candidates* (bounding boxes), never the answer |
 | **SQLite + SpatiaLite** | all eight, on GEOS | the same R-tree | agrees with PostGIS on the US states for every box tried, **but only on `GeomFromGPB(geom)`**: on the raw GeoPackage blob, `ST_Intersects` returns −1 ("can't compute"), which SQL reads as true, so a filter would select everything. Compare with `= 1`. One kitchen-sink geometry still gives −1 (to investigate) |
-| **DuckDB** + spatial extension | all eight (no `ST_Relate`) | an R-tree index for tables (`CREATE INDEX … USING RTREE`); not seen in `EXPLAIN` in a first test | a point on a boundary intersects; the extension also loads in DuckDB-WASM (about 1.4 s). It writes GeoParquet 1.0 metadata (one bbox per file), not the per-row bbox column of GeoParquet 1.1 |
+| **DuckDB** + spatial extension | all eight (no `ST_Relate`) | an R-tree index for tables (`CREATE INDEX … USING RTREE`), shown in `EXPLAIN` as `RTREE_INDEX_SCAN` (1.4) or `Rtree Index Scan` (2.0); from 1.5, statistics per row group | a point on a boundary intersects; the extension also loads in DuckDB-WASM (about 1.4 s). It writes GeoParquet 1.0 metadata (one bbox per file), not the per-row bbox column of GeoParquet 1.1 |
 
 **Edges are planar, and that decides every engine.** CQL2 follows Simple Features, whose edges are straight lines in
 the coordinates: in CRS84, straight in longitude and latitude, as in PostGIS `geometry`, SpatiaLite and DuckDB.
@@ -202,3 +202,41 @@ DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
   3857 coordinates don't convert back exactly (5 becomes 4.999999999999998). Data kept in another CRS can't be exact
   on its original vertices.
 
+
+## As implemented: phase D (0.9.0)
+
+- **SQLite / GeoPackage:** SQLite has no spatial functions, so `sqliteFunctions.cql2_intersects(geometry, literal)`
+  runs `evaluate`'s own engine on the stored geometry: a GeoPackage blob (the `GP` header, then WKB) or plain WKB
+  (PostGIS's extended flags understood), read by `src/sql/wkb.ts`. The header's envelope rejects most rows before the
+  WKB is decoded (2–4 times faster on a million rows). GeoPackage's R-tree, given as the column's `rtree`, finds the
+  candidates first (a small box: 811 ms → 3 ms), but only for a leaf outside a NOT: the R-tree holds no NULL or empty
+  geometries, so it gives FALSE where `evaluate` gives NULL, which selects the same rows only there (three-valued
+  logic: a condition TRUE with a NULL leaf is TRUE with FALSE, and only NOT turns FALSE into TRUE).
+- **DuckDB:** the spatial extension's `ST_Intersects` is exact, unlike PostGIS's: 0 of the 5,705 literals differ from
+  `evaluate`, in `@duckdb/node-api` 2.0 (with and without an R-tree index) and in DuckDB-WASM 1.32.0. The dialect writes
+  it as DuckDB documents it, `ST_Intersects(g, L)` with a constant literal, as rustac and cql2-rs do: it uses an R-tree
+  index on both engines (1–12 ms for a small box or polygon on a million rows, in the browser too), and on DuckDB 2.0
+  the row groups' statistics. Across the antimeridian the literal is one `ST_Union` (an OR of two tests loses the index: 241 ms
+  against 5 ms). A `BLOB` of WKB is read with `TRY(ST_GeomFromWKB(c))`: plain `ST_GeomFromWKB` fails the whole query
+  on one bad value.
+- **GeoParquet's bbox covering** (1.1), given as `SqlColumn.covering` in the file's own metadata shape: outside a NOT,
+  its four fields are compared first, as Overture's documentation and Martin write it. DuckDB doesn't use a covering
+  by itself (Overture places, 730 MB over HTTP: 256 of 256 row groups read and 18.7 s without the comparisons, 11 and
+  1.9 s with them). Fastest form in every measurement, on both engines (5–16 ms in the browser on sorted data).
+- **Measured, and not chosen:** `ST_Intersects AND ST_Intersects_Extent`, 15 times faster than `ST_Intersects` alone
+  on DuckDB 2.0 without an index, is no faster on DuckDB 1.4.3, DuckDB-WASM's engine, and loses the R-tree index
+  there. No one else writes it. A canary watches the gap on DuckDB 2.0.
+- **No stand-in for the extension:** DuckDB-WASM hands a BLOB argument to a JavaScript function as UTF-8-decoded text
+  (each byte ≥ 0x80 becomes U+FFFD), so `evaluate`'s engine can't receive WKB there. Hex text works in both
+  runtimes, but costs 50% more in Node on a path already a hundred times slower than the extension, so it wasn't
+  chosen: DuckDB's spatial filters need the extension, which loads in DuckDB-WASM.
+- **Found on the way:** DuckDB-WASM 1.32.0 binds about one in ten JavaScript numbers that need 17 significant digits
+  one unit off, which broke 23 of the 5,705 literals in the browser (box corners exactly on vertices). The `duckdb`
+  dialect now binds every number as its text, which DuckDB reads exactly; this also fixes ordinary comparisons in the
+  browser. And `evaluate` treats an empty Point written as `{"type": "Point", "coordinates": []}` (GDAL's form) as
+  empty, so false, not NULL.
+- **Tested:** `test/sql-spatial.test.ts` (132 filters, nested NOTs among them, on every SQLite storage form, with
+  empty, NULL, text and unreadable values), `test/duckdb-spatial.ts` (the same filters on DuckDB 2.0 and 1.4.3, with
+  and without a covering, the index's use, and canaries on what the dialect relies on in DuckDB), the 5,705 literals
+  through demo-server's GeoPackage store, the four-store comparison, and the browser check; each rule broken once on
+  purpose.

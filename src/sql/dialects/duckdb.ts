@@ -10,11 +10,18 @@
  * - instants compare as epoch milliseconds, truncated as `evaluate`'s, so nothing depends on the time-zone setting;
  * - CASEI, ACCENTI, and dates and instants read from text, call the functions {@link duckdbFunctions} registers on the
  *   connection. They all return 32-bit integers, the one result type DuckDB-WASM (1.32.0) passes back exactly from a
- *   JavaScript function: text comes back as zero bytes, DOUBLE as a 32-bit float, BIGINT cut to 32 bits.
+ *   JavaScript function: text comes back as zero bytes, DOUBLE as a 32-bit float, BIGINT cut to 32 bits;
+ * - S_INTERSECTS needs the spatial extension (`LOAD spatial`, in Node and in DuckDB-WASM): its `ST_Intersects` is
+ *   exact (measured against `evaluate`), on a `GEOMETRY` column or on a `BLOB` column of WKB, and GeoParquet's bbox
+ *   covering speeds it up (see {@link duckdbIntersects}). No
+ *   JavaScript function stands in: DuckDB-WASM (1.32.0) hands a BLOB to one as UTF-8-decoded text, so WKB can't reach
+ *   it.
  */
 import type { Fold } from "../../core/folds.js";
+import { literalParts } from "../../evaluate/spatial.js";
 import { caseiKey, compareCodePoints, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
-import { quote, type Dialect, type Kind, type SqlColumn, type View } from "../types.js";
+import type { SpatialLiteral } from "../../core/types.js";
+import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 import { bareType, likePattern, queryableClass } from "./postgres.js";
 import { cachedLike } from "./sqlite.js";
 
@@ -113,7 +120,8 @@ function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
         like: (pattern, param) => `cql2_fold_like(${text}, ${param(pattern)}::VARCHAR, ${foldsText(folds)}) = 1`,
       };
     case "number":
-      return cls === "number" ? { sql: `CAST(${sql} AS DOUBLE)`, cast: "::DOUBLE" } : undefined;
+      // Bound as text: DuckDB-WASM (1.32.0) binds a number parameter that needs 17 digits one unit off; text is exact.
+      return cls === "number" ? { sql: `CAST(${sql} AS DOUBLE)`, cast: "::DOUBLE", value: (n) => String(n) } : undefined;
     case "boolean":
       return cls === "boolean" ? { sql, cast: "::BOOLEAN" } : undefined;
     case "day":
@@ -210,6 +218,68 @@ export const duckdbFunctions: {
   },
 };
 
+const f32 = new Float32Array(1);
+const i32 = new Int32Array(f32.buffer);
+
+/** `x` rounded outward to a 32-bit float: up (`up`) or down, so a `FLOAT` field however rounded still compares true. */
+function outward32(x: number, up: boolean): number {
+  const r = Math.fround(x);
+  if (up ? r >= x : r <= x) return r;
+  if (r === 0) return up ? 2 ** -149 : -(2 ** -149);
+  f32[0] = r;
+  i32[0]! += (r > 0) === up ? 1 : -1;
+  return f32[0]!;
+}
+
+/**
+ * S_INTERSECTS in DuckDB, exactly as `evaluate` decides it, written as DuckDB documents it: `ST_Intersects(column,
+ * literal)`, which uses an R-tree index and (DuckDB 1.5+) the row groups' statistics, with the literal a constant
+ * (`ST_MakeEnvelope`, or `ST_GeomFromGeoJSON` of a parameter). Its `ST_Intersects` is exact, unlike PostGIS's (0 of
+ * 5,705 literals differ from `evaluate`, in DuckDB 1.4.3, as in DuckDB-WASM 1.32.0, and 2.0).
+ * - A `GEOMETRY` column (also a column given only as a geometry queryable), or a `BLOB` column of WKB read with
+ *   `TRY(ST_GeomFromWKB(column))`, so bytes that aren't WKB are NULL, as in `evaluate`.
+ * - A box across the antimeridian is one literal, the union of its two halves: an OR of two tests loses the index.
+ * - With `column.covering` (GeoParquet's bbox covering), outside a NOT: the four comparisons on the covering's fields
+ *   first, which skip Parquet row groups and most rows before the exact test; DuckDB doesn't use a covering by
+ *   itself. The literal's box is rounded outward to 32-bit floats, as GeoParquet allows `FLOAT` fields. Under a NOT
+ *   the exact test alone decides, as a row without a geometry has no box (NULL, not FALSE).
+ * `undefined` for a column that isn't a geometry.
+ */
+function duckdbIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
+  const t = column.sqlType === undefined ? undefined : bareType(column.sqlType);
+  const geometry = t === undefined ? typeof column.format === "string" && column.format.startsWith("geometry-") : /^geometry\b/.test(t);
+  const wkb = ["blob", "bytea", "binary", "varbinary"].includes(t ?? "");
+  if (!geometry && !wkb) return undefined;
+  const g = wkb ? `TRY(ST_GeomFromWKB(${sql}))` : sql;
+  const number = (x: number) => `${param(String(x))}::DOUBLE`; // as text, as the number views bind it
+  const envelope = (w: number, s: number, e: number, n: number) => `ST_MakeEnvelope(${number(w)}, ${number(s)}, ${number(e)}, ${number(n)})`;
+  let boxes: number[][] | undefined;
+  let l: string;
+  if ("bbox" in literal && !("type" in literal)) {
+    const b = literal.bbox;
+    const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
+    boxes = west > east ? [[west, south, 180, north], [-180, south, east, north]] : [[west, south, east, north]];
+    l = boxes.length === 1 ? envelope(west, south, east, north) : `ST_Union(${envelope(west, south, 180, north)}, ${envelope(-180, south, east, north)})`;
+  } else {
+    l = `ST_GeomFromGeoJSON(${param(JSON.stringify(literal))})`;
+    const box = literalParts(literal).box;
+    boxes = box && [box];
+  }
+  const exact = `ST_Intersects(${g}, ${l})`;
+  const c = column.covering?.bbox;
+  for (const k of ["xmin", "ymin", "xmax", "ymax"] as const) {
+    const path: unknown = c?.[k];
+    if (c !== undefined && (!Array.isArray(path) || path.length !== 2 || !path.every((x) => typeof x === "string"))) {
+      throw new TypeError(`covering.bbox.${k} must be the path of a field, [column, field], as GeoParquet's metadata gives it`);
+    }
+  }
+  if (c === undefined || !positive || boxes === undefined) return exact;
+  const field = (path: readonly [string, string]) => `${quote(path[0])}.${quote(path[1])}`;
+  const overlaps = boxes.map(([w, s, e, n]) =>
+    `${field(c.xmin)} <= ${number(outward32(e!, true))} AND ${field(c.xmax)} >= ${number(outward32(w!, false))} AND ${field(c.ymin)} <= ${number(outward32(n!, true))} AND ${field(c.ymax)} >= ${number(outward32(s!, false))}`);
+  return `((${overlaps.length === 1 ? overlaps[0] : overlaps.map((o) => `(${o})`).join(" OR ")}) AND ${exact})`;
+}
+
 export const duckdb: Dialect = {
   placeholder: (n) => `$${n}`,
   true: "TRUE",
@@ -219,4 +289,5 @@ export const duckdb: Dialect = {
   instant: (ms) => ms,
   view: duckdbView,
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))} ESCAPE '\\'`,
+  intersects: duckdbIntersects,
 };
