@@ -48,6 +48,10 @@ const ROWS: string[][] = [
   ["FALSE", "3", "3", "1", "0.01", "'100%'", "DATE '2020-07-26'", "TIMESTAMPTZ '2023-01-01 00:00:00.001+00'", "TIMESTAMP '2023-01-01 00:00:00.001'", "'2020-07-26'", "'2023-01-01T00:00:00.0001Z'", "'ab'"],
   ["TRUE", "11", "11", "11", "11", "'a_b'", "DATE '2023-01-01'", "TIMESTAMPTZ '2022-12-31 19:00:00-05'", "TIMESTAMP '2022-12-31 19:00:00'", "'2023-01-01'", "'2023-01-01T00:00:00-00:00'", "'a\nb'"],
   ["FALSE", "12", "12", "12", "12", "'end\\'", "DATE '2023-01-01'", "TIMESTAMPTZ '2023-01-01 00:00:00+00'", "TIMESTAMP '2023-01-01 00:00:00'", "'2023-01-01'", "'2023-01-01T00:00:00Z'", "'end\\'"],
+  // Numbers that aren't finite: DuckDB stores them, and orders NaN above every number, as evaluate does.
+  ["TRUE", "13", "13", "'NaN'::DOUBLE", "13", "'nan'", "DATE '2023-01-02'", "TIMESTAMPTZ '2023-01-02 00:00:00+00'", "TIMESTAMP '2023-01-02 00:00:00'", "'2023-01-02'", "'2023-01-02T00:00:00Z'", "'nan'"],
+  ["FALSE", "14", "14", "'Infinity'::DOUBLE", "14", "'inf'", "DATE '2023-01-02'", "TIMESTAMPTZ '2023-01-02 00:00:00+00'", "TIMESTAMP '2023-01-02 00:00:00'", "'2023-01-02'", "'2023-01-02T00:00:00Z'", "'inf'"],
+  ["TRUE", "15", "15", "'-Infinity'::DOUBLE", "15", "'-inf'", "DATE '2023-01-02'", "TIMESTAMPTZ '2023-01-02 00:00:00+00'", "TIMESTAMP '2023-01-02 00:00:00'", "'2023-01-02'", "'2023-01-02T00:00:00Z'", "'-inf'"],
 ];
 
 /** Registers `duckdbFunctions` on a connection, as the README shows. */

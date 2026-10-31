@@ -40,6 +40,9 @@ const ROWS: Record<string, unknown>[] = [
   { b: 1, i: 9, d: 9, s: "", day: "2021-01-01", ts: "2023-06-15T08:00:00Z", x: "", label: "a b" },
   { b: 0, i: 4, d: 4, s: "100%", day: "2020-01-01", ts: "2023-01-01T00:00:01Z", x: "100%", label: "ab" },
   { b: 1, i: 6, d: 6, s: "a_b", day: "2022-02-02", ts: "2023-01-01T00:00:00Z", x: "a_b", label: "a\nb" },
+  // Numbers that aren't finite: SQLite stores ±Infinity, and NaN as NULL.
+  { b: 0, i: -Infinity, d: Infinity, s: "inf", day: "2023-01-02", ts: "2023-01-02T00:00:00Z", x: Infinity, label: "inf" },
+  { b: 1, i: 11, d: NaN, s: "nan", day: "2023-01-02", ts: "2023-01-02T00:00:00Z", x: -Infinity, label: "nan" },
 ];
 
 function makeTable(): DatabaseSync {

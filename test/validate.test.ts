@@ -121,6 +121,16 @@ describe("validate refuses, with a code and where", () => {
     expect(pp.valid || pp.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.propertyProperty);
   });
 
+  it("names the right spatial class: points and boxes are basic; other geometries need the plus class", () => {
+    const g = (literal: unknown, op = "s_intersects") =>
+      (validate({ op, args: [p("geometry"), literal] }) as { problems: readonly { conformance?: string }[] }).problems[0]!.conformance;
+    expect(g({ type: "Point", coordinates: [1, 2] })).toBe(OTHER_CONFORMANCE.basicSpatial);
+    expect(g({ bbox: [0, 0, 1, 1] })).toBe(OTHER_CONFORMANCE.basicSpatial);
+    expect(g({ type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] })).toBe(OTHER_CONFORMANCE.basicSpatialPlus);
+    expect(g({ type: "LineString", coordinates: [[0, 0], [1, 1]] })).toBe(OTHER_CONFORMANCE.basicSpatialPlus);
+    expect(g({ type: "Point", coordinates: [1, 2] }, "s_within")).toBe(OTHER_CONFORMANCE.spatial);
+  });
+
   it("a null says how to test for a missing value instead", () => {
     for (const [filter, path] of [
       [{ op: "=", args: [p("a"), null] }, "/args/1"],
