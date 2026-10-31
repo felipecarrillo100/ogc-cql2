@@ -65,7 +65,7 @@ it turned out:
 | CASEI | a JavaScript function (as for SQLite), or an SQL macro (as for PostgreSQL) | JavaScript functions returning integers (`cql2_casei_cmp`, `cql2_casei_like`): DuckDB-WASM can't return text from a function, and a macro can't be exact, since DuckDB has no NFD |
 | tests | no server, no Docker: DuckDB in the test process | as estimated: 11,050 generated filters against `evaluate`, also under a `nocase` default collation and another time zone |
 | a DuckDB store in `demo-server` | small; GeoParquet files listed in `collections.json` | in progress |
-| DuckDB-WASM in the playground | not estimated | in progress |
+| the browser | not estimated | the same differential check in DuckDB-WASM, in Chrome: done for 0.2.0. DuckDB-WASM as a source in the playground: next |
 
 The package itself stays dependency-free: the DuckDB driver belongs to the application (a server, or a web page
 loading DuckDB-WASM), as `node:sqlite` and `pg` do today.
@@ -76,7 +76,7 @@ loading DuckDB-WASM), as `node:sqlite` and `pg` do today.
 |---|---|
 | Registering JavaScript functions may differ between DuckDB's Node and browser builds | **It did.** DuckDB-WASM registers them only in its synchronous build, and passes back only 32-bit integers exactly. The functions were designed around that, so one set works in both |
 | The spatial extension's availability in DuckDB-WASM | available: it loads in the browser (see below) |
-| DuckDB evolves fast | **The two runtimes carry different engines:** DuckDB-WASM 1.32.0 is DuckDB 1.4.3, `@duckdb/node-api` 2.0.0 is DuckDB 2.0. The dialect only emits SQL, but the Node test doesn't prove the browser: DuckDB-WASM gets its own check in the playground |
+| DuckDB evolves fast | **The two runtimes carry different engines:** DuckDB-WASM 1.32.0 is DuckDB 1.4.3, `@duckdb/node-api` 2.0.0 is DuckDB 2.0. The dialect only emits SQL, but the Node test doesn't prove the browser, so the same 11,050 filters were also run in DuckDB-WASM in Chrome: no difference from `evaluate`, and the served values identical to Node's |
 | Single writer: DuckDB is not a shared, transactional database | unchanged: out of scope by design, for read-mostly publishing; editing stays with PostgreSQL |
 | A smaller audience than MySQL or SQL Server | unchanged: offset by the low cost and the browser use, which no other dialect offers |
 

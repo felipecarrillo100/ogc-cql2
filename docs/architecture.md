@@ -259,6 +259,9 @@ filter selects). The server never knows which store it talks to.
   - `test/sql-duckdb.test.ts`: 11,050 generated filters on a DuckDB table (`@duckdb/node-api`, a dev dependency, in
     the test process) select the same rows as `evaluate` on the served values, also with `default_collation` set to
     `nocase` and a New York time zone;
+  - the same filters in **DuckDB-WASM**, in Chrome: run for 0.2.0 with a harness outside the repository (the same
+    table and filters, the README's registration code, Vite's build), with the same result. The browser carries an
+    older engine (DuckDB 1.4.3, against 2.0 in Node), so passing in Node doesn't prove the browser;
   - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 8,398 generated filters give the same features from
     the GeoJSON file, the GeoPackage and PostgreSQL (when the database is set up; skipped otherwise);
   - each rule was broken once on purpose, to show the tests catch it.
@@ -290,7 +293,8 @@ checks that they agree.
 |---|---|
 | 0.0.1 | The foundation: build, tests, demo, `CQL2_VERSION`, `quoteString` |
 | 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, `ogc-cql2/sql` (SQLite / GeoPackage, PostgreSQL / PostGIS); the playground and `demo-server` |
-| 0.2.0 (in progress) | Done: the dialect interface in `src/sql` (SQLite and PostgreSQL moved onto it unchanged), and the **`duckdb`** dialect, the same SQL in Node and in the browser, see [duckdb-case.md](duckdb-case.md). Next: GeoParquet files and a DuckDB store in `demo-server` (the kitchen sink then compared across four stores); then DuckDB-WASM in the playground, checked against `evaluate` in the browser and on phones |
+| 0.2.0 | The dialect interface in `src/sql` (SQLite and PostgreSQL moved onto it unchanged), and the **`duckdb`** dialect, the same SQL in Node and in the browser, tested in both; see [duckdb-case.md](duckdb-case.md) |
+| next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first, see [spatial-research.md](spatial-research.md); DuckDB's spatial extension), temporal, arrays; `ogc-cql2/parse` if a server needs CQL2-text; an index-friendly SQL mode |
 
