@@ -58,6 +58,11 @@ const ROWS: string[][] = [
   ["TRUE", "18", "18", "18", "18", "'Vie\u0323\u0302t Nam'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'VIET NAM'"],
   ["FALSE", "19", "19", "19", "19", "'Łódź'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'Øresund'"],
   ["TRUE", "20", "20", "20", "20", "'はじめ'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'はしめ'"],
+  // Numbers that need all 17 significant digits: DuckDB-WASM 1.32.0 binds such a number parameter one unit off, and
+  // reads such a SQL literal (a DECIMAL) one unit off too, so the table gets them as text, which it reads exactly.
+  ["FALSE", "21", "21", "'0.9653517007827759'::DOUBLE", "21", "'x'", "DATE '2023-01-04'", "TIMESTAMPTZ '2023-01-04 00:00:00+00'", "TIMESTAMP '2023-01-04 00:00:00'", "'2023-01-04'", "'2023-01-04T00:00:00Z'", "'x'"],
+  ["TRUE", "22", "22", "'-174.71493244171143'::DOUBLE", "22", "'y'", "DATE '2023-01-04'", "TIMESTAMPTZ '2023-01-04 00:00:00+00'", "TIMESTAMP '2023-01-04 00:00:00'", "'2023-01-04'", "'2023-01-04T00:00:00Z'", "'y'"],
+  ["FALSE", "23", "23", "'206289291381835.94'::DOUBLE", "23", "'z'", "DATE '2023-01-04'", "TIMESTAMPTZ '2023-01-04 00:00:00+00'", "TIMESTAMP '2023-01-04 00:00:00'", "'2023-01-04'", "'2023-01-04T00:00:00Z'", "'z'"],
 ];
 
 /** Registers `duckdbFunctions` on a connection, as the README shows. */
@@ -123,7 +128,7 @@ const PROPERTIES = Object.keys(COLUMNS);
 const LITERALS: unknown[] = [
   "Straße", "São Paulo", "SAO PAULO", "Sao Paulo", "año", "ano", "はじめ", "はしめ", "Łodz", "Lodz", "Ma\u0300", "STRASSE", "café", "cafe\u0301", "", "😀", "\uE000", "Riv", "river", "a_b", "Ελλάδα", "100%", "end\\",
   "2020-07-26", "2023-01-01T00:00:00.000Z", "2023-01-01T10:00:00.000", "2023-01-01T00:00:00.001Z",
-  0, 1, 2.5, 5, 10, -1, 12.34, 9007199254740991, true, false,
+  0, 1, 2.5, 5, 10, -1, 12.34, 9007199254740991, 0.9653517007827759, -174.71493244171143, 206289291381835.94, true, false,
   { date: "2020-07-26" }, { date: "2021-01-01" }, { date: "0099-07-26" },
   { timestamp: "2023-01-01T00:00:00Z" }, { timestamp: "2022-12-31T23:00:00Z" }, { timestamp: "2023-01-01T00:00:00.5Z" },
   { timestamp: "2023-01-01T00:00:00.001Z" }, { timestamp: "1969-12-31T23:59:59.999Z" },
@@ -243,7 +248,7 @@ describe("the SQL it builds", () => {
   it("$n placeholders, with the casts each column needs", () => {
     expect(sql({ op: "and", args: [{ op: ">", args: [p("i"), 5] }, { op: "=", args: [p("b"), true] }] })).toEqual({
       where: `(CAST("i" AS DOUBLE) > $1::DOUBLE) AND ("b" = $2::BOOLEAN)`,
-      params: [5, true],
+      params: ["5", true], // numbers as text: DuckDB-WASM binds some number parameters one unit off
     });
   });
 

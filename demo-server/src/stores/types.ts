@@ -44,6 +44,8 @@ export interface QueryResult {
 export interface Store {
   describe(): CollectionDescription;
   queryables(): Readonly<Record<string, Queryable>>;
+  /** Whether the features have a geometry that filters can use (a table without one, or in another SRS, has none). */
+  hasGeometry(): boolean;
   /** The features the filter selects (TRUE), in the store's order, one page of them. The filter is valid. */
   query(filter: Cql2Filter, page: Page): Promise<QueryResult>;
 }

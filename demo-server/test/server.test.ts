@@ -138,13 +138,13 @@ describe("refusals, as application/problem+json", () => {
     assert.equal(answer.problems[0].path, "/args/0");
   });
 
-  it("a spatial filter: GeoJSON collections answer it; the SQL stores lack the class, so they refuse it", async () => {
+  it("a spatial filter: the GeoJSON and the GeoPackage collections answer it alike", async () => {
     const filter = { op: "s_intersects", args: [{ property: "geometry" }, { bbox: [-110, 35, -100, 45] }] };
     const answer = await read(query("states", { filter }));
     assert.equal(answer.numberMatched, 11);
-    const refused = await problem(await query("gpkg-states", { filter }), 400, "invalid-filter");
-    assert.ok(refused.problems.some((x: { code: string; conformance?: string }) =>
-      x.code === "needs-conformance" && x.conformance === "http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-functions"));
+    const fromGpkg = await read(query("gpkg-states", { filter }));
+    assert.deepEqual(fromGpkg.features.map((f: { properties: { STATE_NAME: string } }) => f.properties.STATE_NAME),
+      answer.features.map((f: { properties: { STATE_NAME: string } }) => f.properties.STATE_NAME));
     const notGeometry = await problem(await query("states", { filter: { ...filter, args: [{ property: "POP1996" }, filter.args[1]] } }), 400, "invalid-filter");
     assert.equal(notGeometry.problems[0].code, "type-mismatch");
   });
@@ -152,6 +152,13 @@ describe("refusals, as application/problem+json", () => {
   it("the queryables list the geometry, as OGC API Features Part 3 does", async () => {
     const answer = await read(fetch(`${base}/collections/states/queryables`));
     assert.deepEqual(answer.properties.geometry, { format: "geometry-any" });
+  });
+
+  it("a collection without geometry lists none, and refuses a filter on it as an unknown property", async () => {
+    assert.equal((await read(fetch(`${base}/collections/gpkg-sub_regions/queryables`))).properties.geometry, undefined);
+    const filter = { op: "s_intersects", args: [{ property: "geometry" }, { bbox: [-110, 35, -100, 45] }] };
+    const refused = await problem(await query("gpkg-sub_regions", { filter }), 400, "invalid-filter");
+    assert.equal(refused.problems[0].code, "unknown-property");
   });
 
   it("a literal of another type than the queryable's, instead of an empty answer", async () => {

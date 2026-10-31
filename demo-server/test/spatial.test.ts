@@ -1,7 +1,8 @@
 /**
  * S_INTERSECTS: ogc-cql2/evaluate on the states' GeoJSON against GEOS (through PostGIS) on the same states, for
  * thousands of generated literals, many placed exactly on the states' vertices and edges, where engines can disagree.
- * Both must select the same states. Runs against the database in `.env` with `cql2demo` loaded; skipped otherwise.
+ * Both must select the same states; so must the GeoPackage store (`cql2_intersects` in SQLite) and the PostgreSQL
+ * store. The PostgreSQL parts run against the database in `.env` with `cql2demo` loaded; skipped otherwise.
  *
  * The reference is GEOS's exact predicate, `NOT ST_Disjoint`. PostGIS's `ST_Intersects` takes a shortcut of its own
  * for a point in a polygon, which isn't exact for a point lying exactly on an edge: measured on PostGIS 3.5.6, it
@@ -14,6 +15,7 @@ import { after, before, describe, it } from "node:test";
 import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import pg from "pg";
+import { openGeoPackage } from "../src/stores/geopackage.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
 import type { Store } from "../src/stores/types.ts";
 
@@ -146,6 +148,19 @@ describe("S_INTERSECTS: evaluate against PostGIS, on the US states", () => {
     } finally {
       await storePool.end();
     }
+  });
+
+  it(`ogc-cql2/sql's sqlite dialect, through the GeoPackage store: the same states as evaluate for every literal`, async () => {
+    const store = openGeoPackage({ file: new URL("../data/usa.gpkg", import.meta.url).pathname, tables: ["states"] }).stores[0]!.store;
+    const differences: string[] = [];
+    for (const literal of LITERALS) {
+      const filter = { op: "s_intersects", args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter;
+      const ours = states.filter(toPredicate(filter)).map((f) => f.properties.STATE_NAME).sort();
+      const { features } = await store.query(filter, { limit: 100, offset: 0 });
+      const theirs = features.map((f) => f.properties.STATE_NAME as string).sort();
+      if (JSON.stringify(ours) !== JSON.stringify(theirs)) differences.push(`${JSON.stringify(literal).slice(0, 160)}\n    evaluate ${ours.join(", ")} / sql ${theirs.join(", ")}`);
+    }
+    assert.equal(differences.slice(0, 10).join("\n"), "");
   });
 
   it("PostGIS's ST_Intersects departs from GEOS only for points exactly on an edge (its point-in-polygon shortcut)", async (t) => {

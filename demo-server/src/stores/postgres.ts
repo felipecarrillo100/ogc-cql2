@@ -177,6 +177,7 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
   return {
     describe: () => description,
     queryables: () => queryables,
+    hasGeometry: () => geometryColumn !== undefined,
     async query(filter: Cql2Filter, { limit, offset }) {
       const filterColumns = geometryColumn && !Object.hasOwn(columns, "geometry") ? { ...columns, geometry: geometryColumn } : columns;
       const { where, params } = toSql(filter, { dialect: "postgres", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}) });

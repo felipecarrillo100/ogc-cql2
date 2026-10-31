@@ -1,0 +1,199 @@
+/**
+ * S_INTERSECTS in `toSql`'s `duckdb` dialect, run once per DuckDB engine, each in a test file (so a process) of its
+ * own: a process loads one DuckDB native library, whichever it loads first.
+ * - DuckDB 2.0 (`@duckdb/node-api`), as in Node;
+ * - DuckDB 1.4.3 (`@duckdb/node-api-1.4`), the engine of DuckDB-WASM 1.32.0, as in the browser.
+ *
+ * The differential test runs every spatial filter of spatial-cases.ts on a `GEOMETRY` and a `BLOB` (WKB) column, each
+ * without and with GeoParquet's bbox covering (`DOUBLE` and `FLOAT` fields), against `evaluate` on the same values.
+ * The canaries state what the dialect relies on in DuckDB; each fails when a DuckDB release changes it, and says what
+ * to update (docs/architecture.md, "DuckDB: what we rely on").
+ */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Cql2Filter } from "ogc-cql2";
+import { toSql, type SqlColumn } from "ogc-cql2/sql";
+import { ALL, asGeoJson, differences, FILTERS, leaf, STORAGES, stored, VALUES, wkb, type G } from "./spatial-cases.ts";
+
+/** What the tests use of `@duckdb/node-api`, the same in both versions. */
+interface Connection {
+  run(sql: string): Promise<unknown>;
+  runAndReadAll(sql: string, params?: never): Promise<{ getRows(): unknown[][] }>;
+  closeSync(): void;
+}
+export interface Engine {
+  readonly DuckDBInstance: { create(path: string): Promise<{ connect(): Promise<Connection> }> };
+}
+
+const COVERING = { bbox: { xmin: ["bbox", "xmin"], ymin: ["bbox", "ymin"], xmax: ["bbox", "xmax"], ymax: ["bbox", "ymax"] } } as const;
+const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+/**
+ * The covering's struct of a geometry, NULL when there is none (GeoParquet: a bbox if and only if a geometry). With
+ * `raw`, the stored value: one that isn't a geometry but isn't NULL gets a box far from every literal, as a corrupt
+ * file could hold, for which `evaluate` gives NULL and the box test FALSE: under a NOT the box test would select it.
+ */
+const bboxOf = (g: string, type: "DOUBLE" | "FLOAT", raw?: string) =>
+  `CASE ${raw ? `WHEN ${raw} IS NOT NULL AND ${g} IS NULL THEN {'xmin': 100, 'ymin': 50, 'xmax': 101, 'ymax': 51}::STRUCT(xmin ${type}, ymin ${type}, xmax ${type}, ymax ${type}) ` : ""}` +
+  `WHEN ${g} IS NULL OR ST_IsEmpty(${g}) THEN NULL ELSE {'xmin': ST_XMin(${g})::${type}, 'ymin': ST_YMin(${g})::${type}, 'xmax': ST_XMax(${g})::${type}, 'ymax': ST_YMax(${g})::${type}} END`;
+
+export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engine: Engine): void {
+  let duck: Connection;
+  let spatial = "";
+  const dir = mkdtempSync(join(tmpdir(), "ogc-cql2-duckdb-"));
+  beforeAll(async () => {
+    duck = await (await engine.DuckDBInstance.create(":memory:")).connect();
+    try {
+      await duck.run("INSTALL spatial");
+      await duck.run("LOAD spatial");
+    } catch (error) {
+      spatial = `DuckDB's spatial extension can't load: ${(error as Error).message}`;
+    }
+  });
+  afterAll(() => {
+    duck?.closeSync();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const rows = async (sql: string, params: readonly unknown[] = []) => (await duck.runAndReadAll(sql, params as never)).getRows();
+  async function select(table: string, column: SqlColumn, filter: Cql2Filter): Promise<number[]> {
+    const { where, params } = toSql(filter, { dialect: "duckdb", columns: { geometry: column } });
+    return (await rows(`SELECT id FROM ${table} WHERE ${where} ORDER BY id`, params)).map((r) => r[0] as number);
+  }
+  /** Each filter's rows, in order: `differences` asks for them synchronously. */
+  async function all(table: string, column: SqlColumn): Promise<(filter: Cql2Filter) => number[]> {
+    const results = new Map<string, number[]>();
+    for (const filter of FILTERS) results.set(JSON.stringify(filter), await select(table, column, filter));
+    return (filter) => results.get(JSON.stringify(filter))!;
+  }
+
+  describe(`${name}: selects exactly what evaluate selects`, () => {
+    it(`is DuckDB ${version}`, async (context) => {
+      if (spatial) return context.skip(spatial);
+      expect(String((await rows("SELECT version()"))[0]![0])).toBe(`v${version === "2.0" ? "2.0.0" : version}`);
+    });
+
+    // In a BLOB column the text is bytes too, which aren't WKB: NULL, as `evaluate` gives for a string.
+    const blobs = async () => {
+      await duck.run("CREATE OR REPLACE TABLE w (id INTEGER, geom BLOB)");
+      for (const [i, v] of ALL.entries()) {
+        const value = stored(v, STORAGES.WKB!);
+        const bytes = value === null ? null : typeof value === "string" ? new TextEncoder().encode(value) : (value as Uint8Array);
+        await duck.run(`INSERT INTO w VALUES (${i + 1}, ${bytes === null ? "NULL" : `from_hex('${hex(bytes)}')`})`);
+      }
+      const g = "TRY(ST_GeomFromWKB(geom))";
+      await duck.run(`CREATE OR REPLACE TABLE w2 AS SELECT *, ${bboxOf(g, "DOUBLE", "geom")} AS bbox FROM w; CREATE OR REPLACE TABLE w4 AS SELECT *, ${bboxOf(g, "FLOAT", "geom")} AS bbox FROM w`);
+    };
+    const geometries = VALUES.filter((v) => v !== "empty" && typeof v !== "string") as (G | null)[];
+    const GEOMETRIES = [...geometries, "empty" as const];
+    const geometryTables = async () => {
+      await duck.run("CREATE OR REPLACE TABLE g (id INTEGER, geom GEOMETRY)");
+      for (const [i, v] of GEOMETRIES.entries()) {
+        await duck.run(`INSERT INTO g VALUES (${i + 1}, ${v === null ? "NULL" : `ST_GeomFromWKB(from_hex('${hex(wkb(v))}'))`})`);
+      }
+      await duck.run(`CREATE OR REPLACE TABLE g2 AS SELECT *, ${bboxOf("geom", "DOUBLE")} AS bbox FROM g; CREATE OR REPLACE TABLE g4 AS SELECT *, ${bboxOf("geom", "FLOAT")} AS bbox FROM g`);
+    };
+
+    it.for([
+      ["w", "no covering"],
+      ["w2", "covering of DOUBLE fields"],
+      ["w4", "covering of FLOAT fields"],
+    ] as const)(`a BLOB column of WKB, %s: ${FILTERS.length} filters`, async ([table, label], context) => {
+      if (spatial) return context.skip(spatial);
+      await blobs();
+      const column: SqlColumn = { sqlType: "BLOB", column: "geom", ...(label === "no covering" ? {} : { covering: COVERING }) };
+      expect(differences(await all(table, column), ALL.map(asGeoJson))).toBe("");
+    });
+
+    it.for([
+      ["g", "no covering"],
+      ["g2", "covering of DOUBLE fields"],
+      ["g4", "covering of FLOAT fields"],
+    ] as const)(`a GEOMETRY column, %s: ${FILTERS.length} filters`, async ([table, label], context) => {
+      if (spatial) return context.skip(spatial);
+      await geometryTables();
+      const column: SqlColumn = { sqlType: "GEOMETRY", column: "geom", ...(label === "no covering" ? {} : { covering: COVERING }) };
+      expect(differences(await all(table, column), GEOMETRIES.map(asGeoJson))).toBe("");
+    });
+
+    it("the R-tree index is used: for a box, a geometry as a parameter, and a box across the antimeridian", async (context) => {
+      if (spatial) return context.skip(spatial);
+      await duck.run("SELECT setseed(0.1)");
+      await duck.run("CREATE OR REPLACE TABLE ix AS SELECT ST_Point(random() * 360 - 180, random() * 180 - 90) AS geom FROM range(200000); CREATE INDEX ix_geom ON ix USING RTREE (geom)");
+      for (const literal of [{ bbox: [10, 10, 15, 15] }, { type: "Polygon", coordinates: [[[10, 10], [15, 10], [15, 15], [10, 10]]] }, { bbox: [170, 10, -170, 15] }]) {
+        const { where, params } = toSql(leaf(literal) as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: { sqlType: "GEOMETRY", column: "geom" } } });
+        const plan = (await rows(`EXPLAIN SELECT count(*) FROM ix WHERE ${where}`, params)).map((r) => r[1]).join("\n");
+        expect(plan, JSON.stringify(literal)).toMatch(/rtree[ _]index[ _]scan/i);
+      }
+    });
+  });
+
+  describe(`${name}: what the dialect relies on (canaries)`, () => {
+    it("plain ST_GeomFromWKB still fails the whole query on bytes that aren't WKB: the dialect needs TRY(…)", async (context) => {
+      if (spatial) return context.skip(spatial);
+      await duck.run("CREATE OR REPLACE TABLE bad AS SELECT * FROM (VALUES (from_hex('0102030405'))) t(geom)");
+      await expect(rows("SELECT count(*) FROM bad WHERE ST_Intersects(ST_GeomFromWKB(geom), ST_MakeEnvelope(0, 0, 1, 1))"), "DuckDB now reads bad WKB without failing: TRY may be dropped (duckdbIntersects)")
+        .rejects.toThrow();
+    });
+
+    it(version === "2.0"
+      ? "a covering on a table with an R-tree index still fails (DuckDB 2.0's bug): keep the limitation documented"
+      : "a covering on a table with an R-tree index works", async (context) => {
+      if (spatial) return context.skip(spatial);
+      await duck.run("CREATE OR REPLACE TABLE ixc AS SELECT ST_Point(x, x) AS geom, {'xmin': x::DOUBLE, 'ymin': x::DOUBLE, 'xmax': x::DOUBLE, 'ymax': x::DOUBLE} AS bbox FROM range(0, 5000) t(x); CREATE INDEX ixc_geom ON ixc USING RTREE (geom)");
+      const { where, params } = toSql(leaf({ bbox: [10, 10, 20, 20] }) as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: { sqlType: "GEOMETRY", column: "geom", covering: COVERING } } });
+      const run = rows(`SELECT count(*) FROM ixc WHERE ${where}`, params);
+      if (version === "2.0") {
+        await expect(run, "DuckDB now filters on a covering on an indexed table: lift the limitation (SqlColumn.covering, README, docs/architecture.md)")
+          .rejects.toThrow(/Failed to bind column reference/);
+      } else {
+        expect(Number((await run)[0]![0])).toBe(11);
+      }
+    });
+
+    it.runIf(version === "2.0")("DuckDB still doesn't use a GeoParquet 1.1 covering by itself: the dialect writes its comparisons", async (context) => {
+      if (spatial) return context.skip(spatial);
+      const file = join(dir, "covering.parquet");
+      const geo = JSON.stringify({ version: "1.1.0", primary_column: "geom", columns: { geom: { encoding: "WKB", geometry_types: [], covering: COVERING } } });
+      await duck.run(`COPY (SELECT ST_AsWKB(ST_Point(x / 200, x / 400))::BLOB AS geom, {'xmin': x / 200, 'ymin': x / 400, 'xmax': x / 200, 'ymax': x / 400} AS bbox FROM range(0, 20480) t(x))
+        TO '${file}' (FORMAT parquet, ROW_GROUP_SIZE 2048, GEOPARQUET_VERSION 'NONE', KV_METADATA {geo: '${geo}'})`);
+      const scanned = async (column: SqlColumn) => {
+        const { where, params } = toSql(leaf({ bbox: [50, 25, 52, 26] }) as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: column } });
+        const profile = JSON.parse(String((await rows(`EXPLAIN (ANALYZE, FORMAT json) SELECT count(*) FROM '${file}' WHERE ${where}`, params))[0]![1]));
+        let found: [number, number] | undefined;
+        const walk = (n: { row_groups_scanned?: number; total_row_groups_to_scan?: number; children?: unknown[]; operator?: unknown[] }) => {
+          if (n.total_row_groups_to_scan !== undefined) found ??= [n.row_groups_scanned!, n.total_row_groups_to_scan];
+          (n.children ?? n.operator ?? []).forEach((c) => walk(c as never));
+        };
+        walk(profile);
+        return found!;
+      };
+      const [plain, groups] = await scanned({ sqlType: "GEOMETRY", column: "geom" });
+      expect(plain, "DuckDB now skips row groups from a covering by itself: the covering's comparisons may become unnecessary (SqlColumn.covering, docs)").toBe(groups);
+      const [covered] = await scanned({ sqlType: "GEOMETRY", column: "geom", covering: COVERING });
+      expect(covered).toBeLessThan(groups);
+    });
+
+    it.runIf(version === "2.0")("ST_Intersects alone is still much slower without an index than with ST_Intersects_Extent: the evidence an engine option would need", async (context) => {
+      if (spatial) return context.skip(spatial);
+      await duck.run("SELECT setseed(0.1)");
+      await duck.run("CREATE OR REPLACE TABLE noidx AS SELECT ST_Point(random() * 360 - 180, random() * 180 - 90) AS geom FROM range(200000)");
+      const best = async (sql: string) => {
+        await rows(sql);
+        let ms = Infinity;
+        for (let i = 0; i < 3; i++) {
+          const t = performance.now();
+          await rows(sql);
+          ms = Math.min(ms, performance.now() - t);
+        }
+        return ms;
+      };
+      const L = "ST_MakeEnvelope(10, 10, 15, 15)";
+      const plain = await best(`SELECT count(*) FROM noidx WHERE ST_Intersects(geom, ${L})`);
+      const paired = await best(`SELECT count(*) FROM noidx WHERE ST_Intersects(geom, ${L}) AND ST_Intersects_Extent(geom, ${L})`);
+      context.annotate(`ST_Intersects alone ${plain.toFixed(1)} ms, with ST_Intersects_Extent ${paired.toFixed(1)} ms`);
+      expect(plain / paired, "The gap closed: plain ST_Intersects is now as fast, and no engine option is needed (docs/architecture.md)").toBeGreaterThan(3);
+    });
+  });
+}

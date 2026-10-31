@@ -25,8 +25,9 @@ to convert from or to. That means:
 
 Four conformance classes, implemented completely: Basic CQL2, Advanced Comparison Operators, Case-insensitive
 Comparison and (since 0.5.0) Accent-insensitive Comparison. Since 0.6.0 the three spatial classes too (Basic Spatial
-Functions, Basic plus, Spatial Functions) in `validate` and `text`; `evaluate` and `sql` refuse them (`unsupported`)
-until their engines arrive, see [spatial-research.md](spatial-research.md). `CASEI` and `ACCENTI` may each wrap the other once, as the
+Functions, Basic plus, Spatial Functions) in `validate` and `text`; `evaluate` (since 0.7.0) and every `sql` dialect
+(PostGIS since 0.8.0, SQLite and DuckDB since 0.9.0) evaluate the two basic ones, `s_intersects`, and refuse Spatial
+Functions (`unsupported`) until their engines arrive, see [spatial-research.md](spatial-research.md). `CASEI` and `ACCENTI` may each wrap the other once, as the
 grammar allows (`CASEI(ACCENTI(name))`). Within them, the profile accepts the form every server must support: the standard lets a server accept
 only a property on the left and a literal on the right (`/per/basic-cql2/cql2filter`,
 `/per/advanced-comparison-operators/*`). So:
@@ -166,6 +167,7 @@ SHOULD allow for values of an unexpected type, which SQLite permits in any colum
 | `{date}` | `cql2_day(c)`: a `YYYY-MM-DD` value |
 | `{timestamp}` | `cql2_instant(c)`: an ISO 8601 date-time with `Z` or an offset, in milliseconds |
 | `like` | `cql2_like(view, pattern)`: case-sensitive, `%` `_` `\` |
+| `s_intersects` (since 0.9.0) | `cql2_intersects(c, $json) = 1` on a geometry column (`format: "geometry-…"`): a GeoPackage blob or WKB decoded (`src/sql/wkb.ts`) and tested by `evaluate`'s engine, after the header envelope's quick reject. With `rtree` (GeoPackage's R-tree table) and only outside a NOT: `rowid IN (SELECT id FROM rtree WHERE <boxes overlap>) AND …` first |
 
 The `cql2_*` functions are `sqliteFunctions`, which the application registers on its connection. They run the same
 code as `evaluate` (`src/evaluate/strings.ts`). SQLite's own LIKE ignores ASCII case (its `case_sensitive_like`
@@ -209,7 +211,7 @@ PostgreSQL: `SqlColumn.sqlType` is the type `DESCRIBE` gives.
 | CQL2 | DuckDB |
 |---|---|
 | `and`, `or`, `not`, `isNull`, `true` / `false` | `AND`, `OR`, `NOT`, `IS NULL`, `TRUE` / `FALSE`; placeholders `$1`, `$2` … |
-| numbers | `CAST(c AS DOUBLE)` against `$n::DOUBLE` |
+| numbers | `CAST(c AS DOUBLE)` against `$n::DOUBLE`, the number bound as its text (since 0.9.0, see below) |
 | booleans | `c` against `$n::BOOLEAN` |
 | text | `nfc_normalize(c) COLLATE "binary"`: code point order, whatever the database's `default_collation` (`nocase` would make `'a' = 'A'` true) |
 | text against a `DATE` / `TIMESTAMP WITH TIME ZONE` / `TIMESTAMP` column | the served text, through `strftime` |
@@ -218,6 +220,7 @@ PostgreSQL: `SqlColumn.sqlType` is the type `DESCRIBE` gives.
 | `{date}` | `c` against `$n::DATE` on a `DATE` column; `cql2_day(c)` (days since 1970) on text |
 | `{timestamp}` | `floor(epoch_us(c) / 1000)` (epoch milliseconds, truncated: `epoch_ms` rounds) on `TIMESTAMP WITH TIME ZONE`; from `cql2_instant_day` and `cql2_instant_ms` on text; NULL on `TIMESTAMP` |
 | `like` | native `LIKE … ESCAPE '\'` (case-sensitive, `_` one code point) on the NFC text; a lone trailing `\` becomes a literal one |
+| `s_intersects` (since 0.9.0, the spatial extension) | `ST_Intersects(g, L)`, as DuckDB documents it, on a `GEOMETRY` column or on `TRY(ST_GeomFromWKB(c))` for a `BLOB` of WKB; `L` = `ST_GeomFromGeoJSON($n)` or `ST_MakeEnvelope(…)`, across the antimeridian `ST_Union` of the two halves (one literal, so an R-tree index still applies). With `SqlColumn.covering` (GeoParquet's bbox covering), outside a NOT: its four fields compared first, the box rounded outward to 32-bit floats |
 
 `duckdbFunctions` are plain JavaScript functions with their DuckDB types, registered on the connection by the
 application (`registerScalarFunction` in Node, `createScalarFunction` in DuckDB-WASM's blocking build, run in a Web
@@ -225,6 +228,71 @@ Worker). **They all return 32-bit integers**, the one result type DuckDB-WASM (1
 exactly from JavaScript: text comes back as zero bytes, DOUBLE as a 32-bit float, BIGINT cut to 32 bits, and BOOLEAN
 is refused. So CASEI compares inside the function, and an instant read from text is its UTC day plus the
 milliseconds into that day. Nothing depends on the time-zone setting: instants are compared as numbers.
+
+**Numbers are bound as text (0.9.0).** DuckDB-WASM 1.32.0 (DuckDB 1.4.3) binds a JavaScript number that needs all 17
+significant digits one unit off, about one in ten of them (2,000 random values per kind: 233 coordinates, 217 values
+in 0…1, 169 around 1e15; none with two decimals, no integer): `0.9653517007827759` becomes `0.965351700782776`, as if
+printed with 16 digits. A SQL literal of 17 digits (a DECIMAL) is read one unit off the same way. Text cast to DOUBLE
+was exact in all 10,000 cases, and Node is exact. So number parameters are their JavaScript text (`String(n)`, which
+reads back exactly). This affected 0.2.0–0.8.0 in the browser; the 0.2.0 check missed it, its numbers being short.
+
+**Spatial, measured (0.9.0)**, on a million rows (points and small squares), in Node:
+
+| SQLite form | small box | quarter of the world | 40-vertex polygon |
+|---|---|---|---|
+| `cql2_intersects`, GeoPackage blobs with the header envelope | 811 ms | 1.4 s | 3.6 s |
+| the same without the envelope | 2.9 s | 2.8 s | 7.1 s |
+| the same, with GeoPackage's R-tree first | 3 ms | 0.9 s | 57 ms |
+
+DuckDB, the SQL `toSql` writes, on each engine: DuckDB 2.0 (Node), DuckDB 1.4.3 (Node), and DuckDB-WASM 1.32.0
+(DuckDB 1.4.3, Chrome); small box / quarter of the world / 40-vertex polygon:
+
+| Data | 2.0, Node | 1.4.3, Node | DuckDB-WASM, Chrome |
+|---|---|---|---|
+| `GEOMETRY`, random order, no index | 156 / 137 / 140 ms | 157 / 160 / 145 ms | 617 / 642 / 621 ms |
+| the same with an R-tree index | 1 / 138 / 2 ms | 1 / 174 / 5 ms | 1 / 281 / 12 ms |
+| random order, with a covering | 5 / 37 / 5 ms | 54 / 57 / 34 ms | 71 / 238 / 77 ms |
+| sorted by `ST_Hilbert`, with a covering | 1 / 35 / 4 ms | 2 / 49 / 4 ms | 5 / 188 / 13 ms |
+| `BLOB` of WKB, sorted, with a covering | 6 / 42 / 9 ms (Parquet) | not measured | 5 / 263 / 16 ms |
+| `BLOB` of WKB, sorted, no covering | 136 / 137 / 144 ms (Parquet) | not measured | 941 / 953 / 948 ms |
+
+- **Why not `ST_Intersects AND ST_Intersects_Extent`:** on DuckDB 2.0 it is 9 / 36 / 15 ms without an index. On
+  DuckDB 1.4.3, the browser's engine, it is no faster than `ST_Intersects` alone (162 / 153 / 142 ms), and it loses
+  the R-tree index (164 / 147 / 137 ms with one). Nobody else writes it. `ST_Intersects(g, L)` alone is what DuckDB's
+  documentation, rustac and cql2-rs write. A data source made fast (an index, a covering, rows sorted spatially) is
+  fast on every engine.
+- **The covering** is what Overture's documentation and Martin (MapLibre's tile server) write: the comparisons first,
+  then `ST_Intersects`. DuckDB 2.0 doesn't use a GeoParquet 1.1 covering by itself: on a 730 MB Overture places file
+  read over HTTP, `ST_Intersects` alone read all 256 row groups (18.7 s), and with the comparisons 11 (1.9 s). Bound
+  `$n::DOUBLE` parameters are pushed into the Parquet scan like literals (DuckDB 2.0). Only outside a NOT: a value whose box
+  survived but that isn't a geometry would give FALSE there instead of NULL.
+- **Exactness:** DuckDB's `ST_Intersects`, alone or after the covering's comparisons, gives the same states as
+  `evaluate` for all 5,705 literals of `demo-server/test/spatial.test.ts`, on `GEOMETRY` and `BLOB` columns, in Node
+  (with and without the index) and in DuckDB-WASM. SQLite runs `evaluate`'s engine, so it is exact by construction;
+  the tests check the decoding.
+- **The R-tree and NOT:** GeoPackage's R-tree holds no NULL or empty geometries, so a prefilter on it gives FALSE where
+  `evaluate` gives NULL. In three-valued logic, a condition that is TRUE with a NULL leaf is TRUE with FALSE there too,
+  and only NOT turns FALSE into TRUE, so the prefilter selects the same rows for a leaf under an even number of NOTs.
+  `toSql` passes that to `Dialect.intersects`; under a NOT the function alone decides. Every exact form that keeps
+  the prefilter under a NOT was measured and lost the speed (0.8–3.3 s).
+- **No JavaScript function in DuckDB:** DuckDB-WASM hands a BLOB to one as UTF-8-decoded text (each byte ≥ 0x80
+  becomes U+FFFD), so WKB can't reach it; passing it as hex works in both runtimes but costs 50% more in Node, on a
+  path a hundred times slower than the extension. DuckDB's spatial filters need the extension, which loads in
+  DuckDB-WASM.
+
+**DuckDB: what we rely on.** DuckDB's spatial support is moving fast (GEOMETRY moved into its core in 1.5, with
+statistics per row group), and DuckDB-WASM ships an older engine than Node. So the spatial tests run on both engines
+(`test/sql-spatial-duckdb.test.ts`, `test/sql-spatial-duckdb-1.4.test.ts`; a process loads one DuckDB, hence one file
+each), and canaries state what the dialect relies on. Each fails when a DuckDB release changes it:
+
+| Canary | When it fails |
+|---|---|
+| plain `ST_GeomFromWKB` fails the query on bytes that aren't WKB | `TRY(…)` may go |
+| DuckDB 2.0 fails on a covering for a table with an R-tree index | lift the limitation (`SqlColumn.covering`, README) |
+| DuckDB 2.0 skips no row group of a GeoParquet 1.1 file from its covering by itself | the covering's comparisons may become unnecessary |
+| on DuckDB 2.0, `ST_Intersects` alone is more than 3× slower than with `ST_Intersects_Extent`, without an index | the gap closed: no engine option needed. If it persists through releases, it is the evidence for an explicit engine option (none is planned; `toSql` never sees the connection, and the runtime isn't the engine version) |
+
+When DuckDB-WASM ships a newer engine, the `@duckdb/node-api-1.4` devDependency moves to that engine.
 
 ### Errors
 
@@ -324,7 +392,15 @@ filter selects). The server never knows which store it talks to.
   - the same 5,705 literals through `toSql` (`postgres`) and demo-server's PostgreSQL store: the same states as
     `evaluate`; the four-store comparison has spatial filters too, from GeoJSON and PostgreSQL in 4326 (also exactly on
     vertices) and in 3857 (with margin: 58 of 141 literals placed exactly on the original vertices differ there,
-    because the stored 3857 coordinates don't convert back exactly);
+    because the stored 3857 coordinates don't convert back exactly), and since 0.9.0 from the GeoPackage, whose store
+    also runs the 5,705 literals (through GeoPackage's R-tree);
+  - `test/sql-spatial.test.ts` (0.9.0): 132 spatial filters, nested NOTs among them, in SQLite on GeoPackage blobs
+    with and without the envelope, WKB, big-endian extended WKB, and with GeoPackage's R-tree, with empty geometries,
+    NULL, text, bytes that aren't a geometry, and coordinates no 32-bit float holds: the same rows as `evaluate`;
+  - `test/duckdb-spatial.ts` (0.9.0), once on DuckDB 2.0 and once on DuckDB 1.4.3 (DuckDB-WASM's engine): the same 132
+    filters on `GEOMETRY` and `BLOB` columns, each without a covering and with `DOUBLE` and `FLOAT` covering fields
+    (values whose box survived without a geometry among them); the R-tree index used (`EXPLAIN`) for a box, a
+    geometry parameter and the antimeridian; and the canaries of "DuckDB: what we rely on";
   - PostgreSQL's `cql2_accenti` against the JavaScript rule on every code point of the Basic Multilingual Plane
     (63,487) for 0.5.0: no difference;
   - each rule was broken once on purpose, to show the tests catch it.
@@ -369,8 +445,9 @@ checks that they agree.
 | 0.6.0 | **Spatial, phase A:** the three spatial classes in the types, `validate` and `text` (WKT per the grammar), so spatial filters can be built, checked and sent; `evaluate` and `sql` refuse them (`unsupported`) |
 | 0.7.0 | **Spatial, phase B:** `evaluate` tests `s_intersects` (Basic Spatial Functions and Basic plus) in memory, checked with the standard's Natural Earth test and against GEOS |
 | 0.8.0 | **Spatial, phase C:** `s_intersects` in the `postgres` dialect (PostGIS), exact and indexed |
+| 0.9.0 | **Spatial, phase D:** `s_intersects` in the `sqlite` dialect (GeoPackage, `evaluate`'s engine as a function, GeoPackage's R-tree outside a NOT) and the `duckdb` dialect (the spatial extension's `ST_Intersects`, exact, indexed; GeoParquet's bbox covering outside a NOT; tested on DuckDB 2.0 and 1.4.3); DuckDB's numbers bound as text, for DuckDB-WASM |
+| 0.10.0 | **Spatial Functions** (the other seven relations, DE-9IM): PostGIS, DuckDB's extension, **SpatiaLite** as a built-in option of the `sqlite` dialect, and an optional engine hook in `evaluate`; one reference, GEOS |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
-| next | **spatial engines**: Basic and Basic plus in SQLite / GeoPackage and DuckDB, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
