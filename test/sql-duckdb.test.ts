@@ -187,6 +187,34 @@ describe("DuckDB selects exactly what evaluate selects", () => {
   });
 });
 
+// --- validate with queryables against evaluate -------------------------------------------------------------------
+
+describe("validate with the table's queryables refuses only filters evaluate can't match", () => {
+  const leaves = generate().filter((f) => typeof f === "object" && !["and", "or", "not"].includes(f.op));
+  const isMismatch = (f: Cql2Filter) => {
+    const result = validate(f, { queryables: COLUMNS });
+    return !result.valid && result.problems.every((x) => x.code === "type-mismatch");
+  };
+  // GeoJSON has no date type: dates and instants are served as strings. So, without queryables, evaluate casts between
+  // the two, which CQL2 permits (/per/basic-cql2/type-casts): a date or date-time property compared with a string
+  // (or LIKE) is compared as its text; a text property compared with a date or timestamp is read as one.
+  const castsStringAndDate = (f: Cql2Filter) => {
+    const [subject, value] = (f as unknown as { args: unknown[] }).args as [{ property?: string; args?: [{ property: string }] }, unknown];
+    const column = COLUMNS[subject.property ?? subject.args![0].property]!;
+    const literals = Array.isArray(value) ? value : [value];
+    const instant = (l: unknown) => typeof l === "object" && l !== null && ("date" in l || "timestamp" in l);
+    if (column.type === "string" && column.format !== undefined) return literals.every((l) => !instant(l));
+    return column.type === "string" && literals.every(instant);
+  };
+
+  it("a refused leaf selects no row, and neither does its NOT (it is NULL), except through those casts", () => {
+    const refused = leaves.filter(isMismatch);
+    expect(refused.length).toBeGreaterThan(1000);
+    const selecting = refused.filter((f) => fromEvaluate(f).length > 0 || fromEvaluate({ op: "not", args: [f] } as Cql2Filter).length > 0);
+    expect(selecting.filter((f) => !castsStringAndDate(f)).map((f) => JSON.stringify(f)).slice(0, 10)).toEqual([]);
+  });
+});
+
 // --- The SQL it builds -----------------------------------------------------------------------------------------------
 
 describe("the SQL it builds", () => {

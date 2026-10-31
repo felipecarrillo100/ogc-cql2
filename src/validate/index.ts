@@ -9,7 +9,7 @@
  */
 import { CONFORMANCE, OTHER_CONFORMANCE } from "../core/conformance.js";
 import { Cql2Error } from "../core/errors.js";
-import type { Cql2Filter } from "../core/types.js";
+import type { Cql2Filter, Queryable } from "../core/types.js";
 
 export type ProblemCode =
   /** Not a filter at all: not an object, no `op`, or an expression that gives no TRUE / FALSE (`casei`, `+`…). */
@@ -20,8 +20,13 @@ export type ProblemCode =
   | "outside-profile"
   /** The wrong number or kind of arguments for the operator. */
   | "wrong-arguments"
-  /** Operands whose types can't match: `CASEI` with a number, `LIKE` with a number, `BETWEEN` with a string. */
+  /**
+   * Operands whose types can't match: `CASEI` with a number, `LIKE` with a number, `BETWEEN` with a string; with
+   * `options.queryables`, also a literal of another type than the property's (`/per/basic-cql2/type-casts`).
+   */
   | "type-mismatch"
+  /** With `options.queryables`: a property that isn't one of them. */
+  | "unknown-property"
   /** An `IN` list whose literals aren't all of one type (`/req/advanced-comparison-operators/in-predicate` B). */
   | "mixed-list"
   /** An empty `IN` list: CQL2-text's grammar (`inList`) needs at least one item. */
@@ -50,6 +55,13 @@ export interface ValidateOptions {
    * profile's classes not listed here gets a `needs-conformance` problem. Default: all of the profile.
    */
   readonly conformance?: readonly string[];
+  /**
+   * The properties a filter may use and their types, typically a collection's queryables (OGC API Features Part 3):
+   * a queryables response's `properties`, as it comes. A property not listed is `unknown-property`; a literal that
+   * can't be of the property's type is `type-mismatch`, which CQL2 lets a server answer with an error
+   * (`/per/basic-cql2/type-casts`). A queryable without a `type` accepts any literal. Default: no check.
+   */
+  readonly queryables?: Readonly<Record<string, Queryable | object>>;
 }
 
 export type ValidationResult =
@@ -88,12 +100,57 @@ const argsOf = (x: Json): unknown[] | undefined => (Array.isArray(x.args) ? x.ar
 /** The type of a literal on the right, for the type checks. */
 type LiteralKind = "string" | "number" | "boolean" | "date" | "timestamp" | "casei-string";
 
+/** What a queryable holds, for the type checks; `any` when it doesn't say. */
+type HeldKind = "text" | "date" | "instant" | "number" | "boolean" | "other" | "any";
+
+function heldKind(q: Queryable): HeldKind {
+  if (typeof q.format === "string" && q.format.startsWith("geometry-")) return "other";
+  // JSON Schema allows a list of types: a nullable property is ["string", "null"]. NULL is always possible in CQL2.
+  const types: unknown = Array.isArray(q.type) ? q.type.filter((t) => t !== "null") : q.type;
+  const type = Array.isArray(types) ? (types.length === 1 ? types[0] : undefined) : types;
+  if (type === undefined) return q.format === "date" ? "date" : q.format === "date-time" ? "instant" : "any";
+  if (type === "string") return q.format === "date" ? "date" : q.format === "date-time" ? "instant" : "text";
+  if (type === "number" || type === "integer") return "number";
+  if (type === "boolean") return "boolean";
+  return "other";
+}
+
+/** The literals each kind of property can be compared with. */
+const ACCEPTS: Readonly<Record<HeldKind, readonly LiteralKind[]>> = {
+  text: ["string", "casei-string"],
+  date: ["date"],
+  instant: ["timestamp"],
+  number: ["number"],
+  boolean: ["boolean"],
+  other: [],
+  any: ["string", "casei-string", "number", "boolean", "date", "timestamp"],
+};
+
+/** What to compare a property of this kind with, for the messages. */
+const WRITE: Readonly<Record<Exclude<HeldKind, "any">, string>> = {
+  text: `is a string: compare it with a string, e.g. "Main"`,
+  date: `is a date: compare it with a date literal, e.g. { "date": "2020-07-26" }`,
+  instant: `is an instant: compare it with a timestamp literal, e.g. { "timestamp": "2020-07-26T12:00:00Z" }`,
+  number: `is a number: compare it with a number, e.g. 5 (not "5")`,
+  boolean: `is a boolean: compare it with true or false`,
+  other: `can't be compared in the profile; it can only be tested with isNull`,
+};
+
+/** A subject that passed the checks: whether it is `casei(…)`, and its property's kind (`any` without queryables). */
+interface Subject {
+  readonly casei: boolean;
+  readonly name: string;
+  readonly held: HeldKind;
+}
+
 class Checker {
   readonly problems: Problem[] = [];
   readonly #allowed: ReadonlySet<string> | undefined;
+  readonly #queryables: ValidateOptions["queryables"];
 
   constructor(options: ValidateOptions) {
     this.#allowed = options.conformance ? new Set(options.conformance) : undefined;
+    this.#queryables = options.queryables;
   }
 
   report(code: ProblemCode, path: string, message: string, conformance?: string): void {
@@ -164,9 +221,12 @@ class Checker {
     );
   }
 
-  /** The left side: a property, or `casei(property)`. Returns whether it is `casei`, or `undefined` if invalid. */
-  subject(x: unknown, path: string, allowCasei = true): { casei: boolean } | undefined {
-    if (isPropertyRef(x)) return this.property(x, path) ? { casei: false } : undefined;
+  /** The left side: a property, or `casei(property)`; `undefined` if invalid. */
+  subject(x: unknown, path: string, allowCasei = true): Subject | undefined {
+    if (isPropertyRef(x)) {
+      const held = this.property(x, path);
+      return held === undefined ? undefined : { casei: false, name: x.property as string, held };
+    }
     if (opOf(x) === "casei" && allowCasei) {
       const args = argsOf(x as Json);
       if (!args || args.length !== 1) {
@@ -178,16 +238,42 @@ class Checker {
         return undefined;
       }
       this.uses(CONFORMANCE.caseInsensitive, path, "CASEI");
-      return this.property(args[0], `${path}/args/0`) ? { casei: true } : undefined;
+      const held = this.property(args[0], `${path}/args/0`);
+      if (held === undefined) return undefined;
+      const name = args[0].property as string;
+      if (held !== "text" && held !== "any") {
+        this.report("type-mismatch", `${path}/args/0`, `casei(…) works on strings, and "${name}" ${WRITE[held]}.`);
+        return undefined;
+      }
+      return { casei: true, name, held };
     }
     this.notInProfile(x, path, "The left side");
     return undefined;
   }
 
-  property(x: { property: unknown }, path: string): boolean {
-    if (typeof x.property === "string") return true;
-    this.report("wrong-arguments", `${path}/property`, `"property" must be a string, the property's name.`);
-    return false;
+  /** A property reference: its kind (`any` without queryables), or `undefined` after reporting a problem. */
+  property(x: { property: unknown }, path: string): HeldKind | undefined {
+    if (typeof x.property !== "string") {
+      this.report("wrong-arguments", `${path}/property`, `"property" must be a string, the property's name.`);
+      return undefined;
+    }
+    if (!this.#queryables) return "any";
+    const q = Object.hasOwn(this.#queryables, x.property) ? this.#queryables[x.property] : undefined;
+    if (q === undefined) {
+      this.report(
+        "unknown-property", path,
+        `"${x.property}" is not a queryable here. The queryables: ${Object.keys(this.#queryables).join(", ") || "none"}.`,
+      );
+      return undefined;
+    }
+    return heldKind(q as Queryable);
+  }
+
+  /** Reports a literal that the subject's property can't be compared with. Returns whether it reported. */
+  against(subject: Subject | undefined, kind: LiteralKind | undefined, path: string): boolean {
+    if (!subject || !kind || subject.held === "any" || ACCEPTS[subject.held].includes(kind)) return false;
+    this.report("type-mismatch", path, `"${subject.name}" ${WRITE[subject.held]}.`);
+    return true;
   }
 
   /** A literal on the right. Returns its kind, or `undefined` after reporting why it isn't one. */
@@ -287,16 +373,20 @@ class Checker {
     // CASEI('x') against a plain property is valid: the property's value is then compared as it is.
     if (subject?.casei && kind && kind !== "string" && kind !== "casei-string") {
       this.report("type-mismatch", `${path}/args/1`, `casei(…) is a string, so it can only be compared with a string.`);
+    } else {
+      this.against(subject, kind, `${path}/args/1`);
     }
   }
 
   like(args: unknown[], path: string): void {
     this.uses(CONFORMANCE.advancedComparison, path, "LIKE");
     if (args.length !== 2) return this.report("wrong-arguments", `${path}/args`, `"like" needs exactly two arguments.`);
-    this.subject(args[0], `${path}/args/0`);
+    const subject = this.subject(args[0], `${path}/args/0`);
     const kind = this.literal(args[1], `${path}/args/1`);
     if (kind && kind !== "string" && kind !== "casei-string") {
       this.report("type-mismatch", `${path}/args/1`, `A LIKE pattern is a string, e.g. "Riv%".`);
+    } else if (subject && subject.held !== "text" && subject.held !== "any") {
+      this.report("type-mismatch", `${path}/args/0`, `LIKE works on strings, and "${subject.name}" ${WRITE[subject.held]}.`);
     }
   }
 
@@ -307,14 +397,22 @@ class Checker {
         "wrong-arguments", `${path}/args`, `"between" needs three arguments: a property, the low and the high value.`,
       );
     }
+    let subject: Subject | undefined;
     if (opOf(args[0]) === "casei") {
       this.report("type-mismatch", `${path}/args/0`, `BETWEEN works on numbers only, and casei(…) is a string.`);
     } else {
-      this.subject(args[0], `${path}/args/0`, false);
+      subject = this.subject(args[0], `${path}/args/0`, false);
     }
+    let numbers = true;
     for (const i of [1, 2]) {
       const kind = this.literal(args[i], `${path}/args/${i}`);
-      if (kind && kind !== "number") this.report("type-mismatch", `${path}/args/${i}`, `BETWEEN works on numbers only.`);
+      if (kind && kind !== "number") {
+        this.report("type-mismatch", `${path}/args/${i}`, `BETWEEN works on numbers only.`);
+        numbers = false;
+      }
+    }
+    if (numbers && subject && subject.held !== "number" && subject.held !== "any") {
+      this.report("type-mismatch", `${path}/args/0`, `BETWEEN works on numbers, and "${subject.name}" ${WRITE[subject.held]}.`);
     }
   }
 
@@ -329,7 +427,7 @@ class Checker {
       return this.report("wrong-arguments", `${path}/args/1`, `The second argument of "in" is a list (an array) of literals.`);
     }
     if (list.length === 0) return this.report("empty-list", `${path}/args/1`, `An IN list needs at least one value.`);
-    const kinds = new Set<string>();
+    const kinds = new Set<LiteralKind>();
     list.forEach((item, i) => {
       const kind = this.literal(item, `${path}/args/1/${i}`);
       if (kind) kinds.add(kind === "casei-string" ? "string" : kind);
@@ -341,6 +439,8 @@ class Checker {
       );
     } else if (subject?.casei && kinds.size === 1 && !kinds.has("string")) {
       this.report("type-mismatch", `${path}/args/1`, `casei(…) is a string, so the list must hold strings.`);
+    } else if (kinds.size === 1) {
+      this.against(subject, [...kinds][0], `${path}/args/1`);
     }
   }
 

@@ -135,6 +135,13 @@ describe("refusals, as application/problem+json", () => {
     const answer = await problem(await query("states", { filter: { op: "=", args: [{ property: "population" }, 1] } }), 400, "invalid-filter");
     assert.equal(answer.problems[0].code, "unknown-property");
     assert.match(answer.problems[0].message, /"population" is not a queryable/);
+    assert.equal(answer.problems[0].path, "/args/0");
+  });
+
+  it("a literal of another type than the queryable's, instead of an empty answer", async () => {
+    const answer = await problem(await query("states", { filter: { op: ">", args: [{ property: "POP1996" }, "10000000"] } }), 400, "invalid-filter");
+    assert.deepEqual(answer.problems.map((x: { code: string; path: string }) => [x.code, x.path]), [["type-mismatch", "/args/1"]]);
+    assert.match(answer.problems[0].message, /"POP1996" is a number: compare it with a number/);
   });
 
   it("a body without a filter, a bad limit or offset, a body that isn't JSON", async () => {

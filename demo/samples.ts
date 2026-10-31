@@ -56,7 +56,7 @@ const KITCHEN_SINK_EXAMPLES: readonly Example[] = [
   { label: "Code contains a literal % (escaped)", filter: { op: "like", args: [p("code"), "%\\%%"] } },
   { label: "Day is 26 July 2020", filter: { op: "=", args: [p("day"), { date: "2020-07-26" }] } },
   { label: "An instant in 2023 or later", filter: { op: ">=", args: [p("at"), { timestamp: "2023-01-01T00:00:00Z" }] } },
-  { label: "A local time (no offset) against an instant: always NULL", filter: { op: ">", args: [p("local_at"), { timestamp: "2000-01-01T00:00:00Z" }] } },
+  { label: "A local time (no offset) against an instant: a type mismatch (the server refuses it)", filter: { op: ">", args: [p("local_at"), { timestamp: "2000-01-01T00:00:00Z" }] } },
   { label: "A note that looks like a date is still text", filter: { op: "=", args: [p("note"), "2020-07-26"] } },
   { label: "Amount between 1 and 10", filter: { op: "between", args: [p("amount"), 1, 10] } },
   { label: "The largest exact integers (±2^53 − 1)", filter: { op: ">=", args: [p("big"), 9007199254740991] } },
