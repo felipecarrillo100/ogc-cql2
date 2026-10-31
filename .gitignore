@@ -35,3 +35,7 @@ pnpm-debug.log*
 ._*
 Thumbs.db
 Desktop.ini
+
+# Claude Code: local instructions and research logs (not published)
+CLAUDE.local.md
+research/
