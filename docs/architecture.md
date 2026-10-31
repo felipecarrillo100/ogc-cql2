@@ -290,7 +290,7 @@ each), and canaries state what the dialect relies on. Each fails when a DuckDB r
 | plain `ST_GeomFromWKB` fails the query on bytes that aren't WKB | `TRY(…)` may go |
 | DuckDB 2.0 fails on a covering for a table with an R-tree index | lift the limitation (`SqlColumn.covering`, README) |
 | DuckDB 2.0 skips no row group of a GeoParquet 1.1 file from its covering by itself | the covering's comparisons may become unnecessary |
-| on DuckDB 2.0, `ST_Intersects` alone is more than 3× slower than with `ST_Intersects_Extent`, without an index | the gap closed: no engine option needed. If it persists through releases, it is the evidence for an explicit engine option (none is planned; `toSql` never sees the connection, and the runtime isn't the engine version) |
+| on DuckDB 2.0, `ST_Intersects` alone is more than 3× slower than with `ST_Intersects_Extent`, without an index (a timing: it only reports the ratio, and fails on it only with `CQL2_CANARY_TIMING=1`, so the machine's load can't fail a test run) | the gap closed: no engine option needed. If it persists through releases, it is the evidence for an explicit engine option (none is planned; `toSql` never sees the connection, and the runtime isn't the engine version) |
 
 When DuckDB-WASM ships a newer engine, the `@duckdb/node-api-1.4` devDependency moves to that engine.
 
