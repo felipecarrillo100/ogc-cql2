@@ -17,10 +17,10 @@
  * The file is opened read-only.
  */
 import { DatabaseSync } from "node:sqlite";
-import type { Cql2Filter } from "ogc-cql2";
+import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeGeoPackageBinary, type Geometry } from "../geopackage/binary.ts";
-import type { CollectionDescription, Feature, Queryable, Store } from "./types.ts";
+import { BASE_CLASSES, type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
 
 export interface GeoPackageSource {
   readonly file: string;
@@ -70,9 +70,25 @@ interface Row {
 }
 
 /** Opens the GeoPackage and makes one store per served table. Throws if the file can't be served at all. */
+/** Loads SpatiaLite (mod_spatialite) from CQL2_SPATIALITE or the usual places; whether it loaded. */
+export function loadSpatialite(db: DatabaseSync): boolean {
+  for (const path of [process.env.CQL2_SPATIALITE, "/opt/homebrew/lib/mod_spatialite", "/usr/local/lib/mod_spatialite", "/usr/lib/x86_64-linux-gnu/mod_spatialite", "mod_spatialite"]) {
+    if (!path) continue;
+    try {
+      db.loadExtension(path);
+      return true;
+    } catch {
+      // the next place
+    }
+  }
+  return false;
+}
+
 export function openGeoPackage(source: GeoPackageSource): { stores: { id: string; store: Store }[]; warnings: string[] } {
-  const db = new DatabaseSync(source.file, { readOnly: true });
+  const db = new DatabaseSync(source.file, { readOnly: true, allowExtension: true });
   for (const [name, fn] of Object.entries(sqliteFunctions)) db.function(name, { deterministic: true }, fn as never);
+  // SpatiaLite, when it is installed, answers the Spatial Functions class (S_WITHIN, S_TOUCHES, …).
+  const spatialite = loadSpatialite(db);
   const all = (sql: string, ...params: unknown[]) => db.prepare(sql).all(...(params as never[])) as Row[];
 
   const applicationId = Number(all("PRAGMA application_id")[0]!.application_id);
@@ -103,7 +119,7 @@ export function openGeoPackage(source: GeoPackageSource): { stores: { id: string
       continue;
     }
     try {
-      stores.push({ id, store: tableStore(db, id, row) });
+      stores.push({ id, store: tableStore(db, id, row, spatialite) });
     } catch (error) {
       warnings.push(`Table "${table}" not served: ${(error as Error).message}`);
     }
@@ -121,7 +137,7 @@ function hasRtree(db: DatabaseSync, table: string, column: string): boolean {
   }
 }
 
-function tableStore(db: DatabaseSync, id: string, contents: Row): Store {
+function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boolean): Store {
   const table = String(contents.table_name);
   const all = (sql: string, ...params: unknown[]) => db.prepare(sql).all(...(params as never[])) as Row[];
   const columns = all(`PRAGMA table_info(${quote(table)})`) as { name: string; type: string; pk: number }[];
@@ -206,8 +222,9 @@ function tableStore(db: DatabaseSync, id: string, contents: Row): Store {
     describe: description,
     queryables: () => queryables,
     hasGeometry: () => withGeometry,
+    conformance: () => (spatialite ? [...BASE_CLASSES, CONFORMANCE.spatial] : BASE_CLASSES),
     async query(filter: Cql2Filter, { limit, offset }) {
-      const { where, params } = toSql(filter, { dialect: "sqlite", columns: filterColumns });
+      const { where, params } = toSql(filter, { dialect: "sqlite", columns: filterColumns, spatialite });
       const rows = all(`SELECT ${select} FROM ${from} WHERE ${where} ORDER BY ${quote(idColumn.name)} LIMIT ? OFFSET ?`, ...params, limit, offset);
       const numberMatched = Number(all(`SELECT COUNT(*) AS n FROM ${from} WHERE ${where}`, ...params)[0]!.n);
       return { features: rows.map(toFeature), numberMatched };

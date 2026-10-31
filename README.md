@@ -1,5 +1,7 @@
 # ogc-cql2
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-❤️-ff69b4?style=for-the-badge&logo=github)](https://github.com/sponsors/felipecarrillo100)
+
 OGC **CQL2 1.0.0**, the Common Query Language ([OGC 21-065r2](https://docs.ogc.org/is/21-065r2/21-065r2.html)), for
 JavaScript and TypeScript. It works on filters in the standard's JSON encoding, **CQL2-JSON**:
 
@@ -30,11 +32,13 @@ The package implements these conformance classes:
 | Accent-insensitive Comparison | `accenti` | ✅ | ✅ | ✅ |
 | Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | ✅ |
 | Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | ✅ |
-| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | not yet | not yet |
+| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB; SQLite with SpatiaLite |
 
 Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
-`s_intersects` in memory; `sql` in SQLite and GeoPackage (with the package's own functions), in PostGIS, and in DuckDB
-(with its spatial extension). The other relations are refused with the code `unsupported` until their engines arrive.
+`s_intersects` and `s_disjoint` in memory, and the other relations with a geometry engine you plug in (GEOS in
+WebAssembly, for one); `sql` translates them for PostGIS and DuckDB (with its spatial extension), and for SQLite and
+GeoPackage (`s_intersects` with the package's own functions, the other relations with SpatiaLite). Where an engine is
+missing, a filter is refused with the code `unsupported`.
 
 It accepts the form every server of those classes must support: a property on the left, a literal on the right.
 Anything else that is valid CQL2 (temporal and array functions, arithmetic, comparing two
@@ -211,6 +215,16 @@ const rows = db.prepare(`SELECT * FROM places WHERE ${where}`).all(...params);
   come from it (on a million rows, a small box took 3 ms instead of 811 ms). The R-tree holds no NULL or empty
   geometries, so it is used only where that changes no answer, outside a NOT: negate the filter (`{ op: "not" }`),
   never the SQL it gives.
+- **The other relations (Spatial Functions) need SpatiaLite:** load `mod_spatialite` on the connection and pass
+  `spatialite: true`; GEOS then decides each relation, exactly as `evaluate` with GEOS does. SpatiaLite reads
+  GeoPackage blobs itself; anything it can't read (WKB, empty geometries) goes through `cql2_wkt`, the package's own
+  reader. The R-tree applies as for `s_intersects`.
+
+  ```js
+  const db = new DatabaseSync("places.gpkg", { allowExtension: true });
+  db.loadExtension("mod_spatialite"); // its path where the loader doesn't look, e.g. "/opt/homebrew/lib/mod_spatialite"
+  const { where, params } = toSql(filter, { dialect: "sqlite", columns, spatialite: true });
+  ```
 
 ## SQL (PostgreSQL)
 
@@ -246,6 +260,11 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
   does. PostGIS's own `ST_Intersects`, and from PostGIS 3.7 `ST_Disjoint`, aren't used: on arm64 machines (Apple
   Silicon, AWS Graviton) they miss a point lying exactly on an edge. A GeometryCollection literal is tested member by
   member, which GEOS 3.11 needs; a column holding GeometryCollections needs GEOS 3.13 or later (3.9 works too).
+- **The other relations (Spatial Functions):** `ST_Equals`, and `ST_Touches` / `ST_Overlaps` / `ST_Crosses` behind
+  `&&`; `s_within` and `s_contains` as `geom @ literal AND ST_Relate(geom, literal, 'T*F**F***')` and `geom ~ literal
+  AND ST_Relate(…, 'T*****FF*')`, since `ST_Within` and `ST_Contains` take the same point-in-polygon shortcut;
+  `s_disjoint` as the negation of `s_intersects`. Each uses the GiST index but `s_disjoint`, which no index can
+  speed up. A box across the antimeridian is one literal, its two halves collected.
 - **Another SRID, or geography:** a column in another SRID (`srid: 3857`, or `geometry(Point, 3857)`) is transformed
   to 4326, so the comparison is planar in CRS84, as CQL2's is; a geography column is read as geometry. Neither can
   use a plain index on the column, so give it an expression index, which the SQL then uses:
@@ -379,6 +398,9 @@ open().then(({ db, connection }) => {
   The comparisons are used only where the filter isn't negated: negate the filter (`{ op: "not" }`), never the SQL it
   gives (`NOT (…)`). Leave `covering` out for a table with an R-tree index on the geometry, which is faster on its own:
   DuckDB 2.0 fails on such a query with an internal error.
+- **The other relations (Spatial Functions):** `ST_Equals`, `ST_Touches`, `ST_Within`, `ST_Overlaps`, `ST_Crosses`,
+  `ST_Contains` (exact in DuckDB 1.4, 1.5 and 2.0, each using an R-tree index), with the covering's comparisons first
+  as for `s_intersects`; `s_disjoint` as the negation of `s_intersects`.
 - **Fast without a covering:** an R-tree index (`CREATE INDEX … USING RTREE (geom)`), or rows sorted spatially
   (`ORDER BY ST_Hilbert(geom, …)`) in moderate row groups, as GeoParquet's guidance recommends. On unsorted data
   without an index, `ST_Intersects` tests every row.
@@ -432,6 +454,37 @@ features.filter(inView); // the features the box touches
 - **Tested** with the standard's own Natural Earth test (Table 12: 8, 10, 1, 3, 5, 10, 7, 4 features), and against
   GEOS on the US states for thousands of generated literals placed exactly on their vertices and edges.
 
+**The other relations in memory** (`s_within`, `s_touches`, …: Spatial Functions) need a planar geometry engine,
+which `evaluate` doesn't bundle. Plug one in with `spatialEngine`: it only computes DE-9IM matrices, and the package
+decides what each relation means (the standard's patterns, the dimension rules of `s_overlaps` and `s_crosses`), so
+every engine gives the same answers. GEOS in WebAssembly, through [geos.js](https://www.npmjs.com/package/geos.js)
+(GEOS is LGPL), takes a few lines:
+
+```js
+import { fromGeoJSON, initializeFromBase64, prepare, relate } from "geos.js";
+
+await initializeFromBase64(); // once, before the first filter
+const geos = {
+  prepare(literal) {
+    const prepared = prepare(fromGeoJSON(literal)); // once per filter
+    return {
+      relate(geometry) {
+        const g = fromGeoJSON(geometry);
+        try { return relate(prepared, g); } finally { g.free(); }
+      },
+    };
+  },
+};
+features.filter(toPredicate(inArea, { spatialEngine: geos }));
+```
+
+- **The engine never sees** NULLs, values that aren't a geometry, or empty geometries; a box comes as a polygon
+  (across the antimeridian, a multipolygon). An engine that throws for a feature (an invalid polygon) makes that
+  feature NULL.
+- **`s_intersects` and `s_disjoint`** keep the package's own exact engine, with or without one plugged in.
+- **Tested** with the standard's own Natural Earth test for Spatial Functions (Table 14: all 26 predicates and their
+  counts), and against PostGIS on the US states for every relation.
+
 **In SQL**, the three dialects give the same answers as `evaluate`: see "Spatial filters" in the SQLite, PostgreSQL
 and DuckDB sections above.
 
@@ -459,8 +512,8 @@ them:
 
 Every refusal throws a `Cql2Error` with a `code`, a `path` and `details`: `invalid-filter` (not a valid filter in the
 profile), `not-expressible` (`toText`: valid, but CQL2-text can't write it), `unknown-property` (`toSql`: a property
-that isn't one of the table's columns) or `unsupported` (`evaluate`, `toSql`: a valid filter of a class they don't
-evaluate yet, Spatial Functions; `details.conformance` names it).
+that isn't one of the table's columns) or `unsupported` (`evaluate`, `toSql`: a valid filter of a class there is no
+engine for, Spatial Functions without `spatialEngine` or SpatiaLite; `details.conformance` names it).
 Test `error.code`, not `instanceof`: that keeps working when two copies of the package end up in one application.
 
 ## Playground and demo server
@@ -492,6 +545,23 @@ them into PostgreSQL). Its routes:
 An invalid filter, or one naming a property the collection doesn't have, is refused with HTTP 400 and the problems as
 `application/problem+json`. Neither the page nor the server is part of the npm package.
 
+## Tested versions
+
+"Tested" means the differential tests (the same answers as `evaluate`, filter by filter) ran on that exact version.
+Older versions may well work, but haven't been tested.
+
+| Component | Tested | Notes |
+|---|---|---|
+| Node.js | 20.20.2, 22.23.4, 24.15.0 | 20 or later. Node 20 has no `node:sqlite`: use another SQLite driver there |
+| Browsers | Chrome 156 | the DuckDB-WASM checks |
+| PostgreSQL + PostGIS (GEOS) | 13 / 3.1.4 (3.9.0), 15 / 3.3.4 (3.9.0), 16 / 3.4.3 (3.9.0), 17 / 3.5.2 (3.9.0), 18 / 3.6.4 (3.14.1) on amd64; 17 / 3.5.3 (3.11.1), 17.10 / 3.5.6 (3.13.1), 18 / 3.6.1 (3.13.1), 18 / 3.7.0 (3.15.0) on arm64 | the spatial filters on all of them; every other filter on 17.10 / 3.5.6. A column holding GeometryCollections: GEOS 3.13 or later |
+| `pg` (node-postgres) | 8.23.1 | |
+| SQLite (`node:sqlite`) | 3.51.3 (Node 24.15), 3.53.4 (Node 22.23) | GeoPackage 1.4 |
+| SpatiaLite | 5.1.0 (GEOS 3.15.0) | for Spatial Functions in `sqlite` |
+| DuckDB, Node (`@duckdb/node-api`) | 2.0.0, 1.5.4, 1.4.3 | 1.5.4 by `npm run check:duckdb`, which tests the newest releases |
+| DuckDB-WASM (`@duckdb/duckdb-wasm`) | 1.32.0 (DuckDB 1.4.3), 1.33.1-dev57.0 (DuckDB 1.5.4) | with the spatial extension |
+| geos.js (as `spatialEngine`) | 0.1.5 (GEOS 3.14.0) | |
+
 ## More
 
 - [docs/vision.md](docs/vision.md): what the package is for, and its principles.
@@ -500,6 +570,23 @@ An invalid filter, or one naming a property the collection doesn't have, is refu
 - [docs/accent-research.md](docs/accent-research.md): accent-insensitive comparison: the standard, the engines, the decisions.
 - [docs/duckdb-case.md](docs/duckdb-case.md): why the package has a DuckDB dialect, and what was measured first.
 - [CHANGELOG.md](CHANGELOG.md)
+
+## Donations & sponsoring
+
+Building and maintaining open-source libraries takes time, and ogc-cql2 is tested against real databases and engines
+before every release. If it saves you work, please consider supporting its development: it keeps the project active
+and moving forward.
+
+Every bit of support is appreciated, whether it is sponsoring on GitHub, a coffee, a star, or a mention. Thank you
+for being part of the community!
+
+[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="180">](https://buymeacoffee.com/felipecarrillo100)
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-❤️-ff69b4?style=for-the-badge&logo=github)](https://github.com/sponsors/felipecarrillo100)
+
+[![PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?business=7X3JAPNBQTXZG&amount=5&no_recurring=0&item_name=NPM%2FGitHub+libraries&currency_code=USD)
+
+[![QR code for PayPal](https://raw.githubusercontent.com/felipecarrillo100/bankgreen/main/QR_Code_5Euro.png)](https://www.paypal.com/donate/?business=7X3JAPNBQTXZG&amount=5&no_recurring=0&item_name=NPM%2FGitHub+libraries&currency_code=USD)
 
 ## Licence
 

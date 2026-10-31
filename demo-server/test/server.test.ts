@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { toPredicate } from "ogc-cql2/evaluate";
 import { closeStores, createApp, loadStores } from "../src/server.ts";
 import { createGeoJsonStore } from "../src/stores/geojson.ts";
+import { loadSpatialite } from "../src/stores/geopackage.ts";
 
 const log: string[] = [];
 let server: Server;
@@ -147,6 +148,20 @@ describe("refusals, as application/problem+json", () => {
       answer.features.map((f: { properties: { STATE_NAME: string } }) => f.properties.STATE_NAME));
     const notGeometry = await problem(await query("states", { filter: { ...filter, args: [{ property: "POP1996" }, filter.args[1]] } }), 400, "invalid-filter");
     assert.equal(notGeometry.problems[0].code, "type-mismatch");
+  });
+
+  it("the other spatial relations: the GeoJSON collection answers them (GEOS), the GeoPackage one too with SpatiaLite", async () => {
+    const filter = { op: "s_within", args: [{ property: "geometry" }, { bbox: [-110, 35, -100, 45] }] };
+    const answer = await read(query("states", { filter }));
+    assert.ok(answer.numberMatched > 0 && answer.numberMatched < 11, `${answer.numberMatched} states wholly inside the box`);
+    const names = (a: { features: { properties: { STATE_NAME: string } }[] }) => a.features.map((f) => f.properties.STATE_NAME);
+    const { DatabaseSync } = await import("node:sqlite");
+    if (loadSpatialite(new DatabaseSync(":memory:", { allowExtension: true }))) {
+      assert.deepEqual(names(await read(query("gpkg-states", { filter }))), names(answer));
+    } else {
+      const refused = await problem(await query("gpkg-states", { filter }), 400, "invalid-filter");
+      assert.match(JSON.stringify(refused.problems), /spatial-functions/);
+    }
   });
 
   it("the queryables list the geometry, as OGC API Features Part 3 does", async () => {

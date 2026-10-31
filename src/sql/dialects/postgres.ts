@@ -11,7 +11,8 @@
  */
 import type { Fold } from "../../core/folds.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
-import type { Geometry, SpatialLiteral } from "../../core/types.js";
+import type { MatrixRelation } from "../../core/relate.js";
+import type { BboxLiteral, Geometry, SpatialLiteral } from "../../core/types.js";
 import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "geometry" | "geography" | "other";
@@ -208,26 +209,73 @@ function sridOf(column: SqlColumn): number {
  *   `(column::geometry)`. Heights are ignored (GEOS's predicates are 2D).
  */
 function postgresIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
-  const cls = pgClass(column);
-  if (cls !== "geometry" && cls !== "geography") return undefined;
-  const srid = cls === "geography" ? 4326 : sridOf(column);
-  const g = cls === "geography" ? `${sql}::geometry` : srid === 4326 ? sql : `ST_Transform(${sql}, 4326)`;
-  const geojson = (l: Geometry) => `ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(l))}), 4326)`;
+  const g = geometryOf(sql, column);
+  if (g === undefined) return undefined;
   const parts: string[] = [];
-  if ("bbox" in literal && !("type" in literal)) {
-    const b = literal.bbox;
-    const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
-    const s = param(south);
-    const n = param(north);
-    const box = (w: string, e: string) => `ST_MakeEnvelope(${w}::double precision, ${s}::double precision, ${e}::double precision, ${n}::double precision, 4326)`;
-    if (west > east) parts.push(box(param(west), "180"), box("-180", param(east))); // across the antimeridian: two boxes
-    else parts.push(box(param(west), param(east)));
-  } else {
+  if ("bbox" in literal && !("type" in literal)) parts.push(...boxes(literal, param)); // across the antimeridian: two boxes
+  else {
     const geometry = literal as Geometry;
-    parts.push(...(geometry.type === "GeometryCollection" ? geometry.geometries : [geometry]).map(geojson));
+    parts.push(...(geometry.type === "GeometryCollection" ? geometry.geometries : [geometry]).map((l) => geojson(l, param)));
   }
   const tests = parts.map((l) => `(${g} && ${l} AND NOT ST_Relate(${g}, ${l}, 'FF*FF****'))`);
   return tests.length === 1 ? tests[0]! : `(${tests.join(" OR ")})`;
+}
+
+/** The column as a geometry in 4326 (see {@link postgresIntersects}); `undefined` when it holds no geometry. */
+function geometryOf(sql: string, column: SqlColumn): string | undefined {
+  const cls = pgClass(column);
+  if (cls !== "geometry" && cls !== "geography") return undefined;
+  const srid = cls === "geography" ? 4326 : sridOf(column);
+  return cls === "geography" ? `${sql}::geometry` : srid === 4326 ? sql : `ST_Transform(${sql}, 4326)`;
+}
+
+const geojson = (l: Geometry, param: (value: SqlValue) => string) => `ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(l))}), 4326)`;
+
+/** A box literal as envelopes: one, or across the antimeridian (west > east) two. */
+function boxes(literal: BboxLiteral, param: (value: SqlValue) => string): string[] {
+  const b = literal.bbox;
+  const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
+  const s = param(south);
+  const n = param(north);
+  const box = (w: string, e: string) => `ST_MakeEnvelope(${w}::double precision, ${s}::double precision, ${e}::double precision, ${n}::double precision, 4326)`;
+  return west > east ? [box(param(west), "180"), box("-180", param(east))] : [box(param(west), param(east))];
+}
+
+/**
+ * The other relations of Spatial Functions, exactly as their DE-9IM patterns decide them (measured against GEOS's
+ * matrix on PostGIS 3.1–3.7, amd64 and arm64), each with the index operator that lets the GiST index find the
+ * candidates:
+ * - S_EQUALS: `ST_Equals` (it uses `~=` itself);
+ * - S_TOUCHES, S_OVERLAPS, S_CROSSES: `column && literal AND ST_Touches(…)`, … (exact; the dimension rules of
+ *   S_OVERLAPS and S_CROSSES are GEOS's own);
+ * - S_WITHIN, S_CONTAINS: `column @ literal AND ST_Relate(column, literal, 'T*F**F***')`, `column ~ literal AND
+ *   ST_Relate(…, 'T*****FF*')`. Not `ST_Within` / `ST_Contains`: they take PostGIS's point-in-polygon shortcut, which
+ *   misses points exactly on an edge.
+ * The literal is one geometry: a box across the antimeridian is its two halves collected, a GeometryCollection kept
+ * whole (these relations don't split into members).
+ */
+function postgresRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
+  const g = geometryOf(sql, column);
+  if (g === undefined) return undefined;
+  let l: string;
+  if ("bbox" in literal && !("type" in literal)) {
+    const parts = boxes(literal, param);
+    l = parts.length === 1 ? parts[0]! : `ST_Collect(${parts.join(", ")})`;
+  } else l = geojson(literal as Geometry, param);
+  switch (relation) {
+    case "s_equals":
+      return `ST_Equals(${g}, ${l})`;
+    case "s_within":
+      return `(${g} @ ${l} AND ST_Relate(${g}, ${l}, 'T*F**F***'))`;
+    case "s_contains":
+      return `(${g} ~ ${l} AND ST_Relate(${g}, ${l}, 'T*****FF*'))`;
+    case "s_touches":
+      return `(${g} && ${l} AND ST_Touches(${g}, ${l}))`;
+    case "s_overlaps":
+      return `(${g} && ${l} AND ST_Overlaps(${g}, ${l}))`;
+    case "s_crosses":
+      return `(${g} && ${l} AND ST_Crosses(${g}, ${l}))`;
+  }
 }
 
 export const postgres: Dialect = {
@@ -240,4 +288,5 @@ export const postgres: Dialect = {
   view: postgresView,
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))}`,
   intersects: postgresIntersects,
+  relate: postgresRelate,
 };

@@ -128,8 +128,18 @@ What the text can't express is refused as `not-expressible`, with the reason and
   polygon of the other (one vertex per component tells, once no boundaries meet). Orientation is exact: Shewchuk's
   `orient2d`, as ported in robust-predicates (public domain), copied with types into `src/evaluate/orient2d.ts` and
   checked identical to the original on 1,000,000 inputs. A box across the antimeridian is two boxes. Each feature
-  geometry's bounding box is computed once (cached per object) and tested first. The other relations (Spatial
-  Functions) are `unsupported` in `evaluate`.
+  geometry's bounding box is computed once (cached per object) and tested first. `S_DISJOINT` is its negation.
+- **The other relations (Spatial Functions, since 0.10.0)** need an engine the application plugs in
+  (`spatialEngine`); without one they are `unsupported`. The engine only computes DE-9IM matrices (`prepare(literal)`
+  once per filter, then `relate(geometry)` per feature, the literal first). Their meaning lives in one place,
+  `src/core/relate.ts`:
+  - Simple Features' patterns (CQL2's Table 4 has a typo in S_TOUCHES' second matrix);
+  - the dimension rules of S_OVERLAPS and S_CROSSES (a collection's dimension is its highest member's);
+  - the transposition.
+  So engines can't disagree on the meaning. The package keeps NULLs, values that aren't a geometry and empty
+  geometries (the matrix `FFFFFFFF2`) from the engine, and an engine's error gives NULL. GEOS in WebAssembly (geos.js)
+  is the engine recommended and tested; JSTS and turf were measured and not recommended (JSTS fails on collections,
+  turf gives wrong answers). See [spatial-research.md](spatial-research.md).
 - **Compiled once:** `toPredicate` and `toEvaluator` validate the filter and prepare its patterns and literals, so
   each feature costs only the comparisons.
 
@@ -167,6 +177,7 @@ SHOULD allow for values of an unexpected type, which SQLite permits in any colum
 | `{date}` | `cql2_day(c)`: a `YYYY-MM-DD` value |
 | `{timestamp}` | `cql2_instant(c)`: an ISO 8601 date-time with `Z` or an offset, in milliseconds |
 | `like` | `cql2_like(view, pattern)`: case-sensitive, `%` `_` `\` |
+| the other relations (since 0.10.0, `spatialite: true`) | `COALESCE(NULLIF(ST_<Rel>(GeomFromGPB(c), L), -1), CASE length(cql2_wkt(c)) WHEN 0 THEN 0 ELSE NULLIF(ST_<Rel>(GeomFromText(cql2_wkt(c), 4326), L), -1) END)`, `L` = `GeomFromText(?, 4326)` (WKT from `src/core/wkt.ts`; SpatiaLite's GeoJSON reader drops collections). SpatiaLite reads GeoPackage blobs itself (13× faster than through JavaScript on a million rows); `cql2_wkt`, the package's reader, takes what it can't (WKB, extended WKB, empty collections), an empty geometry FALSE (SpatiaLite can't represent one); its −1 ("can't compute") is NULL. The R-tree first, outside a NOT. `s_disjoint`: `NOT (s_intersects)` |
 | `s_intersects` (since 0.9.0) | `cql2_intersects(c, $json) = 1` on a geometry column (`format: "geometry-…"`): a GeoPackage blob or WKB decoded (`src/sql/wkb.ts`) and tested by `evaluate`'s engine, after the header envelope's quick reject. With `rtree` (GeoPackage's R-tree table) and only outside a NOT: `rowid IN (SELECT id FROM rtree WHERE <boxes overlap>) AND …` first |
 
 The `cql2_*` functions are `sqliteFunctions`, which the application registers on its connection. They run the same
@@ -193,6 +204,7 @@ is `NULL::boolean` when the SQL is built, and `SqlColumn.sqlType` (the declared 
 | `{timestamp}` | `date_trunc('milliseconds', c)` against `$n::timestamptz` on `timestamptz`; `cql2_instant(c)` on text; NULL on `timestamp` (no offset) |
 | `like` | native `LIKE` (case-sensitive, `\` escape) on the NFC text; a lone trailing `\` becomes a literal one |
 | `s_intersects` (PostGIS, since 0.8.0; this form since 0.9.1) | `geom && literal AND NOT ST_Relate(geom, literal, 'FF*FF****')`, the literal as `ST_SetSRID(ST_GeomFromGeoJSON($n), 4326)` or `ST_MakeEnvelope(…)` (across the antimeridian two, joined with OR: PostgreSQL's BitmapOr keeps the index; one multipolygon spanning the world is 4–5× slower); a GeometryCollection literal member by member (GEOS 3.11's `ST_Relate` refuses collections). `&&` uses the GiST index, DE-9IM's "disjoint" pattern decides from GEOS's full matrix. Neither `ST_Intersects` nor `ST_Disjoint`: PostGIS answers them for a point and a polygon with its own point-in-polygon test, whose side test arm64 compilers turn into a fused multiply-add, so it misses points exactly on an edge (`ST_Intersects` always on arm64, `ST_Disjoint` from PostGIS 3.7). Measured on PostGIS 3.1–3.7 (GEOS 3.9–3.15), amd64 and arm64: 0 of 5,805 literals differ from `evaluate`; the 0.8.0 form, on 3.7.0 arm64, 99. As fast as `ST_Intersects` with the index (under 0.1 ms for a small box, about 22 ms for a 40-vertex polygon on a million rows), 10–25% slower on a quarter of the world. Another SRID: the column transformed to 4326, fast with an expression index on `ST_Transform(geom, 4326)`; geography as `::geometry`, fast with one on `(geog::geometry)` (both measured: a full scan without) |
+| the other relations (PostGIS, since 0.10.0) | `ST_Equals(g, L)`; `g && L AND ST_Touches / ST_Overlaps / ST_Crosses(g, L)`; `g @ L AND ST_Relate(g, L, 'T*F**F***')` (S_WITHIN) and `g ~ L AND ST_Relate(g, L, 'T*****FF*')` (S_CONTAINS): `ST_Within` and `ST_Contains` take the point-in-polygon shortcut (plain `ST_Contains` measured wrong for 26 of 1,527 literals on every arm64 server). A box across the antimeridian `ST_Collect` of the halves. `s_disjoint`: `NOT (s_intersects)`, which no index speeds up. Measured on PostGIS 3.1–3.7, amd64 and arm64: 0 differences from `evaluate` with GEOS |
 
 `postgresFunctions(schema)` is the SQL creating `cql2_casefold` (the package's case-folding table), `cql2_casei`,
 `cql2_day` and `cql2_instant`. PostgreSQL's `lower()` isn't Unicode case folding, and `casefold()` only came with
@@ -221,6 +233,7 @@ PostgreSQL: `SqlColumn.sqlType` is the type `DESCRIBE` gives.
 | `{timestamp}` | `floor(epoch_us(c) / 1000)` (epoch milliseconds, truncated: `epoch_ms` rounds) on `TIMESTAMP WITH TIME ZONE`; from `cql2_instant_day` and `cql2_instant_ms` on text; NULL on `TIMESTAMP` |
 | `like` | native `LIKE … ESCAPE '\'` (case-sensitive, `_` one code point) on the NFC text; a lone trailing `\` becomes a literal one |
 | `s_intersects` (since 0.9.0, the spatial extension) | `ST_Intersects(g, L)`, as DuckDB documents it, on a `GEOMETRY` column or on `TRY(ST_GeomFromWKB(c))` for a `BLOB` of WKB; `L` = `ST_GeomFromGeoJSON($n)` or `ST_MakeEnvelope(…)`, across the antimeridian `ST_Union` of the two halves (one literal, so an R-tree index still applies). With `SqlColumn.covering` (GeoParquet's bbox covering), outside a NOT: its four fields compared first, the box rounded outward to 32-bit floats |
+| the other relations (since 0.10.0) | `ST_Equals`, `ST_Touches`, `ST_Within`, `ST_Overlaps`, `ST_Crosses`, `ST_Contains` (g, L): exact on DuckDB 1.4.3, 1.5.4 and 2.0 and in DuckDB-WASM 1.32.0 and 1.33.1 (no `ST_Relate` there), each using the R-tree; the covering's overlap comparisons first, outside a NOT; `s_disjoint`: `NOT (s_intersects)` |
 
 `duckdbFunctions` are plain JavaScript functions with their DuckDB types, registered on the connection by the
 application (`registerScalarFunction` in Node, `createScalarFunction` in DuckDB-WASM's blocking build, run in a Web
@@ -457,7 +470,8 @@ checks that they agree.
 | 0.7.0 | **Spatial, phase B:** `evaluate` tests `s_intersects` (Basic Spatial Functions and Basic plus) in memory, checked with the standard's Natural Earth test and against GEOS |
 | 0.8.0 | **Spatial, phase C:** `s_intersects` in the `postgres` dialect (PostGIS), exact and indexed |
 | 0.9.0 | **Spatial, phase D:** `s_intersects` in the `sqlite` dialect (GeoPackage, `evaluate`'s engine as a function, GeoPackage's R-tree outside a NOT) and the `duckdb` dialect (the spatial extension's `ST_Intersects`, exact, indexed; GeoParquet's bbox covering outside a NOT; tested on DuckDB 2.0 and 1.4.3); DuckDB's numbers bound as text, for DuckDB-WASM |
-| 0.10.0 | **Spatial Functions** (the other seven relations, DE-9IM): PostGIS, DuckDB's extension, **SpatiaLite** as a built-in option of the `sqlite` dialect, and an optional engine hook in `evaluate`; one reference, GEOS |
+| 0.9.1 | PostGIS `s_intersects` decided by GEOS's matrix (`ST_Relate`), exact on arm64 and PostGIS 3.7; `npm run check:duckdb` |
+| 0.10.0 | **Spatial Functions** (the other seven relations, DE-9IM): an engine hook in `evaluate` (GEOS through geos.js recommended), PostGIS, DuckDB, and **SpatiaLite** as an option of the `sqlite` dialect; the standard's Table 14 on full-precision Natural Earth; one reference, GEOS; the README's Tested versions |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |

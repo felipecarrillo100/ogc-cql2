@@ -14,6 +14,7 @@ import { createGeoJsonStore } from "../src/stores/geojson.ts";
 import { openGeoPackage } from "../src/stores/geopackage.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
 import type { Feature, Store } from "../src/stores/types.ts";
+import { CONFORMANCE } from "ogc-cql2";
 
 const file = JSON.parse(readFileSync(new URL("../data/kitchen_sink.geojson", import.meta.url), "utf8"));
 const fromFile = createGeoJsonStore({ id: "kitchen_sink", title: "Kitchen sink" }, file);
@@ -132,6 +133,18 @@ const SPATIAL_EXACT: unknown[] = [
   ...positions.map(([x, y]) => s_intersects({ bbox: [x! - 1, y! - 1, x!, y!] })),
 ];
 
+/** The other relations, on the same literals (with margin, and exactly on vertices), for the stores that evaluate them. */
+const RELATIONS = ["s_equals", "s_disjoint", "s_touches", "s_within", "s_overlaps", "s_crosses", "s_contains"];
+const relation = (op: string) => (f: unknown) => ({ ...(f as object), op });
+const RELATIONS_MARGIN = RELATIONS.flatMap((op) => SPATIAL_MARGIN.filter((f) => (f as { op: string }).op === "s_intersects").map(relation(op)));
+const RELATIONS_EXACT = RELATIONS.flatMap((op) => [
+  ...SPATIAL_EXACT.map(relation(op)),
+  // Each feature's own geometry, as the literal: S_EQUALS, S_WITHIN and S_CONTAINS select it.
+  ...(file.features as { geometry: { type: string } | null }[])
+    .filter((f) => f.geometry && f.geometry.type !== "GeometryCollection" && validate(s_intersects(f.geometry)).valid)
+    .map((f) => ({ op, args: [p("geometry"), f.geometry] })),
+]);
+
 async function spatialDifferences(store: Store, filters: unknown[], label: string): Promise<string[]> {
   const out: string[] = [];
   for (const filter of filters) {
@@ -172,6 +185,22 @@ describe("the kitchen sink, three stores", () => {
   it(`spatial filters: GeoJSON and PostgreSQL (4326) give the same features, also exactly on vertices`, async (t) => {
     if (pgSkip) return t.skip(pgSkip);
     assert.equal((await spatialDifferences(fromPg!, [...SPATIAL_MARGIN, ...SPATIAL_EXACT], "postgres")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`the other relations: GeoJSON (evaluate with GEOS) and PostgreSQL (4326) give the same features, also exactly on vertices`, async (t) => {
+    if (pgSkip) return t.skip(pgSkip);
+    assert.ok(RELATIONS_EXACT.length > 500, `${RELATIONS_EXACT.length} filters`);
+    assert.equal((await spatialDifferences(fromPg!, [...RELATIONS_MARGIN, ...RELATIONS_EXACT], "postgres")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`the other relations: GeoJSON (evaluate with GEOS) and GeoPackage (SpatiaLite) give the same features, also exactly on vertices`, async (t) => {
+    if (!fromGpkg.conformance().includes(CONFORMANCE.spatial)) return t.skip("SpatiaLite (mod_spatialite) isn't installed");
+    assert.equal((await spatialDifferences(fromGpkg, [...RELATIONS_MARGIN, ...RELATIONS_EXACT], "geopackage")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`the other relations: PostgreSQL in Web Mercator gives the same features (with margin)`, async (t) => {
+    if (pgSkip || !fromPg3857) return t.skip(pgSkip || "kitchen_sink_3857 isn't loaded");
+    assert.equal((await spatialDifferences(fromPg3857, RELATIONS_MARGIN, "postgres 3857")).slice(0, 10).join("\n"), "");
   });
 
   it(`spatial filters: PostgreSQL in Web Mercator gives the same features (with margin; its vertices moved in the round trip)`, async (t) => {

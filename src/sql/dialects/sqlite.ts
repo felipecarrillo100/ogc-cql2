@@ -15,8 +15,11 @@
  */
 import type { Fold } from "../../core/folds.js";
 import { accentiKey, caseiKey, dayOf, instantOf, likeRegExp, plainKey } from "../../evaluate/strings.js";
-import { literalParts } from "../../evaluate/spatial.js";
+import { literalGeometry, type MatrixRelation } from "../../core/relate.js";
+import { wkt } from "../../core/wkt.js";
+import { geometryParts, literalParts } from "../../evaluate/spatial.js";
 import { intersectsStored } from "../intersects.js";
+import { gpkgEnvelope, readStoredGeometry } from "../wkb.js";
 import type { SpatialLiteral } from "../../core/types.js";
 import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
@@ -46,6 +49,7 @@ export const sqliteFunctions: {
   readonly cql2_instant: (value: unknown) => number | null;
   readonly cql2_like: (value: unknown, pattern: unknown) => number | null;
   readonly cql2_intersects: (geometry: unknown, literal: unknown) => number | null;
+  readonly cql2_wkt: (geometry: unknown) => string | null;
 } = {
   /** A text value, NFC-normalized. */
   cql2_text: (value) => (typeof value === "string" ? plainKey(value) : null),
@@ -67,6 +71,17 @@ export const sqliteFunctions: {
    * value that isn't a geometry. `evaluate`'s own engine decides.
    */
   cql2_intersects: intersectsStored,
+  /**
+   * A stored geometry (a GeoPackage blob, or WKB, extended WKB included) as WKT, for SpatiaLite (`spatialite: true`)
+   * where its own readers can't take it; `""` for an empty geometry, which SpatiaLite can't represent; NULL for a NULL
+   * or a value that isn't a geometry.
+   */
+  cql2_wkt: (value) => {
+    if (!(value instanceof Uint8Array)) return null;
+    if (gpkgEnvelope(value) === "empty") return "";
+    const g = readStoredGeometry(value);
+    return g === undefined ? null : g === null || geometryParts(g)?.box === undefined ? "" : wkt(g);
+  },
 };
 
 /**
@@ -110,8 +125,15 @@ function sqliteView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
  */
 function sqliteIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
   if (typeof column.format !== "string" || !column.format.startsWith("geometry-")) return undefined;
-  // Placeholders are positional (`?`): each parameter is added where it stands in the SQL.
-  const exact = () => `cql2_intersects(${sql}, ${param(JSON.stringify(literal))}) = 1`;
+  return rtreeFirst(column, literal, param, positive, () => `cql2_intersects(${sql}, ${param(JSON.stringify(literal))}) = 1`);
+}
+
+/**
+ * The exact test, with the R-tree's candidates first (`rowid IN (SELECT id FROM rtree WHERE <the boxes overlap>) AND
+ * …`) when the column has one and the leaf isn't negated. `exact` is called after the R-tree's parameters: they are
+ * positional, so added in the order they stand in the SQL.
+ */
+function rtreeFirst(column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, exact: () => string): string {
   if (column.rtree === undefined || !positive) return exact();
   let boxes: number[][];
   if ("bbox" in literal && !("type" in literal)) {
@@ -127,6 +149,33 @@ function sqliteIntersects(sql: string, column: SqlColumn, literal: SpatialLitera
   return `(rowid IN (SELECT id FROM ${quote(column.rtree)} WHERE ${overlaps.join(" OR ")}) AND ${exact()})`;
 }
 
+const SPATIALITE = { s_equals: "ST_Equals", s_touches: "ST_Touches", s_within: "ST_Within", s_overlaps: "ST_Overlaps", s_crosses: "ST_Crosses", s_contains: "ST_Contains" } as const;
+
+/**
+ * The other relations of Spatial Functions, with SpatiaLite (`SqlOptions.spatialite`; the application loads
+ * `mod_spatialite`), GEOS deciding, exactly as their DE-9IM patterns (measured against GEOS's matrix):
+ * `COALESCE(NULLIF(ST_Within(GeomFromGPB(column), literal), -1), <the same through cql2_wkt>)`.
+ * - SpatiaLite answers −1 for what it can't read (SQL would take it for TRUE), so −1 is NULL.
+ * - `GeomFromGPB` reads a GeoPackage blob in SpatiaLite itself (13 times faster than through JavaScript on a million
+ *   rows). What it can't read (WKB, extended WKB, an empty collection, bytes that aren't a geometry) goes through
+ *   `cql2_wkt`: the package's own reader, as WKT, an empty geometry decided here (FALSE: SpatiaLite can't represent
+ *   one), anything else NULL.
+ * - The literal as WKT (`GeomFromText(?, 4326)`): SpatiaLite's GeoJSON reader drops collections with Multi members. A
+ *   box is a polygon, across the antimeridian a multipolygon.
+ * - With the column's R-tree, and outside a NOT, its candidates first, as for S_INTERSECTS (every one of these
+ *   relations needs the boxes to meet).
+ */
+function sqliteRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
+  if (typeof column.format !== "string" || !column.format.startsWith("geometry-")) return undefined;
+  const fn = SPATIALITE[relation];
+  const text = wkt(literalGeometry(literal));
+  // Placeholders are positional: the literal is a parameter each time it stands in the SQL.
+  const l = () => `GeomFromText(${param(text)}, 4326)`;
+  return rtreeFirst(column, literal, param, positive, () =>
+    `COALESCE(NULLIF(${fn}(GeomFromGPB(${sql}), ${l()}), -1), CASE length(cql2_wkt(${sql})) WHEN 0 THEN 0 ELSE NULLIF(${fn}(GeomFromText(cql2_wkt(${sql}), 4326), ${l()}), -1) END)`,
+  );
+}
+
 export const sqlite: Dialect = {
   placeholder: () => "?",
   true: "1",
@@ -137,4 +186,5 @@ export const sqlite: Dialect = {
   view: sqliteView,
   like: (v, pattern, param) => `cql2_like(${v.sql}, ${param(pattern)})`,
   intersects: sqliteIntersects,
+  relate: sqliteRelate,
 };

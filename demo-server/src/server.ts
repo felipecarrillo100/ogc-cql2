@@ -15,14 +15,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Cql2Filter } from "ogc-cql2";
-import { CONFORMANCE } from "ogc-cql2";
 import { validate } from "ogc-cql2/validate";
-
-/** The classes every store evaluates: GeoJSON with ogc-cql2/evaluate, GeoPackage and PostgreSQL in the database. */
-const EVALUATED = [
-  CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive,
-  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus,
-];
 
 /**
  * A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that
@@ -99,7 +92,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 
     // The collection's queryables: an unknown property, or a literal of another type than the property's, is refused
     // here (CQL2 lets a server answer a type mismatch with an error), instead of silently matching nothing.
-    const result = validate(body.filter, { queryables: queryablesOf(store), conformance: EVALUATED });
+    const result = validate(body.filter, { queryables: queryablesOf(store), conformance: store.conformance() });
     if (!result.valid) {
       return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile, or doesn't fit this collection's queryables.", result.problems);
     }

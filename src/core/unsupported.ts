@@ -11,7 +11,7 @@ const NAMES: ReadonlyMap<string, string> = new Map([
   [CONFORMANCE.spatial, "Spatial Functions"],
 ]);
 
-/** The spatial classes `evaluate` doesn't evaluate yet: the relations other than S_INTERSECTS. */
+/** The spatial classes `evaluate` evaluates only with an engine plugged in (`spatialEngine`): Spatial Functions. */
 export const NOT_IN_EVALUATE: readonly string[] = [CONFORMANCE.spatial];
 
 /** The spatial classes the SQL dialects don't translate yet: all three. */
