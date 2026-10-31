@@ -197,6 +197,13 @@ DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
   | `NOT ST_Disjoint` | 0 | 121 ms | 118 ms | 146 ms | no |
   | `&&` and `NOT ST_Disjoint` | 0 | 0.6 ms | 0.4 ms | 71 ms | yes |
 
+- **Corrected in 0.9.1:** the departure of `ST_Intersects` above is an arm64 trait, not PostGIS 3.5.6's. PostGIS's
+  point-in-polygon test (`liblwgeom/intervaltree.c`) computes its side test as `a*b - c*d`, which arm64 compilers fuse
+  into one multiply-add, so a point exactly on an edge can come out on one side. On amd64, PostGIS 3.1–3.6 were exact.
+  PostGIS 3.7 sends `ST_Disjoint` for a point and a polygon through the same test (PR #1074), so the 0.8.0 form missed
+  the same points there on arm64 (99 of 5,805 literals). 0.9.1 decides with `NOT ST_Relate(geom, literal,
+  'FF*FF****')`, GEOS's full matrix: 0 differences on PostGIS 3.1–3.7, amd64 and arm64. No other CQL2 implementation
+  read (GeoServer, pgstac, tipg, pygeoapi, cql2-rs) avoids the shortcut.
 - A column in another SRID is transformed to 4326 (planar in CRS84). Measured on the kitchen sink in 3857: the same
   features with margin; 58 of 141 literals placed exactly on the original 4326 vertices differ, because the stored
   3857 coordinates don't convert back exactly (5 becomes 4.999999999999998). Data kept in another CRS can't be exact

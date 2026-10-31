@@ -144,21 +144,33 @@ describe("S_INTERSECTS in PostGIS", () => {
   const s = (property: string, literal: unknown) =>
     toSql({ op: "s_intersects", args: [p(property), literal] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo });
 
-  it("the box test uses the index, GEOS decides exactly (ST_Intersects isn't exact on edges)", () => {
+  it("the box test uses the index, GEOS's DE-9IM decides exactly (on arm64, ST_Intersects and, from PostGIS 3.7, ST_Disjoint miss points on edges)", () => {
     expect(s("geometry", { type: "Point", coordinates: [7.02, 49.92] })).toEqual({
-      where: `("geom" && ST_SetSRID(ST_GeomFromGeoJSON($1), 4326) AND NOT ST_Disjoint("geom", ST_SetSRID(ST_GeomFromGeoJSON($1), 4326)))`,
+      where: `("geom" && ST_SetSRID(ST_GeomFromGeoJSON($1), 4326) AND NOT ST_Relate("geom", ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), 'FF*FF****'))`,
       params: ['{"type":"Point","coordinates":[7.02,49.92]}'],
+    });
+  });
+
+  it("a GeometryCollection literal is the OR of its members (GEOS 3.11 can't relate a collection)", () => {
+    const point = { type: "Point", coordinates: [1, 2] };
+    const line = { type: "LineString", coordinates: [[0, 0], [1, 1]] };
+    const square = { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+    const L = (n: number) => `ST_SetSRID(ST_GeomFromGeoJSON($${n}), 4326)`;
+    const leaf = (n: number) => `("geom" && ${L(n)} AND NOT ST_Relate("geom", ${L(n)}, 'FF*FF****'))`;
+    expect(s("geometry", { type: "GeometryCollection", geometries: [point, line, square] })).toEqual({
+      where: `(${leaf(1)} OR ${leaf(2)} OR ${leaf(3)})`,
+      params: [JSON.stringify(point), JSON.stringify(line), JSON.stringify(square)],
     });
   });
 
   it("a box as an envelope; across the antimeridian two; heights left out", () => {
     const env = (w: string, e: string) => `ST_MakeEnvelope(${w}::double precision, $1::double precision, ${e}::double precision, $2::double precision, 4326)`;
     expect(s("geometry", { bbox: [0, 40, 10, 50] })).toEqual({
-      where: `("geom" && ${env("$3", "$4")} AND NOT ST_Disjoint("geom", ${env("$3", "$4")}))`,
+      where: `("geom" && ${env("$3", "$4")} AND NOT ST_Relate("geom", ${env("$3", "$4")}, 'FF*FF****'))`,
       params: [40, 50, 0, 10],
     });
     expect(s("geometry", { bbox: [170, -10, -170, 10] })).toEqual({
-      where: `(("geom" && ${env("$3", "180")} AND NOT ST_Disjoint("geom", ${env("$3", "180")})) OR ("geom" && ${env("-180", "$4")} AND NOT ST_Disjoint("geom", ${env("-180", "$4")})))`,
+      where: `(("geom" && ${env("$3", "180")} AND NOT ST_Relate("geom", ${env("$3", "180")}, 'FF*FF****')) OR ("geom" && ${env("-180", "$4")} AND NOT ST_Relate("geom", ${env("-180", "$4")}, 'FF*FF****')))`,
       params: [-10, 10, 170, -170],
     });
     expect(s("geometry", { bbox: [0, 40, -100, 10, 50, 100] }).params).toEqual([40, 50, 0, 10]);

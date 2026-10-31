@@ -4,7 +4,26 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.9.1] - 2026-10-31
+
+The `postgres` dialect's S_INTERSECTS made exact on every platform and PostGIS version.
+
+### Fixed
+
+- `postgres`: `s_intersects` is `geom && literal AND NOT ST_Relate(geom, literal, 'FF*FF****')`, decided by GEOS's
+  DE-9IM matrix. The former `NOT ST_Disjoint`, like `ST_Intersects`, goes through PostGIS's own point-in-polygon test
+  from PostGIS 3.7, which on arm64 (Apple Silicon, AWS Graviton) misses points lying exactly on an edge: 109
+  point-and-state pairs of the tests' literals on the US states.
+
+### Changed
+
+- `postgres`: a GeometryCollection literal in `s_intersects` is tested member by member (the same answer), as GEOS
+  3.11's `ST_Relate` refuses collections.
+
+### Documentation
+
+- PostGIS: the expression indexes that make a column in another SRID (`ST_Transform(geom, 4326)`) or a geography
+  column (`(geog::geometry)`) fast; GEOS 3.13 or later for columns holding GeometryCollections.
 
 ### Tests
 
