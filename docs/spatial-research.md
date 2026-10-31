@@ -85,6 +85,7 @@ Three ways to get it anyway:
 | `text` | WKT written exactly per the BNF (`POINT Z (…)`, `BBOX(…)`) |
 | `evaluate` (in memory) | a real DE-9IM engine. **The big piece:** either a dependency such as JSTS, which would end "no dependencies", or an implementation of our own, which is large. Only `S_INTERSECTS` with a point or a box (the Basic class) is small enough without one |
 | `sql`, `postgres` | PostGIS: `ST_Intersects`, `ST_Disjoint`, `ST_Contains`, `ST_Within`, `ST_Equals`, `ST_Touches`, `ST_Overlaps`, `ST_Crosses` map one to one, same DE-9IM semantics; literals via `ST_GeomFromGeoJSON`, in CRS84 unless `filter-crs` says otherwise, with `ST_Transform` to the column's SRID |
+| `sql`, `duckdb` | DuckDB's spatial extension (GEOS-based): the same eight `ST_*` functions, DE-9IM semantics, on GeoParquet geometries. It loads in DuckDB-WASM too (about 1.4 s, measured 2026-10-31), so a page could filter spatially in the browser; it is an extension the application installs, not part of core DuckDB |
 | `sql`, `sqlite` | SQLite and GeoPackage have no spatial functions without SpatiaLite; registered functions of our own again (as for CASEI), sharing the in-memory engine, or none |
 | an application's FES output (WFS) | FES 2.0 has the same eight operators, plus `BBOX`, `DWithin` and `Beyond` |
 | testing | the standard's spatial examples (`test/fixtures/ogc/`, already present, now refused as `outside-profile`); the differential test across the three stores, extended with the kitchen sink's geometries |

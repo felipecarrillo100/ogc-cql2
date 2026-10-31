@@ -44,7 +44,7 @@ drops the rest.
 | `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate` | 0.1.0 |
-| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqliteFunctions`, `postgresFunctions`, `postgresValue` | 0.1.0: dialects `sqlite` and `postgres` |
+| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb` |
 | `ogc-cql2/parse` | `src/parse/` | CQL2-text → CQL2-JSON, for a server that receives text | later, if needed |
 
 `text`, `evaluate` and `sql` validate their input first, so they load `validate` too.
@@ -107,13 +107,18 @@ What the text can't express is refused as `not-expressible`, with the reason and
 `toSql(filter, { dialect, columns })` returns `{ where, params }`: text and values only, no driver. The rule: the SQL
 selects exactly the rows `evaluate` selects from the same values.
 
-- **Always parameterized:** values are placeholders (`?` for `sqlite`, `$1`, `$2` … for `postgres`), never text inside
-  the query.
+- **Always parameterized:** values are placeholders (`?` for `sqlite`, `$1`, `$2` … for `postgres` and `duckdb`), never
+  text inside the query.
 - **Property names are checked** against `columns` (the table's queryables), then quoted; anything else is
   `unknown-property`. A property can map to a column of another name.
 - **CQL2's three-valued logic maps directly** onto SQL's NULL (`AND`, `OR`, `NOT`).
 - **The pattern others use:** a field mapping and a function map, as pygeofilter's SQL backend does; unlike it, values
   are never put into the SQL text.
+- **One walker, one file per dialect:** `toSql` (`src/sql/index.ts`) walks the filter; what differs per database is
+  a `Dialect` (`src/sql/types.ts`), one file each in `src/sql/dialects/`: the placeholders, the boolean constants and
+  the "no value can match" constant, the column's **view** for each kind of value (text, CASEI, number, boolean,
+  day, instant), LIKE, and how boolean and instant literals are passed. A view can also convert the literal's value
+  and replace `view op param` with its own condition, which DuckDB's CASEI needs.
 
 The `sqlite` dialect follows **GeoPackage** (OGC 12-128r19, version 1.4): its declared types (Table 1, Req 5), its
 BOOLEAN as INTEGER 0 / 1, DATE as `YYYY-MM-DD`, DATETIME as `YYYY-MM-DDTHH:MM[:SS.SSS]Z`, and its note that readers
@@ -164,6 +169,29 @@ seconds 00–59, a fraction is truncated to milliseconds. JavaScript's `Date.par
 2 March); PostgreSQL rolls a leap second into the next minute. A leap second in a filter is refused
 (`invalid-timestamp`).
 
+The `duckdb` dialect, for DuckDB: **the same SQL in Node (`@duckdb/node-api`) and in the browser
+(`@duckdb/duckdb-wasm`)**, on tables or straight on files (GeoParquet, Parquet, CSV). Statically typed like
+PostgreSQL: `SqlColumn.sqlType` is the type `DESCRIBE` gives.
+
+| CQL2 | DuckDB |
+|---|---|
+| `and`, `or`, `not`, `isNull`, `true` / `false` | `AND`, `OR`, `NOT`, `IS NULL`, `TRUE` / `FALSE`; placeholders `$1`, `$2` … |
+| numbers | `CAST(c AS DOUBLE)` against `$n::DOUBLE` |
+| booleans | `c` against `$n::BOOLEAN` |
+| text | `nfc_normalize(c) COLLATE "binary"`: code point order, whatever the database's `default_collation` (`nocase` would make `'a' = 'A'` true) |
+| text against a `DATE` / `TIMESTAMP WITH TIME ZONE` / `TIMESTAMP` column | the served text, through `strftime` |
+| `casei(…)` | `cql2_casei_cmp(c, $n) op 0`; `IN` as `= 0` conditions joined with `OR`; LIKE as `cql2_casei_like(c, $n) = 1` |
+| `{date}` | `c` against `$n::DATE` on a `DATE` column; `cql2_day(c)` (days since 1970) on text |
+| `{timestamp}` | `floor(epoch_us(c) / 1000)` (epoch milliseconds, truncated: `epoch_ms` rounds) on `TIMESTAMP WITH TIME ZONE`; from `cql2_instant_day` and `cql2_instant_ms` on text; NULL on `TIMESTAMP` |
+| `like` | native `LIKE … ESCAPE '\'` (case-sensitive, `_` one code point) on the NFC text; a lone trailing `\` becomes a literal one |
+
+`duckdbFunctions` are plain JavaScript functions with their DuckDB types, registered on the connection by the
+application (`registerScalarFunction` in Node, `createScalarFunction` in DuckDB-WASM's blocking build, run in a Web
+Worker). **They all return 32-bit integers**, the one result type DuckDB-WASM (1.32.0, and 1.33.1-dev110) passes back
+exactly from JavaScript: text comes back as zero bytes, DOUBLE as a 32-bit float, BIGINT cut to 32 bits, and BOOLEAN
+is refused. So CASEI compares inside the function, and an instant read from text is its UTC day plus the
+milliseconds into that day. Nothing depends on the time-zone setting: instants are compared as numbers.
+
 ### Errors
 
 - **Every refusal throws a `Cql2Error`:** `invalid-filter` (from `assertValid`, and from `text` and `evaluate` for an
@@ -198,6 +226,7 @@ filter selects). The server never knows which store it talks to.
 | GeoJSON | one FeatureCollection file, read once at startup | `ogc-cql2/evaluate` | 0.1.0 |
 | GeoPackage (SQLite) | the `features` and `attributes` tables a GeoPackage lists in `gpkg_contents` (Node's built-in `node:sqlite`, read-only) | `ogc-cql2/sql` | 0.1.0 |
 | PostgreSQL / PostGIS | the tables `collections.json` lists (never discovered); the connection in a git-ignored `.env` | `ogc-cql2/sql`, `postgres` dialect | 0.1.0 |
+| GeoParquet (DuckDB) | the Parquet files `collections.json` lists, read in place with `@duckdb/node-api` | `ogc-cql2/sql`, `duckdb` dialect | planned, 0.2.0 |
 
 - A GeoPackage table: the id is its INTEGER primary key (Req 29, 119), the queryables come from its declared types
   (Table 1), BOOLEAN 0 / 1 is served as `false` / `true`, and geometry is decoded from GeoPackageBinary (the `GP`
@@ -227,6 +256,9 @@ filter selects). The server never knows which store it talks to.
 - **SQL against real databases (differential tests):**
   - `test/sql.test.ts`: 5,387 generated filters on a SQLite table of awkward values (NULLs, values of an unexpected
     type, NFC and NFD, code points above U+FFFF, LIKE's special characters) select the same rows as `evaluate`;
+  - `test/sql-duckdb.test.ts`: 11,050 generated filters on a DuckDB table (`@duckdb/node-api`, a dev dependency, in
+    the test process) select the same rows as `evaluate` on the served values, also with `default_collation` set to
+    `nocase` and a New York time zone;
   - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 8,398 generated filters give the same features from
     the GeoJSON file, the GeoPackage and PostgreSQL (when the database is set up; skipped otherwise);
   - each rule was broken once on purpose, to show the tests catch it.
@@ -258,4 +290,31 @@ checks that they agree.
 |---|---|
 | 0.0.1 | The foundation: build, tests, demo, `CQL2_VERSION`, `quoteString` |
 | 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, `ogc-cql2/sql` (SQLite / GeoPackage, PostgreSQL / PostGIS); the playground and `demo-server` |
-| later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first), temporal, arrays; `ogc-cql2/parse` if a server needs CQL2-text; an index-friendly SQL mode |
+| 0.2.0 (in progress) | Done: the dialect interface in `src/sql` (SQLite and PostgreSQL moved onto it unchanged), and the **`duckdb`** dialect, the same SQL in Node and in the browser, see [duckdb-case.md](duckdb-case.md). Next: GeoParquet files and a DuckDB store in `demo-server` (the kitchen sink then compared across four stores); then DuckDB-WASM in the playground, checked against `evaluate` in the browser and on phones |
+| 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
+| later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first, see [spatial-research.md](spatial-research.md); DuckDB's spatial extension), temporal, arrays; `ogc-cql2/parse` if a server needs CQL2-text; an index-friendly SQL mode |
+
+### 1.x.x: Oracle and SQL Server
+
+Chosen for geospatial users: both are common under enterprise GIS (national mapping agencies, utilities, defence;
+Esri enterprise geodatabases; Luciad / Fusion; GeoServer and QGIS support both), and both have full DE-9IM spatial
+relations for the spatial classes later. Each new dialect meets the same rule as the others: every generated filter
+selects exactly what `evaluate` selects, checked on the kitchen sink loaded into that database.
+
+| Step | What | Known questions |
+|---|---|---|
+| 1 | The dialect interface; SQLite and PostgreSQL moved onto it, unchanged | done in 0.2.0, with DuckDB |
+| 2 | **Oracle**: `:1` placeholders, binary ordering (`NLSSORT(…, 'NLS_SORT=BINARY')`), NFC with `COMPOSE`, case folding and instant reading in PL/SQL (as `postgresFunctions` does), BOOLEAN from 23ai (else `NUMBER(1)`) | **Oracle stores `''` as NULL**, so "equals the empty string" can never match there: a documented deviation, to be decided |
+| 3 | **SQL Server**: `@p1` placeholders, a `…_BIN2_UTF8` collation for code point order, `bit` booleans, `datetimeoffset` instants, `[` `]` escaped in LIKE patterns | **No NFC in T-SQL** (only through CLR functions, unavailable in Azure SQL): either a documented "store text in NFC" rule, or a server-side function, to be decided |
+
+Testing without a server: both run locally in Docker, free for development and testing, spatial included. The
+containers live outside the repository; the connections go in `demo-server/.env`; the tests skip, with the reason,
+when a database isn't running.
+
+| | Oracle | SQL Server |
+|---|---|---|
+| Edition | Oracle Database Free (23ai) | SQL Server 2022 Developer |
+| Container | native arm64 and x86 (`gvenzl/oracle-free`, or Oracle's own image) | x86 only: on Apple Silicon, through Docker Desktop's Rosetta emulation |
+| Memory | about 2 GB | at least 2 GB |
+| Node driver (demo-server only) | `oracledb`, thin mode: plain JavaScript, no Oracle client | `mssql` (`tedious`): plain JavaScript |
+| Loading the kitchen sink | a Node script (GDAL's Oracle driver needs Oracle's client libraries) | a Node script (GDAL's driver needs an ODBC driver) |

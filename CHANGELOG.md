@@ -4,6 +4,30 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.2.0] - Unreleased
+
+DuckDB: the same CQL2 filters on GeoParquet and other files, in Node and in the browser (DuckDB-WASM). In progress:
+the package part is done; the GeoParquet store in `demo-server` and DuckDB-WASM in the playground are still to come.
+
+### Added
+
+- `ogc-cql2/sql`: dialect `duckdb`, the same SQL for `@duckdb/node-api` and `@duckdb/duckdb-wasm`. Text in code point
+  order and NFC whatever the database's default collation, instants as epoch milliseconds whatever its time zone,
+  DuckDB's own case-sensitive LIKE with `ESCAPE`.
+- `duckdbFunctions`: the functions the `duckdb` dialect calls (CASEI, and dates and instants held in text), with their
+  DuckDB types, to register on the connection. They return 32-bit integers only, the one result type DuckDB-WASM
+  passes back exactly.
+- `duckdbValue`: what to SELECT for a column, so that what is served is what the SQL compares.
+- Types `SqlValue` and `DuckdbFunction`.
+
+### Changed
+
+- `ogc-cql2/sql` is organized as one walker and one file per dialect (`src/sql/dialects/`). The `sqlite` and
+  `postgres` dialects build exactly the same SQL as in 0.1.0.
+- `SqlColumn.sqlType` is also read by the `duckdb` dialect (DuckDB's type names, as `DESCRIBE` gives them).
+- `@duckdb/node-api` is a development dependency, for the DuckDB differential test; the package still has no runtime
+  dependencies.
+
 ## [0.1.0] - 2026-10-31
 
 The first working version: the profile Basic CQL2, Advanced Comparison Operators and Case-insensitive Comparison.
@@ -46,5 +70,6 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[0.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.1.0
 [0.0.1]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.0.1
