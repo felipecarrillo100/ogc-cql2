@@ -189,9 +189,9 @@ describe("the SQL it builds", () => {
     );
   });
 
-  it("refuses the other spatial relations with unsupported (S_INTERSECTS: test/sql-spatial.test.ts)", () => {
+  it("refuses the other spatial relations with unsupported where the dialect has no engine for them (postgres and duckdb have)", () => {
     const filter = { op: "s_within", args: [p("s"), { type: "Point", coordinates: [0, 0] }] };
-    for (const dialect of ["sqlite", "postgres", "duckdb"] as const) {
+    for (const dialect of ["sqlite"] as const) {
       expect(() => toSql(filter as unknown as Cql2Filter, { dialect, columns: COLUMNS })).toThrow(
         expect.objectContaining({ code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }),
       );

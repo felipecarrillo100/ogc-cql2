@@ -4,6 +4,7 @@
  */
 
 import type { Fold } from "../core/folds.js";
+import type { MatrixRelation } from "../core/relate.js";
 import type { Queryable, SpatialLiteral } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb";
@@ -49,6 +50,12 @@ export interface SqlOptions {
   readonly columns: Readonly<Record<string, SqlColumn>>;
   /** `postgres`: the schema of the `cql2_*` functions (see `postgresFunctions`), when not on the search path. */
   readonly functionSchema?: string;
+  /**
+   * `sqlite`: SpatiaLite is loaded on the connection (`mod_spatialite`), so the Spatial Functions class (S_WITHIN,
+   * S_TOUCHES, …) is translated, GEOS deciding. Without it the class is refused (`unsupported`); S_INTERSECTS needs
+   * no SpatiaLite.
+   */
+  readonly spatialite?: boolean;
 }
 
 /** A parameter's value. */
@@ -109,6 +116,12 @@ export interface Dialect {
    * operator that turns FALSE into TRUE), so a prefilter that leaves out rows without a geometry is exact.
    */
   intersects?(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined;
+  /**
+   * The other relations of Spatial Functions but S_DISJOINT (written as NOT S_INTERSECTS): S_EQUALS, S_TOUCHES,
+   * S_WITHIN, S_OVERLAPS, S_CROSSES, S_CONTAINS of (column, literal), as their DE-9IM patterns decide them;
+   * `undefined` when the column holds no geometry. Absent: the class is `unsupported`. `positive` as for `intersects`.
+   */
+  relate?(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined;
 }
 
 export const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;

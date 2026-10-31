@@ -4,6 +4,42 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.10.0] - 2026-10-31
+
+The Spatial Functions class: S_EQUALS, S_DISJOINT, S_TOUCHES, S_WITHIN, S_OVERLAPS, S_CROSSES, S_CONTAINS, in every
+engine, exactly as GEOS's DE-9IM decides them.
+
+### Added
+
+- `evaluate`: `EvaluateOptions.spatialEngine`, an optional planar geometry engine (`SpatialEngine`: `prepare(literal)`
+  returning `relate(geometry)`, the DE-9IM matrix). With one, `evaluate` accepts the Spatial Functions class; the
+  package decides each relation from the matrix (Simple Features' patterns, the dimension rules), keeps NULLs and empty
+  geometries from the engine, and gives NULL when the engine throws. GEOS through geos.js is recommended (README).
+- `toSql` with `dialect: "postgres"`: the other relations, exact and indexed: `ST_Equals`; `ST_Touches`,
+  `ST_Overlaps`, `ST_Crosses` behind `&&`; S_WITHIN and S_CONTAINS as `ST_Relate` with their patterns behind `@` and `~`
+  (`ST_Within` / `ST_Contains` take PostGIS's point-in-polygon shortcut).
+- `toSql` with `dialect: "duckdb"`: the other relations through the spatial extension, with the GeoParquet covering's
+  comparisons first outside a NOT.
+- `toSql` with `dialect: "sqlite"` and `SqlOptions.spatialite: true` (SpatiaLite loaded on the connection): the other
+  relations; `sqliteFunctions.cql2_wkt` reads what SpatiaLite can't (WKB, extended WKB, empty geometries).
+- S_DISJOINT everywhere, as NOT S_INTERSECTS.
+- package.json `funding`; the README's "Tested versions" and "Donations & sponsoring".
+
+### Changed
+
+- The SQL dialects and `evaluate` no longer refuse the Spatial Functions class where they have an engine for it:
+  `evaluate` with `spatialEngine`, `postgres`, `duckdb`, `sqlite` with `spatialite`.
+
+### Tests
+
+- The standard's Table 14 (all 26 predicates) on Natural Earth, now converted at full precision from the shapefiles
+  (Table 12 unchanged).
+- Every relation against GEOS: GEOS's own predicates on tricky pairs; PostGIS on the US states (demo-server); the SQL
+  of each dialect against `evaluate` with GEOS on every storage form; the PostGIS version matrix (3.1–3.7, amd64 and
+  arm64); DuckDB 2.0, 1.4.3 and 1.5.4; DuckDB-WASM 1.32.0 and 1.33.1 in Chrome; the suite on Node 20, 22 and 24.
+- geos.js 0.1.5 as a devDependency (tests only), and in demo-server, whose GeoJSON, PostgreSQL and (with SpatiaLite)
+  GeoPackage stores answer the class.
+
 ## [0.9.1] - 2026-10-31
 
 The `postgres` dialect's S_INTERSECTS made exact on every platform and PostGIS version.

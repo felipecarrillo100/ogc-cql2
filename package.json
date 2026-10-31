@@ -1,6 +1,6 @@
 {
   "name": "ogc-cql2",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text, in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS) for CQL2-JSON filters, in browsers and Node.",
   "keywords": [
     "cql2",
@@ -79,6 +79,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "cql2-wasm": "0.5.6",
+    "geos.js": "0.1.5",
     "publint": "^0.3.25",
     "tsdown": "~0.23.4",
     "typescript": "~7.0.2",
@@ -88,5 +89,10 @@
   "publishConfig": {
     "access": "public"
   },
+  "funding": [
+    { "type": "github", "url": "https://github.com/sponsors/felipecarrillo100" },
+    { "type": "buymeacoffee", "url": "https://buymeacoffee.com/felipecarrillo100" },
+    { "type": "paypal", "url": "https://www.paypal.com/donate/?business=7X3JAPNBQTXZG&amount=5&no_recurring=0&item_name=NPM%2FGitHub+libraries&currency_code=USD" }
+  ],
   "license": "MIT"
 }

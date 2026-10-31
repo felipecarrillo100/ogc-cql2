@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
-import { ALL, envelopeOf, FILTERS, GARBAGE, leaf, differences, fromEvaluate, STORAGES, stored, asGeoJson, type G } from "./spatial-cases.ts";
+import { ALL, envelopeOf, FILTERS, GARBAGE, leaf, differences, fromEvaluate, RELATION_FILTERS, RELATIONS, STORAGES, stored, asGeoJson, type G } from "./spatial-cases.ts";
 
 // --- SQLite ----------------------------------------------------------------------------------------------------------
 
@@ -57,11 +57,72 @@ describe("SQLite selects exactly what evaluate selects", () => {
     const results = new Set(FILTERS.map((f) => JSON.stringify(fromEvaluate(ALL.map(asGeoJson), f))));
     expect(results.size).toBeGreaterThan(20);
   });
+
+  it("the relations' filters aren't trivial either: each relation selects something, in different sets", () => {
+    for (const op of RELATIONS) {
+      const results = RELATION_FILTERS.filter((f) => (f as { op: string }).op === op).map((f) => fromEvaluate(ALL.map(asGeoJson), f));
+      expect(results.some((r) => r.length > 0), op).toBe(true);
+      expect(new Set(results.map((r) => JSON.stringify(r))).size, op).toBeGreaterThan(1);
+    }
+  });
+});
+
+// --- SQLite with SpatiaLite: the other relations ---------------------------------------------------------------------
+
+/** mod_spatialite, from CQL2_SPATIALITE or the usual places; the reason it can't load, otherwise. */
+function withSpatialite(): DatabaseSync | string {
+  const tried: string[] = [];
+  for (const path of [process.env.CQL2_SPATIALITE, "/opt/homebrew/lib/mod_spatialite", "/usr/local/lib/mod_spatialite", "/usr/lib/x86_64-linux-gnu/mod_spatialite", "mod_spatialite"]) {
+    if (!path) continue;
+    try {
+      const db = new DatabaseSync(":memory:", { allowExtension: true });
+      db.loadExtension(path);
+      return db;
+    } catch (error) {
+      tried.push(`${path}: ${(error as Error).message.split("\n")[0]}`);
+    }
+  }
+  return `SpatiaLite (mod_spatialite) can't load; set CQL2_SPATIALITE to its path. Tried ${tried.join("; ")}`;
+}
+
+describe("SQLite with SpatiaLite: the other relations, exactly as evaluate (with GEOS) selects", () => {
+  const db = withSpatialite();
+  const skip = typeof db === "string" ? db : "";
+  if (typeof db !== "string") for (const [name, fn] of Object.entries(sqliteFunctions)) db.function(name, { deterministic: true }, fn as never);
+  const run = (columns: Record<string, SqlColumn>) => (filter: Cql2Filter) => {
+    const { where, params } = toSql(filter, { dialect: "sqlite", columns, spatialite: true });
+    return ((db as DatabaseSync).prepare(`SELECT id FROM t WHERE ${where} ORDER BY id`).all(...(params as never[])) as { id: number }[]).map((r) => r.id);
+  };
+
+  it.for(Object.keys(STORAGES))(`${RELATION_FILTERS.length} filters on ${ALL.length} values: %s`, (storage, context) => {
+    if (skip) return context.skip(skip);
+    const d = db as DatabaseSync;
+    d.exec(`DROP TABLE IF EXISTS t; CREATE TABLE t (id INTEGER PRIMARY KEY, geom BLOB)`);
+    const insert = d.prepare("INSERT INTO t VALUES (?, ?)");
+    ALL.forEach((v, i) => insert.run(i + 1, stored(v, STORAGES[storage]!) as never));
+    expect(differences(run(GEOMETRY), ALL.map(asGeoJson), RELATION_FILTERS)).toBe("");
+  });
+
+  it(`with GeoPackage's R-tree: ${RELATION_FILTERS.length} filters`, (context) => {
+    if (skip) return context.skip(skip);
+    const d = db as DatabaseSync;
+    d.exec(`DROP TABLE IF EXISTS t; DROP TABLE IF EXISTS rtree_t_geom; CREATE TABLE t (id INTEGER PRIMARY KEY, geom BLOB);
+            CREATE VIRTUAL TABLE rtree_t_geom USING rtree(id, minx, maxx, miny, maxy)`);
+    const insert = d.prepare("INSERT INTO t VALUES (?, ?)");
+    const index = d.prepare("INSERT INTO rtree_t_geom VALUES (?, ?, ?, ?, ?)");
+    ALL.forEach((v, i) => {
+      insert.run(i + 1, stored(v, STORAGES["GeoPackage, envelope"]!) as never);
+      const envelope = v === null || v === GARBAGE || (typeof v === "string" && v !== "empty") ? undefined : envelopeOf(v as G | "empty");
+      if (envelope) index.run(i + 1, ...(envelope as never[]));
+    });
+    expect(differences(run({ geometry: { ...GEOMETRY.geometry!, rtree: "rtree_t_geom" } }), ALL.map(asGeoJson), RELATION_FILTERS)).toBe("");
+  });
 });
 
 // --- The SQL text ----------------------------------------------------------------------------------------------------
 
 describe("the SQL it builds", () => {
+  const leafOf = (op: string, literal: unknown) => ({ op, args: [{ property: "geometry" }, literal] });
   const s = (literal: unknown, dialect: "sqlite" | "duckdb", column: SqlColumn) =>
     toSql(leaf(literal) as unknown as Cql2Filter, { dialect, columns: { geometry: column } });
 
@@ -140,10 +201,43 @@ describe("the SQL it builds", () => {
     expect(s({ bbox: [0, 0, 1, 1] }, "duckdb", { sqlType: "VARCHAR" })).toEqual({ where: "NULL::BOOLEAN", params: [] });
   });
 
-  it("the other relations are still unsupported", () => {
-    for (const dialect of ["sqlite", "duckdb"] as const) {
-      expect(() => toSql({ op: "s_within", args: [{ property: "geometry" }, { bbox: [0, 0, 1, 1] }] } as unknown as Cql2Filter, { dialect, columns: GEOMETRY }))
-        .toThrow(expect.objectContaining({ code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }));
+  it("sqlite: the other relations need SpatiaLite (spatialite: true); without it they are unsupported", () => {
+    expect(() => toSql({ op: "s_within", args: [{ property: "geometry" }, { bbox: [0, 0, 1, 1] }] } as unknown as Cql2Filter, { dialect: "sqlite", columns: GEOMETRY }))
+      .toThrow(expect.objectContaining({ code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }));
+  });
+
+  it("sqlite with SpatiaLite: SpatiaLite's GeoPackage reader first, cql2_wkt where it can't read; the literal as WKT, once per placeholder", () => {
+    const fn = (g: string) => `ST_Within(${g}, GeomFromText(?, 4326))`;
+    const form = `COALESCE(NULLIF(${fn(`GeomFromGPB("geom")`)}, -1), CASE length(cql2_wkt("geom")) WHEN 0 THEN 0 ELSE NULLIF(${fn(`GeomFromText(cql2_wkt("geom"), 4326)`)}, -1) END)`;
+    const r = (filter: unknown, column: SqlColumn = GEOMETRY.geometry!) => toSql(filter as Cql2Filter, { dialect: "sqlite", columns: { geometry: column }, spatialite: true });
+    const box = "POLYGON((0 40, 10 40, 10 50, 0 50, 0 40))";
+    expect(r(leafOf("s_within", { bbox: [0, 40, 10, 50] }))).toEqual({ where: form, params: [box, box] });
+    // Across the antimeridian a multipolygon; with the R-tree its candidates first, their parameters first.
+    expect(r(leafOf("s_within", { bbox: [170, -10, -170, 10] })).params[0]).toBe("MULTIPOLYGON(((170 -10, 180 -10, 180 10, 170 10, 170 -10)), ((-180 -10, -170 -10, -170 10, -180 10, -180 -10)))");
+    const indexed = { ...GEOMETRY.geometry!, rtree: "rtree_t_geom" };
+    expect(r(leafOf("s_within", { bbox: [0, 40, 10, 50] }), indexed)).toEqual({
+      where: `(rowid IN (SELECT id FROM "rtree_t_geom" WHERE (minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?)) AND ${form})`,
+      params: [10, 0, 50, 40, box, box],
+    });
+    expect(r({ op: "not", args: [leafOf("s_within", { bbox: [0, 40, 10, 50] })] }, indexed).where).toBe(`NOT (${form})`);
+    expect(r(leafOf("s_disjoint", { bbox: [0, 40, 10, 50] })).where).toBe(`NOT (cql2_intersects("geom", ?) = 1)`);
+  });
+
+  it("duckdb, the other relations: ST_<relation>(column, literal), with the covering's comparisons first outside a NOT; S_DISJOINT as NOT S_INTERSECTS", () => {
+    const column = { sqlType: "GEOMETRY", column: "geom" } as const;
+    const covered = { ...column, covering: { bbox: { xmin: ["bbox", "xmin"], ymin: ["bbox", "ymin"], xmax: ["bbox", "xmax"], ymax: ["bbox", "ymax"] } } } as const;
+    const r = (op: string, literal: unknown, c: SqlColumn = column) => toSql({ op, args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: c } });
+    const point = { type: "Point", coordinates: [1, 2] };
+    for (const [op, fn] of [["s_equals", "ST_Equals"], ["s_touches", "ST_Touches"], ["s_within", "ST_Within"], ["s_overlaps", "ST_Overlaps"], ["s_crosses", "ST_Crosses"], ["s_contains", "ST_Contains"]]) {
+      expect(r(op!, point).where).toBe(`${fn}("geom", ST_GeomFromGeoJSON($1))`);
+      expect(r(op!, point, { sqlType: "BLOB", column: "geom" }).where).toBe(`${fn}(TRY(ST_GeomFromWKB("geom")), ST_GeomFromGeoJSON($1))`);
+      expect(r(op!, point, covered).where).toMatch(new RegExp(`^\\(\\("bbox"\\."xmin" <= .+\\) AND ${fn}\\("geom", ST_GeomFromGeoJSON\\(\\$1\\)\\)\\)$`));
     }
+    expect(r("s_within", { bbox: [170, -10, -170, 10] }).where).toMatch(/^ST_Within\("geom", ST_Union\(ST_MakeEnvelope\(/);
+    expect(r("s_disjoint", point).where).toBe(`NOT (ST_Intersects("geom", ST_GeomFromGeoJSON($1)))`);
+    expect(r("s_disjoint", point, covered).where).toBe(`NOT (ST_Intersects("geom", ST_GeomFromGeoJSON($1)))`); // under a NOT: no covering
+    const negated = toSql({ op: "not", args: [{ op: "s_within", args: [{ property: "geometry" }, point] }] } as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: covered } });
+    expect(negated.where).toBe(`NOT (ST_Within("geom", ST_GeomFromGeoJSON($1)))`);
+    expect(r("s_within", point, { sqlType: "VARCHAR" }).where).toBe("NULL::BOOLEAN");
   });
 });

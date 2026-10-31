@@ -26,7 +26,8 @@
  * A `LIKE` `_` matches one code point.
  */
 import { unwrap, type Fold } from "../core/folds.js";
-import type { Cql2Filter, FoldedString, ScalarLiteral } from "../core/types.js";
+import { dimension, literalGeometry, relates, transpose, type MatrixRelation } from "../core/relate.js";
+import type { Cql2Filter, FoldedString, Geometry, ScalarLiteral } from "../core/types.js";
 import { NOT_IN_EVALUATE, refuseUnsupported } from "../core/unsupported.js";
 import { geometryParts, intersects, literalParts } from "./spatial.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
@@ -47,6 +48,27 @@ export interface EvaluateOptions<F = unknown> {
    * `getProperty`, and must hold a GeoJSON geometry.
    */
   readonly geometryProperty?: string;
+  /**
+   * A geometry engine for the Spatial Functions class (S_EQUALS, S_TOUCHES, S_WITHIN, S_OVERLAPS, S_CROSSES,
+   * S_CONTAINS); without one they are refused (`unsupported`). S_INTERSECTS and S_DISJOINT always use the package's own
+   * exact engine. See {@link SpatialEngine}.
+   */
+  readonly spatialEngine?: SpatialEngine;
+}
+
+/**
+ * A planar geometry engine (GEOS in WebAssembly, for one), plugged into `evaluate` for the Spatial Functions class. It
+ * only computes DE-9IM matrices: what each CQL2 function means (its patterns, the dimension rules of S_OVERLAPS and
+ * S_CROSSES) is decided by the package. Geometries are GeoJSON, heights included; a box literal comes as a Polygon,
+ * across the antimeridian as a MultiPolygon. NULLs, values that aren't a geometry and empty geometries never reach the
+ * engine; an engine that throws for a feature (an invalid polygon) gives NULL for it.
+ */
+export interface SpatialEngine {
+  /** Called once per spatial literal, when the filter is compiled. */
+  prepare(literal: Geometry): {
+    /** The DE-9IM matrix of (literal, geometry), the literal first: nine characters of `F`, `0`, `1`, `2`. */
+    relate(geometry: Geometry): string;
+  };
 }
 
 const defaultGetProperty = (feature: unknown, name: string): unknown =>
@@ -107,19 +129,19 @@ const not = (a: Truth): Truth => (a === null ? null : !a);
 type Getter<F> = (feature: F, name: string) => unknown;
 
 
-function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string): (feature: F) => Truth {
+function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string, engine: SpatialEngine | undefined): (feature: F) => Truth {
   if (typeof filter === "boolean") return () => filter;
   switch (filter.op) {
     case "and": {
-      const parts = filter.args.map((arg) => compile(arg, get, geometry));
+      const parts = filter.args.map((arg) => compile(arg, get, geometry, engine));
       return (f) => parts.reduce<Truth>((acc, part) => and(acc, part(f)), true);
     }
     case "or": {
-      const parts = filter.args.map((arg) => compile(arg, get, geometry));
+      const parts = filter.args.map((arg) => compile(arg, get, geometry, engine));
       return (f) => parts.reduce<Truth>((acc, part) => or(acc, part(f)), false);
     }
     case "not": {
-      const inner = compile(filter.args[0], get, geometry);
+      const inner = compile(filter.args[0], get, geometry, engine);
       return (f) => not(inner(f));
     }
     case "isNull": {
@@ -146,25 +168,49 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string): (feat
         return v >= low && v <= high;
       };
     }
-    case "s_intersects": {
+    case "s_intersects":
+    case "s_disjoint": {
+      // S_DISJOINT is NOT S_INTERSECTS: the same NULLs.
       const [subject, literal] = filter.args;
       const target = literalParts(literal);
+      const geometryOf = subject.property === geometry ? (f: F) => (f as { geometry?: unknown } | null)?.geometry : (f: F) => get(f, subject.property);
+      const disjoint = filter.op === "s_disjoint";
+      return (f) => {
+        const value = geometryOf(f);
+        if (isNullish(value)) return null;
+        const parts = geometryParts(value);
+        return parts === undefined ? null : intersects(parts, target) !== disjoint; // not a geometry: a type mismatch, NULL
+      };
+    }
+    case "s_equals":
+    case "s_touches":
+    case "s_within":
+    case "s_overlaps":
+    case "s_crosses":
+    case "s_contains": {
+      const [subject, literal] = filter.args;
+      const relation: MatrixRelation = filter.op;
+      const target = literalGeometry(literal);
+      const prepared = engine!.prepare(target); // refused before compiling without an engine
+      const dimLiteral = dimension(target);
       const geometryOf = subject.property === geometry ? (f: F) => (f as { geometry?: unknown } | null)?.geometry : (f: F) => get(f, subject.property);
       return (f) => {
         const value = geometryOf(f);
         if (isNullish(value)) return null;
         const parts = geometryParts(value);
-        return parts === undefined ? null : intersects(parts, target); // not a geometry: a type mismatch, NULL
+        if (parts === undefined) return null; // not a geometry: a type mismatch, NULL
+        const g = value as Geometry;
+        // An empty geometry shares no point with anything: only the exteriors meet.
+        if (parts.box === undefined) return relates(relation, "FFFFFFFF2", -1, dimLiteral);
+        let matrix: string;
+        try {
+          matrix = prepared.relate(g);
+        } catch {
+          return null; // the engine can't compute it (an invalid polygon): unknown
+        }
+        return relates(relation, transpose(matrix), dimension(g), dimLiteral);
       };
     }
-    case "s_equals":
-    case "s_disjoint":
-    case "s_touches":
-    case "s_within":
-    case "s_overlaps":
-    case "s_crosses":
-    case "s_contains":
-      throw new Error("unreachable: refused before compiling"); // refuseUnsupported
     case "in": {
       const [subject, list] = filter.args;
       const { inner, folds } = unwrap(subject);
@@ -202,12 +248,13 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string): (feat
  * The filter compiled once, to the three-valued result for each feature: `true`, `false` or `null` (unknown).
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
- * @throws Cql2Error `unsupported` for a spatial relation other than `s_intersects` (Spatial Functions): not yet.
+ * @throws Cql2Error `unsupported` for a relation of the Spatial Functions class other than `s_intersects` and
+ * `s_disjoint` (S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
  */
 export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => Truth {
   const valid = assertValid(filter);
-  refuseUnsupported(requiredConformance(valid), NOT_IN_EVALUATE, "ogc-cql2/evaluate");
-  return compile(valid, options.getProperty ?? (defaultGetProperty as Getter<F>), options.geometryProperty ?? "geometry");
+  if (!options.spatialEngine) refuseUnsupported(requiredConformance(valid), NOT_IN_EVALUATE, "ogc-cql2/evaluate without options.spatialEngine");
+  return compile(valid, options.getProperty ?? (defaultGetProperty as Getter<F>), options.geometryProperty ?? "geometry", options.spatialEngine);
 }
 
 /**
@@ -215,7 +262,8 @@ export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOp
  * NULL alike.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
- * @throws Cql2Error `unsupported` for a spatial relation other than `s_intersects` (Spatial Functions): not yet.
+ * @throws Cql2Error `unsupported` for a relation of the Spatial Functions class other than `s_intersects` and
+ * `s_disjoint` (S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
  */
 export function toPredicate<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => boolean {
   const evaluator = toEvaluator(filter, options);
@@ -227,7 +275,8 @@ export function toPredicate<F = unknown>(filter: Cql2Filter, options: EvaluateOp
  * {@link toPredicate} or {@link toEvaluator}.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
- * @throws Cql2Error `unsupported` for a spatial relation other than `s_intersects` (Spatial Functions): not yet.
+ * @throws Cql2Error `unsupported` for a relation of the Spatial Functions class other than `s_intersects` and
+ * `s_disjoint` (S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
  */
 export function evaluate<F = unknown>(filter: Cql2Filter, feature: F, options: EvaluateOptions<F> = {}): Truth {
   return toEvaluator(filter, options)(feature);

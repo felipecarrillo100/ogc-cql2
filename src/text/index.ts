@@ -8,8 +8,9 @@
  */
 import { Cql2Error } from "../core/errors.js";
 import { unwrap, type Fold } from "../core/folds.js";
-import type { Cql2Filter, FoldedString, Geometry, Position, PropertyRef, ScalarLiteral, SpatialLiteral, StringSubject } from "../core/types.js";
+import type { Cql2Filter, FoldedString, Geometry, PropertyRef, ScalarLiteral, SpatialLiteral, StringSubject } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
+import { positionsOf, wkt, wktNumber as number } from "../core/wkt.js";
 
 // `identifierStart` (cql2.bnf, cql2-1.0.0), range by range, in the grammar's order.
 const IDENTIFIER_START =
@@ -133,48 +134,6 @@ function literal(x: ScalarLiteral | FoldedString): string {
 // --- Geometries, as WKT per the grammar (`spatialInstance`) ------------------------------------------------------
 
 /** `scientificNumericLiteral = mantissa "E" exponent`: JavaScript writes 1e+21 and 1.5e-7 with a lowercase e. */
-const number = (x: number): string => String(x).replace("e", "E");
-const position = (p: Position): string => p.map(number).join(" ");
-const sequence = (ps: readonly Position[]): string => `(${ps.map(position).join(", ")})`;
-
-/** Every position of a geometry (not a collection), to decide its `Z`. */
-function positionsOf(g: Geometry): Position[] {
-  switch (g.type) {
-    case "Point":
-      return [g.coordinates];
-    case "LineString":
-    case "MultiPoint":
-      return [...g.coordinates];
-    case "Polygon":
-    case "MultiLineString":
-      return g.coordinates.flat();
-    case "MultiPolygon":
-      return g.coordinates.flat(2);
-    case "GeometryCollection":
-      return [];
-  }
-}
-
-function wkt(g: Geometry): string {
-  if (g.type === "GeometryCollection") return `GEOMETRYCOLLECTION(${g.geometries.map(wkt).join(", ")})`;
-  const z = positionsOf(g)[0]?.length === 3 ? " Z" : "";
-  switch (g.type) {
-    case "Point":
-      return `POINT${z}(${position(g.coordinates)})`;
-    case "LineString":
-      return `LINESTRING${z}${sequence(g.coordinates)}`;
-    case "Polygon":
-      return `POLYGON${z}(${g.coordinates.map(sequence).join(", ")})`;
-    case "MultiPoint":
-      // The grammar's `multiPointText`: each point in its own parentheses.
-      return `MULTIPOINT${z}(${g.coordinates.map((p) => `(${position(p)})`).join(", ")})`;
-    case "MultiLineString":
-      return `MULTILINESTRING${z}(${g.coordinates.map(sequence).join(", ")})`;
-    case "MultiPolygon":
-      return `MULTIPOLYGON${z}(${g.coordinates.map((polygon) => `(${polygon.map(sequence).join(", ")})`).join(", ")})`;
-  }
-}
-
 /** A geometry literal, or `BBOX(west, south, east, north)` / `BBOX(west, south, min, east, north, max)`. */
 const spatialLiteral = (x: SpatialLiteral): string => ("bbox" in x && !("type" in x) ? `BBOX(${x.bbox.map(number).join(", ")})` : wkt(x as Geometry));
 

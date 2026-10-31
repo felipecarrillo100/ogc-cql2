@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { toSql, type SqlColumn } from "ogc-cql2/sql";
-import { ALL, asGeoJson, differences, FILTERS, leaf, STORAGES, stored, VALUES, wkb, type G } from "./spatial-cases.ts";
+import { ALL, asGeoJson, differences, FILTERS, leaf, RELATION_FILTERS, RELATIONS, STORAGES, stored, VALUES, wkb, type G } from "./spatial-cases.ts";
 
 /** What the tests use of `@duckdb/node-api`, the same in both versions. */
 interface Connection {
@@ -73,9 +73,9 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
     return (await rows(`SELECT id FROM ${table} WHERE ${where} ORDER BY id`, params)).map((r) => r[0] as number);
   }
   /** Each filter's rows, in order: `differences` asks for them synchronously. */
-  async function all(table: string, column: SqlColumn): Promise<(filter: Cql2Filter) => number[]> {
+  async function all(table: string, column: SqlColumn, filters: readonly Cql2Filter[] = FILTERS): Promise<(filter: Cql2Filter) => number[]> {
     const results = new Map<string, number[]>();
-    for (const filter of FILTERS) results.set(JSON.stringify(filter), await select(table, column, filter));
+    for (const filter of filters) results.set(JSON.stringify(filter), await select(table, column, filter));
     return (filter) => results.get(JSON.stringify(filter))!;
   }
 
@@ -126,6 +126,33 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
       await geometryTables();
       const column: SqlColumn = { sqlType: "GEOMETRY", column: "geom", ...(label === "no covering" ? {} : { covering: COVERING }) };
       expect(differences(await all(table, column), GEOMETRIES.map(asGeoJson))).toBe("");
+    });
+
+    it.for([
+      ["w", "BLOB", "no covering"],
+      ["w2", "BLOB", "covering of DOUBLE fields"],
+      ["w4", "BLOB", "covering of FLOAT fields"],
+      ["g", "GEOMETRY", "no covering"],
+      ["g2", "GEOMETRY", "covering of DOUBLE fields"],
+      ["g4", "GEOMETRY", "covering of FLOAT fields"],
+    ] as const)(`the other relations, %s: ${RELATION_FILTERS.length} filters against evaluate with GEOS`, async ([table, type, label], context) => {
+      if (spatial) return context.skip(spatial);
+      if (type === "BLOB") await blobs();
+      else await geometryTables();
+      const column: SqlColumn = { sqlType: type, column: "geom", ...(label === "no covering" ? {} : { covering: COVERING }) };
+      const values = type === "BLOB" ? ALL.map(asGeoJson) : GEOMETRIES.map(asGeoJson);
+      expect(differences(await all(table, column, RELATION_FILTERS), values, RELATION_FILTERS)).toBe("");
+    });
+
+    it("the R-tree index is used for every relation but S_DISJOINT", async (context) => {
+      if (spatial) return context.skip(spatial);
+      await duck.run("SELECT setseed(0.1)");
+      await duck.run("CREATE OR REPLACE TABLE ix AS SELECT ST_Point(random() * 360 - 180, random() * 180 - 90) AS geom FROM range(200000); CREATE INDEX ix_geom ON ix USING RTREE (geom)");
+      for (const op of RELATIONS.filter((r) => r !== "s_disjoint")) {
+        const { where, params } = toSql({ op, args: [{ property: "geometry" }, { bbox: [10, 10, 15, 15] }] } as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: { sqlType: "GEOMETRY", column: "geom" } } });
+        const plan = (await rows(`EXPLAIN SELECT count(*) FROM ix WHERE ${where}`, params)).map((r) => r[1]).join("\n");
+        expect(plan, op).toMatch(/rtree[ _]index[ _]scan/i);
+      }
     });
 
     it("the R-tree index is used: for a box, a geometry as a parameter, and a box across the antimeridian", async (context) => {

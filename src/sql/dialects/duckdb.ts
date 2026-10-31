@@ -18,6 +18,7 @@
  *   it.
  */
 import type { Fold } from "../../core/folds.js";
+import type { MatrixRelation } from "../../core/relate.js";
 import { literalParts } from "../../evaluate/spatial.js";
 import { caseiKey, compareCodePoints, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
 import type { SpatialLiteral } from "../../core/types.js";
@@ -246,6 +247,23 @@ function outward32(x: number, up: boolean): number {
  * `undefined` for a column that isn't a geometry.
  */
 function duckdbIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
+  return spatial(sql, column, literal, param, positive, (g, l) => `ST_Intersects(${g}, ${l})`);
+}
+
+/**
+ * The other relations of Spatial Functions (S_DISJOINT is NOT S_INTERSECTS), as `ST_Equals`, `ST_Touches`,
+ * `ST_Within`, `ST_Overlaps`, `ST_Crosses`, `ST_Contains`: exact against GEOS's DE-9IM matrix on DuckDB 1.4.3, 1.5.4
+ * and 2.0 (measured; DuckDB has no `ST_Relate`), each using an R-tree index. The column, the literal and the covering
+ * as for S_INTERSECTS: each of these relations needs the two boxes to meet, so the covering's overlap test is a
+ * necessary condition for all of them.
+ */
+function duckdbRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
+  const fn = { s_equals: "ST_Equals", s_touches: "ST_Touches", s_within: "ST_Within", s_overlaps: "ST_Overlaps", s_crosses: "ST_Crosses", s_contains: "ST_Contains" }[relation];
+  return spatial(sql, column, literal, param, positive, (g, l) => `${fn}(${g}, ${l})`);
+}
+
+/** A spatial test `exact(geometry, literal)`, with the covering's comparisons first where they apply. */
+function spatial(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, exact: (g: string, l: string) => string): string | undefined {
   const t = column.sqlType === undefined ? undefined : bareType(column.sqlType);
   const geometry = t === undefined ? typeof column.format === "string" && column.format.startsWith("geometry-") : /^geometry\b/.test(t);
   const wkb = ["blob", "bytea", "binary", "varbinary"].includes(t ?? "");
@@ -265,7 +283,7 @@ function duckdbIntersects(sql: string, column: SqlColumn, literal: SpatialLitera
     const box = literalParts(literal).box;
     boxes = box && [box];
   }
-  const exact = `ST_Intersects(${g}, ${l})`;
+  const test = exact(g, l);
   const c = column.covering?.bbox;
   for (const k of ["xmin", "ymin", "xmax", "ymax"] as const) {
     const path: unknown = c?.[k];
@@ -273,11 +291,11 @@ function duckdbIntersects(sql: string, column: SqlColumn, literal: SpatialLitera
       throw new TypeError(`covering.bbox.${k} must be the path of a field, [column, field], as GeoParquet's metadata gives it`);
     }
   }
-  if (c === undefined || !positive || boxes === undefined) return exact;
+  if (c === undefined || !positive || boxes === undefined) return test;
   const field = (path: readonly [string, string]) => `${quote(path[0])}.${quote(path[1])}`;
   const overlaps = boxes.map(([w, s, e, n]) =>
     `${field(c.xmin)} <= ${number(outward32(e!, true))} AND ${field(c.xmax)} >= ${number(outward32(w!, false))} AND ${field(c.ymin)} <= ${number(outward32(n!, true))} AND ${field(c.ymax)} >= ${number(outward32(s!, false))}`);
-  return `((${overlaps.length === 1 ? overlaps[0] : overlaps.map((o) => `(${o})`).join(" OR ")}) AND ${exact})`;
+  return `((${overlaps.length === 1 ? overlaps[0] : overlaps.map((o) => `(${o})`).join(" OR ")}) AND ${test})`;
 }
 
 export const duckdb: Dialect = {
@@ -290,4 +308,5 @@ export const duckdb: Dialect = {
   view: duckdbView,
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))} ESCAPE '\\'`,
   intersects: duckdbIntersects,
+  relate: duckdbRelate,
 };

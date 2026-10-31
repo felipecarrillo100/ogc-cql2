@@ -11,8 +11,10 @@
  * - `1` and `"1"` are different ids, as GeoJSON has it.
  */
 import { readFileSync } from "node:fs";
+import { CONFORMANCE } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
-import type { CollectionDescription, Feature, FeatureId, Queryable, Store } from "./types.ts";
+import { geosEngine } from "../geos-engine.ts";
+import { BASE_CLASSES, type CollectionDescription, type Feature, type FeatureId, type Queryable, type Store } from "./types.ts";
 
 export interface GeoJsonCollection {
   readonly id: string;
@@ -144,8 +146,9 @@ export function createGeoJsonStore(collection: GeoJsonCollection, json: unknown,
     describe: () => description,
     queryables: () => queryables,
     hasGeometry: () => true, // every GeoJSON feature has a geometry member, maybe null
+    conformance: () => [...BASE_CLASSES, CONFORMANCE.spatial], // the other relations through GEOS (geos.js)
     async query(filter, { limit, offset }) {
-      const matched = features.filter(toPredicate(filter));
+      const matched = features.filter(toPredicate(filter, { spatialEngine: geosEngine }));
       return { features: matched.slice(offset, offset + limit), numberMatched: matched.length };
     },
   };

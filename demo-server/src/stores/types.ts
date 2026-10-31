@@ -3,6 +3,7 @@
  * table or (later) a PostgreSQL table are interchangeable behind it.
  */
 import type { Cql2Filter } from "ogc-cql2";
+import { CONFORMANCE } from "ogc-cql2";
 
 export type FeatureId = string | number;
 
@@ -41,11 +42,19 @@ export interface QueryResult {
   readonly numberMatched: number;
 }
 
+/** The classes every store evaluates: GeoJSON with ogc-cql2/evaluate, GeoPackage and PostgreSQL in the database. */
+export const BASE_CLASSES: readonly string[] = [
+  CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive,
+  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus,
+];
+
 export interface Store {
   describe(): CollectionDescription;
   queryables(): Readonly<Record<string, Queryable>>;
   /** Whether the features have a geometry that filters can use (a table without one, or in another SRS, has none). */
   hasGeometry(): boolean;
+  /** The CQL2 conformance classes this store evaluates: {@link BASE_CLASSES}, and Spatial Functions where it can. */
+  conformance(): readonly string[];
   /** The features the filter selects (TRUE), in the store's order, one page of them. The filter is valid. */
   query(filter: Cql2Filter, page: Page): Promise<QueryResult>;
 }

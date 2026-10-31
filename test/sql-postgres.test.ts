@@ -187,8 +187,24 @@ describe("S_INTERSECTS in PostGIS", () => {
     expect(s("name", { bbox: [0, 0, 1, 1] })).toEqual({ where: "NULL::boolean", params: [] });
   });
 
-  it("the other relations are still unsupported", () => {
-    expect(() => toSql({ op: "s_within", args: [p("geometry"), { bbox: [0, 0, 1, 1] }] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }))
-      .toThrow(expect.objectContaining({ code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }));
+  it("the other relations: each exact, behind the index operator that finds its candidates", () => {
+    const L = `ST_SetSRID(ST_GeomFromGeoJSON($1), 4326)`;
+    const square = { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+    const r = (op: string, literal: unknown = square) =>
+      toSql({ op, args: [p("geometry"), literal] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where;
+    expect(r("s_equals")).toBe(`ST_Equals("geom", ${L})`);
+    expect(r("s_within")).toBe(`("geom" @ ${L} AND ST_Relate("geom", ${L}, 'T*F**F***'))`);
+    expect(r("s_contains")).toBe(`("geom" ~ ${L} AND ST_Relate("geom", ${L}, 'T*****FF*'))`);
+    expect(r("s_touches")).toBe(`("geom" && ${L} AND ST_Touches("geom", ${L}))`);
+    expect(r("s_overlaps")).toBe(`("geom" && ${L} AND ST_Overlaps("geom", ${L}))`);
+    expect(r("s_crosses")).toBe(`("geom" && ${L} AND ST_Crosses("geom", ${L}))`);
+    expect(r("s_disjoint")).toBe(`NOT (("geom" && ${L} AND NOT ST_Relate("geom", ${L}, 'FF*FF****')))`);
+    // A box across the antimeridian: one literal, its halves collected; a collection kept whole.
+    expect(r("s_within", { bbox: [170, -10, -170, 10] })).toMatch(/^\("geom" @ ST_Collect\(ST_MakeEnvelope\(.+\), ST_MakeEnvelope\(.+\)\) AND ST_Relate\(/);
+    const collection = { type: "GeometryCollection", geometries: [{ type: "Point", coordinates: [1, 2] }, square] };
+    expect(r("s_touches", collection)).toBe(`("geom" && ${L} AND ST_Touches("geom", ${L}))`);
+    // Another SRID and geography: the column as for S_INTERSECTS.
+    expect(toSql({ op: "s_within", args: [p("mercator"), square] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where).toContain(`ST_Transform("mercator", 4326) @ `);
+    expect(toSql({ op: "s_within", args: [p("name"), square] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where).toBe("NULL::boolean");
   });
 });

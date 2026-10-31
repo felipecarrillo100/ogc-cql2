@@ -1,7 +1,8 @@
 # Research: CQL2's spatial operations
 
 **Status: research and decisions, 2026-10-31; phase A implemented in 0.6.0** (the types, `validate` and `text` for
-the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS), **phase C in 0.8.0** (PostGIS), **phase D in 0.9.0** (SQLite / GeoPackage, DuckDB). It records what CQL2 1.0.0 defines
+the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS), **phase C in 0.8.0** (PostGIS), **phase D in 0.9.0** (SQLite / GeoPackage, DuckDB), **Spatial Functions in
+0.10.0** (every engine). It records what CQL2 1.0.0 defines
 for geometries, what the candidate engines do (measured), and the design decided from it (at the end, "Engines,
 measured" and "Decisions"). Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
 grammar (`cql2.bnf`, tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3:
@@ -247,3 +248,28 @@ DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
   and without a covering, the index's use, and canaries on what the dialect relies on in DuckDB), the 5,705 literals
   through demo-server's GeoPackage store, the four-store comparison, and the browser check; each rule broken once on
   purpose.
+
+## As implemented: Spatial Functions (0.10.0)
+
+- **One meaning:** `src/core/relate.ts` holds the relations as Simple Features' DE-9IM patterns.
+  - It also holds the dimension rules of S_OVERLAPS and S_CROSSES, and the transposition.
+  - CQL2's Table 4 gives S_TOUCHES' second matrix as `F**F*****`. Simple Features, GEOS and PostGIS use `F**T*****`.
+  - S_DISJOINT is NOT S_INTERSECTS everywhere, with the same NULLs.
+- **`evaluate`:** an optional `spatialEngine` that only returns matrices, so the package, not the engine, decides each
+  relation.
+  - Measured (geos.js 0.1.5, GEOS 3.14): the patterns reproduce GEOS's own predicates on tricky pairs (vertices,
+    edges, holes, collections), and match PostGIS on the US states for all six relations × 5,805 literals.
+  - JSTS fails on collections, its prepared geometries are broken, and it is slow. Turf gives wrong answers.
+- **PostGIS:** Equals, Touches, Overlaps and Crosses are exact as functions. Within and Contains take PostGIS's
+  point-in-polygon shortcut, so they are `ST_Relate` with the pattern, behind `@` / `~`.
+  - Measured on PostGIS 3.1–3.7, amd64 and arm64, 1,527 literals × 7 relations each: 0 differences.
+  - Plain `ST_Contains` was wrong for 26 literals on every arm64 server, and `ST_Disjoint` for 29 on 3.7.
+- **DuckDB:** the functions themselves, exact on DuckDB 1.4.3, 1.5.4 and 2.0, and in DuckDB-WASM 1.32.0 and
+  1.33.1-dev57.0. The covering's overlap test applies to every relation but S_DISJOINT.
+- **SQLite:** SpatiaLite as an option.
+  - SpatiaLite reads GeoPackage blobs itself; the package's own reader, as WKT, takes what it can't.
+  - Empty geometries are decided by the package, since SpatiaLite can't represent one.
+  - −1 ("can't compute") is NULL.
+- **The standard's own test:** Table 14 (A.9.9, test 38), all 26 predicates, on Natural Earth converted at full
+  precision from the shapefiles. The published GeoJSON's rounding moves the vertices that S_EQUALS and S_TOUCHES
+  literals sit on.

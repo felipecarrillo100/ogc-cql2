@@ -37,13 +37,15 @@ const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, pos
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
- * @throws Cql2Error `unsupported` for a spatial filter: the dialects have no spatial SQL yet.
+ * @throws Cql2Error `unsupported` for a spatial class the dialect doesn't evaluate.
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
   const dialect = DIALECTS[options.dialect];
-  // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes); the other relations come later.
-  refuseUnsupported(requiredConformance(valid), dialect.intersects ? [CONFORMANCE.spatial] : NOT_IN_SQL, `ogc-cql2/sql (${options.dialect})`);
+  // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
+  const relate = options.dialect === "sqlite" && options.spatialite !== true ? undefined : dialect.relate;
+  const notEvaluated = relate ? [] : dialect.intersects ? [CONFORMANCE.spatial] : NOT_IN_SQL;
+  refuseUnsupported(requiredConformance(valid), notEvaluated, `ogc-cql2/sql (${options.dialect})`);
   const params: SqlValue[] = [];
   const param = (value: SqlValue, cast = ""): string => {
     params.push(value);
@@ -120,14 +122,23 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         const { column, sql } = columnOf(ref, `${path}/args/0`);
         return dialect.intersects!(sql, column, literal, param, positive) ?? dialect.never;
       }
+      case "s_disjoint": {
+        // NOT S_INTERSECTS, the leaf's polarity flipped: the same NULLs, and a prefilter only where it is exact.
+        const [ref, literal] = f.args;
+        const { column, sql } = columnOf(ref, `${path}/args/0`);
+        const intersects = dialect.intersects!(sql, column, literal, param, !positive);
+        return intersects === undefined ? dialect.never : `NOT (${intersects})`;
+      }
       case "s_equals":
-      case "s_disjoint":
       case "s_touches":
       case "s_within":
       case "s_overlaps":
       case "s_crosses":
-      case "s_contains":
-        throw new Error("unreachable: refused before writing"); // refuseUnsupported
+      case "s_contains": {
+        const [ref, literal] = f.args;
+        const { column, sql } = columnOf(ref, `${path}/args/0`);
+        return dialect.relate!(f.op, sql, column, literal, param, positive) ?? dialect.never;
+      }
       case "in": {
         const [s, list] = f.args;
         const items = list.map(literal);

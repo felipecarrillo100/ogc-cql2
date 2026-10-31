@@ -13,9 +13,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
-import type { Cql2Filter } from "ogc-cql2";
+import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import pg from "pg";
+import { geosEngine } from "../src/geos-engine.ts";
 import { openGeoPackage } from "../src/stores/geopackage.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
 import type { Store } from "../src/stores/types.ts";
@@ -192,5 +193,88 @@ describe("S_INTERSECTS: evaluate against PostGIS, on the US states", () => {
       for (const { m: matrix } of m) assert.equal((matrix as string)[3], "0", `${g}: ${matrix}`);
     }
     t.diagnostic(`ST_Intersects departs from GEOS for ${departures} point-state pairs, each a point exactly on the state's boundary`);
+  });
+});
+
+// --- Spatial Functions: evaluate with GEOS plugged in, against PostGIS -----------------------------------------------
+
+/** PostGIS's answer for each relation, per state: its exact functions, and ST_Relate for the two that take a shortcut. */
+const POSTGIS_RELATION = {
+  s_equals: "ST_Equals(geom, L)",
+  s_touches: "ST_Touches(geom, L)",
+  s_within: "ST_Relate(geom, L, 'T*F**F***')", // ST_Within takes the point-in-polygon shortcut
+  s_overlaps: "ST_Overlaps(geom, L)",
+  s_crosses: "ST_Crosses(geom, L)",
+  s_contains: "ST_Relate(geom, L, 'T*****FF*')", // so does ST_Contains
+} as const;
+
+/** The literal as one PostGIS geometry: a box as an envelope, across the antimeridian the two halves collected. */
+function postgisLiteral(literal: Literal): { sql: string; params: unknown[] } {
+  if ("bbox" in literal) {
+    const [w, s, e, n] = literal.bbox as number[];
+    const env = (a: number, b: number) => `ST_MakeEnvelope(${a}, ${s}, ${b}, ${n}, 4326)`;
+    return { sql: w! > e! ? `ST_Collect(${env(w!, 180)}, ${env(-180, e!)})` : env(w!, e!), params: [] };
+  }
+  return { sql: "ST_SetSRID(ST_GeomFromGeoJSON($1), 4326)", params: [JSON.stringify(literal)] };
+}
+
+describe("Spatial Functions: evaluate with GEOS plugged in, against PostGIS, on the US states", () => {
+  it(`${Object.keys(POSTGIS_RELATION).length} relations × ${LITERALS.length} literals: the same states`, async (t) => {
+    if (skip) return t.skip(skip);
+    const differences: string[] = [];
+    let selected = 0;
+    const columns = Object.entries(POSTGIS_RELATION).map(([r, f]) => `${f} AS ${r}`).join(", ");
+    for (const literal of LITERALS) {
+      const { sql, params } = postgisLiteral(literal);
+      const { rows } = await pool!.query(`SELECT "STATE_NAME" AS n, ${columns.replaceAll("L", "q.l")} FROM cql2demo.states, (SELECT ${sql} AS l) q`, params);
+      for (const relation of Object.keys(POSTGIS_RELATION) as (keyof typeof POSTGIS_RELATION)[]) {
+        const filter = { op: relation, args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter;
+        const ours = states.filter(toPredicate(filter, { spatialEngine: geosEngine })).map((f) => f.properties.STATE_NAME).sort();
+        const theirs = rows.filter((r) => r[relation] === true).map((r) => r.n as string).sort();
+        selected += theirs.length;
+        if (JSON.stringify(ours) !== JSON.stringify(theirs)) differences.push(`${relation} ${JSON.stringify(literal).slice(0, 120)}\n    evaluate ${ours.join(", ")} / PostGIS ${theirs.join(", ")}`);
+      }
+    }
+    t.diagnostic(`${selected} state-literal pairs selected across the relations`);
+    assert.ok(selected > 1000, "the literals select states");
+    assert.equal(differences.slice(0, 10).join("\n"), "");
+  });
+
+  it(`ogc-cql2/sql's sqlite dialect with SpatiaLite, through the GeoPackage store: all eight relations, the same states as evaluate with GEOS`, async (t) => {
+    const store = openGeoPackage({ file: new URL("../data/usa.gpkg", import.meta.url).pathname, tables: ["states"] }).stores[0]!.store;
+    if (!store.conformance().includes(CONFORMANCE.spatial)) return t.skip("SpatiaLite (mod_spatialite) isn't installed");
+    const differences: string[] = [];
+    for (const relation of ["s_disjoint", ...Object.keys(POSTGIS_RELATION)]) {
+      for (const literal of LITERALS.filter((_, i) => i % 4 === 0 || (LITERALS[i] as { type?: string }).type === "GeometryCollection")) {
+        const filter = { op: relation, args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter;
+        const ours = states.filter(toPredicate(filter, { spatialEngine: geosEngine })).map((f) => f.properties.STATE_NAME).sort();
+        const { features } = await store.query(filter, { limit: 100, offset: 0 });
+        const theirs = features.map((f) => f.properties.STATE_NAME as string).sort();
+        if (JSON.stringify(ours) !== JSON.stringify(theirs)) differences.push(`${relation} ${JSON.stringify(literal).slice(0, 120)}\n    evaluate ${ours.join(", ")} / sql ${theirs.join(", ")}`);
+      }
+    }
+    assert.equal(differences.slice(0, 10).join("\n"), "");
+  });
+
+  it(`ogc-cql2/sql's postgres dialect, through the PostgreSQL store: all eight relations, the same states as evaluate with GEOS`, async (t) => {
+    if (skip) return t.skip(skip);
+    const storePool = createPool();
+    try {
+      const { stores } = await openPostgres(storePool, { functionSchema: "cql2demo", tables: [{ table: "cql2demo.states" }] });
+      const store = stores[0]!.store as Store;
+      const differences: string[] = [];
+      for (const relation of ["s_disjoint", ...Object.keys(POSTGIS_RELATION)]) {
+        for (const literal of LITERALS) {
+          const filter = { op: relation, args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter;
+          const ours = states.filter(toPredicate(filter, { spatialEngine: geosEngine })).map((f) => f.properties.STATE_NAME).sort();
+          const { features } = await store.query(filter, { limit: 100, offset: 0 });
+          const theirs = features.map((f) => f.properties.STATE_NAME as string).sort();
+          if (JSON.stringify(ours) !== JSON.stringify(theirs)) differences.push(`${relation} ${JSON.stringify(literal).slice(0, 120)}\n    evaluate ${ours.join(", ")} / sql ${theirs.join(", ")}`);
+        }
+      }
+      assert.equal(differences.slice(0, 10).join("\n"), "");
+    } finally {
+      await storePool.end();
+    }
   });
 });

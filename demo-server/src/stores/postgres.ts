@@ -12,10 +12,10 @@
  * - Values are selected through `postgresValue`, so what is served is exactly what the SQL compares.
  */
 import pg from "pg";
-import type { Cql2Filter } from "ogc-cql2";
+import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { postgresValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
-import type { CollectionDescription, Feature, Queryable, Store } from "./types.ts";
+import { BASE_CLASSES, type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
 
 export interface PostgresTable {
   /** `schema.table`, or `table` on the search path. */
@@ -178,6 +178,7 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
     describe: () => description,
     queryables: () => queryables,
     hasGeometry: () => geometryColumn !== undefined,
+    conformance: () => [...BASE_CLASSES, CONFORMANCE.spatial], // PostGIS
     async query(filter: Cql2Filter, { limit, offset }) {
       const filterColumns = geometryColumn && !Object.hasOwn(columns, "geometry") ? { ...columns, geometry: geometryColumn } : columns;
       const { where, params } = toSql(filter, { dialect: "postgres", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}) });

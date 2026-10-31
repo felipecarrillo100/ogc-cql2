@@ -5,6 +5,7 @@
  */
 import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
+import { geosEngine } from "./geos-engine.ts";
 
 // --- The geometries ------------------------------------------------------------------------------------------------
 
@@ -153,12 +154,20 @@ export const FILTERS = [
   ...LITERALS.map((l, i) => ({ op: "not", args: [{ op: "or", args: [{ op: "not", args: [leaf(l)] }, { op: "not", args: [{ op: "not", args: [leaf(LITERALS[(i + 5) % LITERALS.length])] }] }] }] })),
 ] as unknown as Cql2Filter[];
 
-export const fromEvaluate = (values: unknown[], filter: Cql2Filter): number[] =>
-  values.map((geometry, i) => ({ type: "Feature", id: i + 1, properties: {}, geometry })).filter(toPredicate(filter)).map((f) => f.id);
+/** The other relations of Spatial Functions, each literal as a leaf and under a NOT (S_DISJOINT included). */
+export const RELATIONS = ["s_equals", "s_disjoint", "s_touches", "s_within", "s_overlaps", "s_crosses", "s_contains"] as const;
+export const RELATION_FILTERS = RELATIONS.flatMap((op) => [
+  ...LITERALS.map((l) => ({ op, args: [{ property: "geometry" }, l] })),
+  ...LITERALS.map((l) => ({ op: "not", args: [{ op, args: [{ property: "geometry" }, l] }] })),
+]) as unknown as Cql2Filter[];
 
-export function differences(run: (filter: Cql2Filter) => number[], values: unknown[]): string {
+/** The rows `evaluate` selects, with GEOS plugged in for the relations that need an engine. */
+export const fromEvaluate = (values: unknown[], filter: Cql2Filter): number[] =>
+  values.map((geometry, i) => ({ type: "Feature", id: i + 1, properties: {}, geometry })).filter(toPredicate(filter, { spatialEngine: geosEngine })).map((f) => f.id);
+
+export function differences(run: (filter: Cql2Filter) => number[], values: unknown[], filters: readonly Cql2Filter[] = FILTERS): string {
   const out: string[] = [];
-  for (const filter of FILTERS) {
+  for (const filter of filters) {
     const sql = run(filter);
     const memory = fromEvaluate(values, filter);
     if (JSON.stringify(sql) !== JSON.stringify(memory)) out.push(`${JSON.stringify(filter)}\n    sql ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
