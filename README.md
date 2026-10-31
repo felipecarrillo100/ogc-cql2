@@ -349,7 +349,7 @@ toText(inView); // "S_INTERSECTS(geometry, BBOX(5.9, 45.8, 10.5, 47.8))"
 const inArea = { op: "s_within", args: [{ property: "geometry" }, {
   type: "Polygon", coordinates: [[[-80, 40], [-70, 40], [-70, 47], [-80, 47], [-80, 40]]],
 }] };
-requiredConformance(inArea); // Basic CQL2, Spatial Functions
+requiredConformance(inArea); // the URIs of Basic CQL2 and Spatial Functions
 ```
 
 - **The class a server must declare** follows the standard: `s_intersects` with a point or a box is Basic Spatial
