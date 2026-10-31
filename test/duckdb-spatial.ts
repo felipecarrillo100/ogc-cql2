@@ -175,7 +175,9 @@ export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engin
       expect(covered).toBeLessThan(groups);
     });
 
-    it.runIf(version === "2.0")("ST_Intersects alone is still much slower without an index than with ST_Intersects_Extent: the evidence an engine option would need", async (context) => {
+    // A measurement, not a gate: timings move with the machine's load (other test files run in parallel), so it only
+    // reports the ratio, and fails on it only when asked to (CQL2_CANARY_TIMING=1, e.g. after a DuckDB upgrade).
+    it.runIf(version === "2.0")("ST_Intersects alone without an index, against ST_Intersects with ST_Intersects_Extent: the evidence an engine option would need", async (context) => {
       if (spatial) return context.skip(spatial);
       await duck.run("SELECT setseed(0.1)");
       await duck.run("CREATE OR REPLACE TABLE noidx AS SELECT ST_Point(random() * 360 - 180, random() * 180 - 90) AS geom FROM range(200000)");
@@ -192,8 +194,10 @@ export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engin
       const L = "ST_MakeEnvelope(10, 10, 15, 15)";
       const plain = await best(`SELECT count(*) FROM noidx WHERE ST_Intersects(geom, ${L})`);
       const paired = await best(`SELECT count(*) FROM noidx WHERE ST_Intersects(geom, ${L}) AND ST_Intersects_Extent(geom, ${L})`);
-      context.annotate(`ST_Intersects alone ${plain.toFixed(1)} ms, with ST_Intersects_Extent ${paired.toFixed(1)} ms`);
-      expect(plain / paired, "The gap closed: plain ST_Intersects is now as fast, and no engine option is needed (docs/architecture.md)").toBeGreaterThan(3);
+      context.annotate(`ST_Intersects alone ${plain.toFixed(1)} ms, with ST_Intersects_Extent ${paired.toFixed(1)} ms (${(plain / paired).toFixed(1)}×)`);
+      if (process.env.CQL2_CANARY_TIMING === "1") {
+        expect(plain / paired, "The gap closed: plain ST_Intersects is now as fast, and no engine option is needed (docs/architecture.md)").toBeGreaterThan(3);
+      }
     });
   });
 }
