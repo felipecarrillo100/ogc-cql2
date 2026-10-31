@@ -294,6 +294,16 @@ each), and canaries state what the dialect relies on. Each fails when a DuckDB r
 
 When DuckDB-WASM ships a newer engine, the `@duckdb/node-api-1.4` devDependency moves to that engine.
 
+**`npm run check:duckdb`** (`scripts/check-duckdb.mjs`) runs the same suite on the newest engines, before a release or
+monthly: the newest `@duckdb/node-api`, and the engine inside the newest DuckDB-WASM (`latest` and `next`, read
+through the package's own Node build), each through the `@duckdb/node-api` of that engine. It installs them in a
+temporary folder (never package.json or the lock file), holds each to its line's expectations (`1.4`, or `core` from
+1.5), enforces the timing canary's threshold, and prints each test with what to update when one fails; it exits
+with 1 then. An engine without a Node package (a development build) is reported, not tested. On 2026-10-31 it found
+DuckDB-WASM's `latest` (1.33.1-dev57.0) shipping DuckDB 1.5.4, which passes everything except the covering on an
+indexed table: that works there, so the failure is DuckDB 2.0's alone. Its profile doesn't count row groups, so the
+canary on the covering can't tell there.
+
 ### Errors
 
 - **Every refusal throws a `Cql2Error`:** `invalid-filter` (from `assertValid`, and from `text` and `evaluate` for an
@@ -400,7 +410,8 @@ filter selects). The server never knows which store it talks to.
   - `test/duckdb-spatial.ts` (0.9.0), once on DuckDB 2.0 and once on DuckDB 1.4.3 (DuckDB-WASM's engine): the same 132
     filters on `GEOMETRY` and `BLOB` columns, each without a covering and with `DOUBLE` and `FLOAT` covering fields
     (values whose box survived without a geometry among them); the R-tree index used (`EXPLAIN`) for a box, a
-    geometry parameter and the antimeridian; and the canaries of "DuckDB: what we rely on";
+    geometry parameter and the antimeridian; and the canaries of "DuckDB: what we rely on"; `npm run check:duckdb` runs
+    it on the newest DuckDB engines (not part of `npm test`);
   - PostgreSQL's `cql2_accenti` against the JavaScript rule on every code point of the Basic Multilingual Plane
     (63,487) for 0.5.0: no difference;
   - each rule was broken once on purpose, to show the tests catch it.
