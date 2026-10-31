@@ -18,8 +18,18 @@ import type { Cql2Filter } from "ogc-cql2";
 import { CONFORMANCE } from "ogc-cql2";
 import { validate } from "ogc-cql2/validate";
 
-/** The classes the stores evaluate: ogc-cql2's, except the spatial ones, whose engines come later. */
+/** The classes every store evaluates. */
 const EVALUATED = [CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive];
+
+/** And by source: GeoJSON collections (ogc-cql2/evaluate) also S_INTERSECTS; the SQL stores' spatial SQL comes later. */
+const evaluatedBy = (source: string): string[] =>
+  source === "geojson" ? [...EVALUATED, CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus] : EVALUATED;
+
+/** A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that name). */
+const queryablesOf = (store: Store): Record<string, object> => {
+  const own = store.queryables();
+  return Object.hasOwn(own, "geometry") ? { ...own } : { ...own, geometry: { format: "geometry-any" } };
+};
 import { readConfig } from "./config.ts";
 import { sendProblem } from "./problems.ts";
 import { loadGeoJsonStore } from "./stores/geojson.ts";
@@ -67,7 +77,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
         title: store.describe().title,
-        properties: store.queryables(),
+        properties: queryablesOf(store),
       }),
     );
   });
@@ -87,7 +97,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 
     // The collection's queryables: an unknown property, or a literal of another type than the property's, is refused
     // here (CQL2 lets a server answer a type mismatch with an error), instead of silently matching nothing.
-    const result = validate(body.filter, { queryables: store.queryables(), conformance: EVALUATED });
+    const result = validate(body.filter, { queryables: queryablesOf(store), conformance: evaluatedBy(store.describe().source) });
     if (!result.valid) {
       return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile, or doesn't fit this collection's queryables.", result.problems);
     }

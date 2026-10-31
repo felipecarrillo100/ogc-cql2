@@ -17,7 +17,7 @@ import { Cql2Error } from "../core/errors.js";
 import { unwrap } from "../core/folds.js";
 import type { Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, StringSubject } from "../core/types.js";
 import { foldKey, instantOf } from "../evaluate/strings.js";
-import { refuseUnsupported } from "../core/unsupported.js";
+import { NOT_IN_SQL, refuseUnsupported } from "../core/unsupported.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
 import { duckdb } from "./dialects/duckdb.js";
 import { postgres } from "./dialects/postgres.js";
@@ -40,7 +40,7 @@ const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, pos
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
-  refuseUnsupported(requiredConformance(valid), "ogc-cql2/sql");
+  refuseUnsupported(requiredConformance(valid), NOT_IN_SQL, "ogc-cql2/sql");
   const dialect = DIALECTS[options.dialect];
   const params: SqlValue[] = [];
   const param = (value: SqlValue, cast = ""): string => {

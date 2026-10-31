@@ -1,7 +1,7 @@
 # Research: CQL2's spatial operations
 
 **Status: research and decisions, 2026-10-31; phase A implemented in 0.6.0** (the types, `validate` and `text` for
-the three classes; the engines follow). It records what CQL2 1.0.0 defines
+the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS); the SQL engines follow. It records what CQL2 1.0.0 defines
 for geometries, what the candidate engines do (measured), and the design decided from it (at the end, "Engines,
 measured" and "Decisions"). Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
 grammar (`cql2.bnf`, tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3:
@@ -170,4 +170,19 @@ DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
   text, not against its JSON: cql2-rs 0.5.6 drops Z coordinates and reads `BBOX` as a function call (measured).
 - Measured on the way: CQL2's JSON Schema refuses a geometry with its own GeoJSON `bbox` member (it is then also a
   bbox literal, and the literal is a `oneOf`), so `validate` refuses it too.
+
+## As implemented: phase B (0.7.0)
+
+- `evaluate` tests S_INTERSECTS (the two basic classes) in memory, with our own planar engine and Shewchuk's exact
+  orientation test; Spatial Functions stay `unsupported` there (they come with the optional engine hook).
+- The standard's Natural Earth test (Table 12) gives all eight counts on today's Natural Earth (5.2.0-pre).
+- Against GEOS on the US states, 5,705 generated literals select the same states.
+- **Measured on the way, for the PostGIS dialect:** PostGIS 3.5.6's `ST_Intersects` departs from GEOS for points
+  lying exactly on an edge (109 point-state pairs in the test): it answers false where `ST_Relate` puts the point on
+  the boundary, and `ST_Disjoint` and `ST_Distance` agree with GEOS. Its point-in-polygon shortcut isn't exact there.
+  The dialect will have to choose between `ST_Intersects` (fast, uses the index, not exact on edges) and a form that
+  is exact; to be measured in that phase.
+- The plain floating-point orientation test agrees with GEOS on the states (their coordinates have about seven
+  significant digits), but not on near-collinear points found by search; those, checked against PostGIS, are unit
+  tests.
 

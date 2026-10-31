@@ -121,6 +121,14 @@ What the text can't express is refused as `not-expressible`, with the reason and
   ranges, about 1.5 kB gzipped). Nested with `CASEI`, each applies in the order written, innermost first. See
   [accent-research.md](accent-research.md).
 - **Features** are read as GeoJSON, `feature.properties[name]`; `getProperty` replaces that for other shapes.
+- **`S_INTERSECTS`** (`src/evaluate/spatial.ts`, no dependency): planar, boundaries included, heights ignored, as
+  Simple Features and GEOS define it. Each geometry is taken apart into points, segments and polygons; two
+  geometries intersect when a point lies on or in the other, two segments meet, or a part of one lies inside a
+  polygon of the other (one vertex per component tells, once no boundaries meet). Orientation is exact: Shewchuk's
+  `orient2d`, as ported in robust-predicates (public domain), copied with types into `src/evaluate/orient2d.ts` and
+  checked identical to the original on 1,000,000 inputs. A box across the antimeridian is two boxes. Each feature
+  geometry's bounding box is computed once (cached per object) and tested first. The other relations (Spatial
+  Functions) are `unsupported` in `evaluate`.
 - **Compiled once:** `toPredicate` and `toEvaluator` validate the filter and prepare its patterns and literals, so
   each feature costs only the comparisons.
 
@@ -305,6 +313,13 @@ filter selects). The server never knows which store it talks to.
     older engine (DuckDB 1.4.3, against 2.0 in Node), so passing in Node doesn't prove the browser;
   - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 10,016 generated filters give the same features from
     the GeoJSON file, the GeoPackage and PostgreSQL (when the database is set up; skipped otherwise);
+  - `test/naturalearth.test.ts`: the standard's own acceptance test for Basic Spatial Functions (Table 12, conformance
+    test 26) on Natural Earth 1:110m (public domain, `test/fixtures/naturalearth/`): all eight counts;
+  - `demo-server/test/spatial.test.ts`: S_INTERSECTS on the US states against GEOS (PostGIS's `NOT ST_Disjoint`), 5,705
+    generated literals, many exactly on the states' vertices and edges: the same states. PostGIS's own
+    `ST_Intersects` isn't the reference: its shortcut for a point in a polygon isn't exact for a point exactly on an
+    edge (109 point-state pairs where it says false and GEOS's DE-9IM matrix puts the point on the boundary, measured
+    on PostGIS 3.5.6); the test checks that every departure is such a point. This matters for the PostGIS dialect;
   - PostgreSQL's `cql2_accenti` against the JavaScript rule on every code point of the Basic Multilingual Plane
     (63,487) for 0.5.0: no difference;
   - each rule was broken once on purpose, to show the tests catch it.
@@ -347,8 +362,9 @@ checks that they agree.
 | 0.4.0 | `toText` checked against the standard's text examples (with cql2-rs); the right class for spatial literals |
 | 0.5.0 | **Accent-insensitive Comparison** (`ACCENTI`), in every engine, combined with `CASEI`; see [accent-research.md](accent-research.md) |
 | 0.6.0 | **Spatial, phase A:** the three spatial classes in the types, `validate` and `text` (WKT per the grammar), so spatial filters can be built, checked and sent; `evaluate` and `sql` refuse them (`unsupported`) |
+| 0.7.0 | **Spatial, phase B:** `evaluate` tests `s_intersects` (Basic Spatial Functions and Basic plus) in memory, checked with the standard's Natural Earth test and against GEOS |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
-| next | **spatial engines**: Basic and Basic plus in every engine (`evaluate` first), Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
+| next | **spatial engines**: Basic and Basic plus in the SQL dialects, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
