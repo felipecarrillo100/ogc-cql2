@@ -328,7 +328,8 @@ checks that they agree.
 | 0.4.0 | `toText` checked against the standard's text examples (with cql2-rs); the right class for spatial literals |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
-| later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first, see [spatial-research.md](spatial-research.md); DuckDB's spatial extension), temporal, arrays; an index-friendly SQL mode |
+| next | **Accent-insensitive Comparison** (`ACCENTI`), see [accent-research.md](accent-research.md); then **spatial**: Basic and Basic plus in every engine, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
+| later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
 ### 1.x.x: Oracle and SQL Server
 
