@@ -14,6 +14,8 @@ import { after, before, describe, it } from "node:test";
 import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import pg from "pg";
+import { createPool, openPostgres } from "../src/stores/postgres.ts";
+import type { Store } from "../src/stores/types.ts";
 
 type Feature = { properties: { STATE_NAME: string }; geometry: { type: string; coordinates: unknown } };
 const states = (JSON.parse(readFileSync(new URL("../data/states.geojson", import.meta.url), "utf8")).features as Feature[]);
@@ -124,6 +126,26 @@ describe("S_INTERSECTS: evaluate against PostGIS, on the US states", () => {
     }
     assert.ok(selected > LITERALS.length, `the literals select states: ${selected} in all`);
     assert.equal(differences.slice(0, 10).join("\n"), "");
+  });
+
+  it(`ogc-cql2/sql's postgres dialect, through the PostgreSQL store: the same states as evaluate for every literal`, async (t) => {
+    if (skip) return t.skip(skip);
+    const storePool = createPool();
+    try {
+      const { stores } = await openPostgres(storePool, { functionSchema: "cql2demo", tables: [{ table: "cql2demo.states" }] });
+      const store = stores[0]!.store as Store;
+      const differences: string[] = [];
+      for (const literal of LITERALS) {
+        const filter = { op: "s_intersects", args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter;
+        const ours = states.filter(toPredicate(filter)).map((f) => f.properties.STATE_NAME).sort();
+        const { features } = await store.query(filter, { limit: 100, offset: 0 });
+        const theirs = features.map((f) => f.properties.STATE_NAME as string).sort();
+        if (JSON.stringify(ours) !== JSON.stringify(theirs)) differences.push(`${JSON.stringify(literal).slice(0, 160)}\n    evaluate ${ours.join(", ")} / sql ${theirs.join(", ")}`);
+      }
+      assert.equal(differences.slice(0, 10).join("\n"), "");
+    } finally {
+      await storePool.end();
+    }
   });
 
   it("PostGIS's ST_Intersects departs from GEOS only for points exactly on an edge (its point-in-polygon shortcut)", async (t) => {

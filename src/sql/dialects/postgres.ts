@@ -11,9 +11,10 @@
  */
 import type { Fold } from "../../core/folds.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
-import { quote, type Dialect, type Kind, type SqlColumn, type View } from "../types.js";
+import type { SpatialLiteral } from "../../core/types.js";
+import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
-type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "other";
+type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "geometry" | "geography" | "other";
 
 /** A declared type in lower case, without type modifiers, which can sit anywhere: "timestamp(3) with time zone". */
 export const bareType = (sqlType: string): string =>
@@ -29,7 +30,11 @@ export function queryableClass(column: SqlColumn): "text" | "number" | "boolean"
 
 /** What a PostgreSQL column holds, from its declared type, or else from its queryable. */
 function pgClass(column: SqlColumn): PgClass {
-  if (column.sqlType === undefined) return queryableClass(column);
+  if (column.sqlType === undefined) {
+    return typeof column.format === "string" && column.format.startsWith("geometry-") ? "geometry" : queryableClass(column);
+  }
+  if (/^\s*geometry\b/i.test(column.sqlType)) return "geometry";
+  if (/^\s*geography\b/i.test(column.sqlType)) return "geography";
   const t = bareType(column.sqlType);
   if (t.endsWith("[]")) return "other";
   if (["text", "character varying", "varchar", "character", "char", "bpchar", "name", "citext"].includes(t)) return "text";
@@ -181,6 +186,42 @@ $f$;
 `;
 }
 
+/** A geometry column's SRID: `srid`, else the declared type's (`geometry(Point, 3857)`), else 4326. */
+function sridOf(column: SqlColumn): number {
+  if (column.srid !== undefined) return column.srid;
+  const declared = /\(\s*\w+\s*,\s*(\d+)\s*\)/.exec(column.sqlType ?? "");
+  return declared ? Number(declared[1]) : 4326;
+}
+
+/**
+ * S_INTERSECTS in PostGIS, exactly as `evaluate` (and GEOS) decide it, using the spatial index:
+ * `column && literal AND NOT ST_Disjoint(column, literal)`. The bounding-box test `&&` uses the GiST index, and GEOS's
+ * `ST_Disjoint` decides exactly. PostGIS's own `ST_Intersects` takes a shortcut for a point in a polygon that isn't
+ * exact for a point lying exactly on an edge (measured on PostGIS 3.5.6), so it isn't used. A column in another SRID
+ * is transformed to 4326 (planar in CRS84, as CQL2 compares; a planar comparison in Mercator would draw other edges),
+ * which can't use a plain index on the column. Heights are ignored (GEOS's predicates are 2D).
+ */
+function postgresIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
+  const cls = pgClass(column);
+  if (cls !== "geometry" && cls !== "geography") return undefined;
+  const srid = cls === "geography" ? 4326 : sridOf(column);
+  const g = cls === "geography" ? `${sql}::geometry` : srid === 4326 ? sql : `ST_Transform(${sql}, 4326)`;
+  const parts: string[] = [];
+  if ("bbox" in literal && !("type" in literal)) {
+    const b = literal.bbox;
+    const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
+    const s = param(south);
+    const n = param(north);
+    const box = (w: string, e: string) => `ST_MakeEnvelope(${w}::double precision, ${s}::double precision, ${e}::double precision, ${n}::double precision, 4326)`;
+    if (west > east) parts.push(box(param(west), "180"), box("-180", param(east))); // across the antimeridian: two boxes
+    else parts.push(box(param(west), param(east)));
+  } else {
+    parts.push(`ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(literal))}), 4326)`);
+  }
+  const tests = parts.map((l) => `(${g} && ${l} AND NOT ST_Disjoint(${g}, ${l}))`);
+  return tests.length === 1 ? tests[0]! : `(${tests.join(" OR ")})`;
+}
+
 export const postgres: Dialect = {
   placeholder: (n) => `$${n}`,
   true: "TRUE",
@@ -190,4 +231,5 @@ export const postgres: Dialect = {
   instant: (ms) => new Date(ms).toISOString(),
   view: postgresView,
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))}`,
+  intersects: postgresIntersects,
 };

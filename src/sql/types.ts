@@ -4,21 +4,28 @@
  */
 
 import type { Fold } from "../core/folds.js";
-import type { Queryable } from "../core/types.js";
+import type { Queryable, SpatialLiteral } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb";
 
 /** A table column, as its queryable describes it. Without a `type`, its values' types are checked as they come. */
 export interface SqlColumn extends Queryable {
   readonly type?: "string" | "number" | "integer" | "boolean";
-  readonly format?: "date" | "date-time";
+  /** `date`, `date-time`, or a geometry (`geometry-point`, `geometry-any`…, as OGC API Features Part 3 writes it). */
+  readonly format?: "date" | "date-time" | `geometry-${string}`;
   /** The column's name in the table, when it isn't the property's name. */
   readonly column?: string;
   /**
    * `postgres` and `duckdb`: the declared type (`text`, `integer`, `timestamp with time zone`…; `VARCHAR`, `BIGINT`,
-   * `TIMESTAMP WITH TIME ZONE`…); else derived from `type`.
+   * `TIMESTAMP WITH TIME ZONE`…); else derived from `type`. For PostGIS, `geometry` (or `geometry(Point, 4326)`…)
+   * and `geography`.
    */
   readonly sqlType?: string;
+  /**
+   * `postgres`: a geometry column's SRID, when it isn't 4326 and `sqlType` doesn't say it (`geometry(Point, 3857)`).
+   * The column is then transformed to 4326, so the comparison is planar in CRS84, as CQL2's is.
+   */
+  readonly srid?: number;
 }
 
 export interface SqlOptions {
@@ -79,6 +86,11 @@ export interface Dialect {
   view(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string, folds: readonly Fold[]): View | undefined;
   /** `view LIKE pattern`, the pattern keyed as `evaluate` keys it; `param` adds a parameter. */
   like(view: View, pattern: string, param: (value: SqlValue) => string): string;
+  /**
+   * S_INTERSECTS(column, literal), exactly as `evaluate` decides it; `undefined` when the column holds no geometry
+   * (no value can match). Absent: the dialect has no spatial SQL yet, and spatial filters are `unsupported`.
+   */
+  intersects?(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined;
 }
 
 export const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;

@@ -28,13 +28,13 @@ The package implements these conformance classes:
 | Advanced Comparison Operators | `like`, `between`, `in` | ✅ | ✅ | ✅ |
 | Case-insensitive Comparison | `casei` | ✅ | ✅ | ✅ |
 | Accent-insensitive Comparison | `accenti` | ✅ | ✅ | ✅ |
-| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | not yet |
-| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | not yet |
+| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | PostgreSQL ✅; SQLite, DuckDB not yet |
+| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | PostgreSQL ✅; SQLite, DuckDB not yet |
 | Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | not yet | not yet |
 
 Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
-`s_intersects` in memory; the other relations, and spatial SQL, are refused with the code `unsupported` until their
-engines arrive.
+`s_intersects` in memory, and the `postgres` dialect in PostGIS; the other relations, and spatial SQL for SQLite and
+DuckDB, are refused with the code `unsupported` until their engines arrive.
 
 It accepts the form every server of those classes must support: a property on the left, a literal on the right.
 Anything else that is valid CQL2 (temporal and array functions, arithmetic, comparing two
@@ -233,6 +233,13 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
   `lower()` isn't), accent removal for ACCENTI (PostgreSQL's `unaccent` extension follows a dictionary instead: it
   turns `ø` into `o`), and strict readers of dates and instants in text columns. It needs no extension, only the right to
   create objects in that schema.
+- **Spatial filters (PostGIS):** give the geometry column as `{ sqlType: "geometry", column: "geom" }` (or
+  `geometry(MultiPolygon, 4326)`, `geography`). `s_intersects` becomes `geom && literal AND NOT ST_Disjoint(geom,
+  literal)`: the box test uses the GiST index, and GEOS decides exactly, as `evaluate` does. PostGIS's own
+  `ST_Intersects` isn't used: for a point lying exactly on an edge it can answer false (its point-in-polygon shortcut
+  isn't exact there). A column in another SRID (`srid: 3857`, or `geometry(Point, 3857)`) is transformed to 4326,
+  so the comparison is planar in CRS84 as CQL2's is; that can't use a plain index on the column (an expression index
+  on `ST_Transform(geom, 4326)` can), and data stored in another CRS isn't exact on its original vertices any more.
 - **`postgresValue(column)`** is what to SELECT for each column, so that what you serve is exactly what the SQL
   compared: dates as `YYYY-MM-DD`, instants as UTC `…Z` with milliseconds, numbers as double precision.
 - **Tested on real databases:** thousands of generated filters give the same features from a GeoJSON file

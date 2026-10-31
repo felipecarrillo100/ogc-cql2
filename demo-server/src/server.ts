@@ -21,9 +21,9 @@ import { validate } from "ogc-cql2/validate";
 /** The classes every store evaluates. */
 const EVALUATED = [CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive];
 
-/** And by source: GeoJSON collections (ogc-cql2/evaluate) also S_INTERSECTS; the SQL stores' spatial SQL comes later. */
+/** And by source: GeoJSON (ogc-cql2/evaluate) and PostgreSQL (PostGIS) also S_INTERSECTS; GeoPackage's comes later. */
 const evaluatedBy = (source: string): string[] =>
-  source === "geojson" ? [...EVALUATED, CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus] : EVALUATED;
+  source === "geojson" || source === "postgres" ? [...EVALUATED, CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus] : EVALUATED;
 
 /** A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that name). */
 const queryablesOf = (store: Store): Record<string, object> => {

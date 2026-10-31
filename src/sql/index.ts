@@ -18,6 +18,7 @@ import { unwrap } from "../core/folds.js";
 import type { Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, StringSubject } from "../core/types.js";
 import { foldKey, instantOf } from "../evaluate/strings.js";
 import { NOT_IN_SQL, refuseUnsupported } from "../core/unsupported.js";
+import { CONFORMANCE } from "../core/conformance.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
 import { duckdb } from "./dialects/duckdb.js";
 import { postgres } from "./dialects/postgres.js";
@@ -40,8 +41,9 @@ const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, pos
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
-  refuseUnsupported(requiredConformance(valid), NOT_IN_SQL, "ogc-cql2/sql");
   const dialect = DIALECTS[options.dialect];
+  // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes); the other relations come later.
+  refuseUnsupported(requiredConformance(valid), dialect.intersects ? [CONFORMANCE.spatial] : NOT_IN_SQL, `ogc-cql2/sql (${options.dialect})`);
   const params: SqlValue[] = [];
   const param = (value: SqlValue, cast = ""): string => {
     params.push(value);
@@ -112,7 +114,11 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         const v = subject(s, "number", `${path}/args/0`);
         return v === undefined ? dialect.never : `${v.sql} BETWEEN ${valueParam(v, low)} AND ${valueParam(v, high)}`;
       }
-      case "s_intersects":
+      case "s_intersects": {
+        const [ref, literal] = f.args;
+        const { column, sql } = columnOf(ref, `${path}/args/0`);
+        return dialect.intersects!(sql, column, literal, param) ?? dialect.never;
+      }
       case "s_equals":
       case "s_disjoint":
       case "s_touches":

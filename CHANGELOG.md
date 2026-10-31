@@ -4,6 +4,29 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.8.0] - 2026-10-31
+
+Spatial filters, phase C: `s_intersects` in the `postgres` dialect (PostGIS), exact and using the spatial index.
+
+### Added
+
+- `toSql` with `dialect: "postgres"`: `s_intersects` (Basic Spatial Functions and Basic plus) as
+  `geom && literal AND NOT ST_Disjoint(geom, literal)`: the box test uses the GiST index, GEOS decides exactly. Chosen
+  by measurement: as fast as `ST_Intersects`, which isn't exact for a point lying exactly on an edge.
+- `SqlColumn.srid`, and geometry columns by `sqlType` (`geometry`, `geometry(Point, 3857)`, `geography`) or by a
+  geometry `format`; a column in another SRID is transformed to 4326.
+
+### Changed
+
+- The `postgres` dialect no longer refuses the two basic spatial classes; SQLite and DuckDB still do, and Spatial
+  Functions stay `unsupported` in every dialect.
+- README: the classes table has separate `evaluate` and `sql` columns.
+
+### Tests
+
+- 5,705 literals through the `postgres` dialect against `evaluate` on the US states; spatial filters in demo-server's
+  four-store comparison (PostgreSQL in 4326 and in 3857).
+
 ## [0.7.0] - 2026-10-31
 
 Spatial filters, phase B: `evaluate` tests `s_intersects` in memory.
@@ -179,7 +202,8 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
-[0.7.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.6.0...HEAD
+[0.8.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.3.0...v0.4.0

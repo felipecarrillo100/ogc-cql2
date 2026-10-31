@@ -1,7 +1,7 @@
 # Research: CQL2's spatial operations
 
 **Status: research and decisions, 2026-10-31; phase A implemented in 0.6.0** (the types, `validate` and `text` for
-the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS); the SQL engines follow. It records what CQL2 1.0.0 defines
+the three classes), **phase B in 0.7.0** (`evaluate`, S_INTERSECTS), **phase C in 0.8.0** (PostGIS); SQLite and DuckDB follow. It records what CQL2 1.0.0 defines
 for geometries, what the candidate engines do (measured), and the design decided from it (at the end, "Engines,
 measured" and "Decisions"). Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
 grammar (`cql2.bnf`, tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3:
@@ -185,4 +185,20 @@ DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
 - The plain floating-point orientation test agrees with GEOS on the states (their coordinates have about seven
   significant digits), but not on near-collinear points found by search; those, checked against PostGIS, are unit
   tests.
+
+## As implemented: phase C (0.8.0)
+
+- The `postgres` dialect writes S_INTERSECTS as `geom && literal AND NOT ST_Disjoint(geom, literal)`, chosen by
+  measurement (PostgreSQL 17, PostGIS 3.5.6, a million random points with a GiST index):
+
+  | Form | Literals differing from `evaluate` (of 5,705) | Map-view box | Small polygon | Quarter of the world | Index |
+  |---|---|---|---|---|---|
+  | `ST_Intersects` | 99 | 0.8 ms | 0.4 ms | 62 ms | yes |
+  | `NOT ST_Disjoint` | 0 | 121 ms | 118 ms | 146 ms | no |
+  | `&&` and `NOT ST_Disjoint` | 0 | 0.6 ms | 0.4 ms | 71 ms | yes |
+
+- A column in another SRID is transformed to 4326 (planar in CRS84). Measured on the kitchen sink in 3857: the same
+  features with margin; 58 of 141 literals placed exactly on the original 4326 vertices differ, because the stored
+  3857 coordinates don't convert back exactly (5 becomes 4.999999999999998). Data kept in another CRS can't be exact
+  on its original vertices.
 
