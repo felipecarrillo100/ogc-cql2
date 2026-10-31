@@ -8,6 +8,7 @@ import { isIdentifier, quoteString, textProblem, toText } from "ogc-cql2/text";
 
 const p = (property: string) => ({ property });
 const casei = <T>(arg: T) => ({ op: "casei", args: [arg] }) as const;
+const accenti = <T>(arg: T) => ({ op: "accenti", args: [arg] }) as const;
 const eq = (property: string, value: unknown) => ({ op: "=", args: [p(property), value] }) as unknown as Cql2Filter;
 
 const cases: [Cql2Filter, string][] = [
@@ -29,6 +30,9 @@ const cases: [Cql2Filter, string][] = [
   [{ op: "like", args: [p("n"), "R_v%"] }, "n LIKE 'R_v%'"],
   [{ op: "like", args: [p("n"), "100\\%\\_%"] }, "n LIKE '100\\%\\_%'"],
   [{ op: "=", args: [casei(p("owner")), casei("somebody else")] }, "CASEI(owner) = CASEI('somebody else')"],
+  [{ op: "=", args: [accenti(p("etat_vol")), accenti("débárquér")] }, "ACCENTI(etat_vol) = ACCENTI('débárquér')"],
+  [{ op: "=", args: [casei(accenti(p("n"))), casei(accenti("São"))] }, "CASEI(ACCENTI(n)) = CASEI(ACCENTI('São'))"],
+  [{ op: "like", args: [accenti(casei(p("n"))), accenti(casei("sao%"))] }, "ACCENTI(CASEI(n)) LIKE ACCENTI(CASEI('sao%'))"],
   [{ op: "in", args: [casei(p("road_class")), [casei("Οδος"), casei("Straße")]] }, "CASEI(road_class) IN (CASEI('Οδος'), CASEI('Straße'))"],
   [eq("name", "O'Brien"), "name = 'O''Brien'"],
   [eq("strasse.klasse", "A"), "strasse.klasse = 'A'"],

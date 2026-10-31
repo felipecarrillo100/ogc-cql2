@@ -7,10 +7,11 @@
  * - SQLite lets a value of another type into any column, and GeoPackage says readers SHOULD allow for that. So each
  *   comparison reads a **typed view** of the column: a value of another type is NULL there, exactly as `evaluate`
  *   gives NULL for a type mismatch (values are never converted);
- * - text, CASEI, LIKE, dates and instants go through registered functions ({@link sqliteFunctions}) that run
+ * - text, CASEI, ACCENTI, LIKE, dates and instants go through registered functions ({@link sqliteFunctions}) that run
  *   `evaluate`'s own code. SQLite's own LIKE ignores ASCII case, and its `lower()` folds ASCII only.
  */
-import { caseiKey, dayOf, instantOf, likeRegExp, plainKey } from "../../evaluate/strings.js";
+import type { Fold } from "../../core/folds.js";
+import { accentiKey, caseiKey, dayOf, instantOf, likeRegExp, plainKey } from "../../evaluate/strings.js";
 import type { Dialect, Kind, SqlColumn, View } from "../types.js";
 
 const likeCache = new Map<string, RegExp>();
@@ -34,6 +35,7 @@ export function cachedLike(pattern: string): RegExp {
 export const sqliteFunctions: {
   readonly cql2_text: (value: unknown) => string | null;
   readonly cql2_casei: (value: unknown) => string | null;
+  readonly cql2_accenti: (value: unknown) => string | null;
   readonly cql2_day: (value: unknown) => string | null;
   readonly cql2_instant: (value: unknown) => number | null;
   readonly cql2_like: (value: unknown, pattern: unknown) => number | null;
@@ -42,6 +44,8 @@ export const sqliteFunctions: {
   cql2_text: (value) => (typeof value === "string" ? plainKey(value) : null),
   /** A text value, case-folded (CASEI). */
   cql2_casei: (value) => (typeof value === "string" ? caseiKey(value) : null),
+  /** A text value without accents (ACCENTI). */
+  cql2_accenti: (value) => (typeof value === "string" ? accentiKey(value) : null),
   /** A `YYYY-MM-DD` text value that exists. */
   cql2_day: (value) => dayOf(value) ?? null,
   /** An ISO 8601 date-time with `Z` or an offset that exists, as epoch milliseconds. */
@@ -59,14 +63,14 @@ export const sqliteFunctions: {
  * declared BOOLEAN has them, as GeoPackage's 0 / 1, which are then not numbers (the application reads them as
  * `false` / `true`). `undefined`: no value can ever be of that kind.
  */
-function sqliteView(sql: string, kind: Kind, column: SqlColumn): View | undefined {
+function sqliteView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: string) => string, folds: readonly Fold[]): View | undefined {
   const numeric = `typeof(${sql}) IN ('integer', 'real')`;
   const view = (expression: string): View => ({ sql: expression, cast: "" });
   switch (kind) {
     case "text":
       return view(`cql2_text(${sql})`);
-    case "casei":
-      return view(`cql2_casei(${sql})`);
+    case "fold":
+      return view(folds.reduce((expression, fold) => `cql2_${fold}(${expression})`, sql));
     case "day":
       return view(`cql2_day(${sql})`);
     case "instant":

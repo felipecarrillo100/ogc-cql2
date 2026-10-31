@@ -2,6 +2,8 @@
  * How a value is read for comparison: shared by `evaluate` and by the SQL functions of `ogc-cql2/sql`, so both
  * decide every comparison with the same code. Internal to the package.
  */
+import type { Fold } from "../core/folds.js";
+import { ACCENT_MARKS } from "./accentMarks.js";
 import { CASE_FOLDING } from "./caseFolding.js";
 
 // --- Case folding --------------------------------------------------------------------------------------------------
@@ -44,6 +46,46 @@ export const plainKey = (text: string): string => text.normalize("NFC");
 
 /** A string's comparison key under CASEI: its canonical caseless form, recomposed to NFC. */
 export const caseiKey = (text: string): string => caseFold(text.normalize("NFD")).normalize("NFC");
+
+// --- Accent stripping ----------------------------------------------------------------------------------------------
+
+let marks: Set<number> | undefined;
+
+/** Decodes the generated table (scripts/gen-accent-marks.mjs) on first use. */
+function marksTable(): Set<number> {
+  if (marks) return marks;
+  marks = new Set();
+  for (const token of ACCENT_MARKS.split(";")) {
+    const [start, count] = token.split(",").map((h) => parseInt(h, 16)) as [number, number];
+    for (let i = 0; i < count; i++) marks.add(start + i);
+  }
+  return marks;
+}
+
+/** The marks ACCENTI removes, as code points, for the PostgreSQL functions of `ogc-cql2/sql`. */
+export function accentMarkEntries(): number[] {
+  return [...marksTable()].sort((a, b) => a - b);
+}
+
+/**
+ * A string's comparison key under ACCENTI: canonical decomposition, the nonspacing marks removed (Unicode 15.0.0,
+ * category Mn, except the Japanese voicing marks U+3099 and U+309A), recomposed to NFC.
+ */
+export function accentiKey(text: string): string {
+  const decomposed = text.normalize("NFD");
+  if (/^[\x00-\x7F]*$/.test(decomposed)) return decomposed;
+  const table = marksTable();
+  let out = "";
+  for (const char of decomposed) if (!table.has(char.codePointAt(0)!)) out += char;
+  return out.normalize("NFC");
+}
+
+/** A string's comparison key under the folds, applied in order (the innermost function first); none: NFC. */
+export function foldKey(text: string, folds: readonly Fold[]): string {
+  let key = folds.length === 0 ? plainKey(text) : text;
+  for (const fold of folds) key = fold === "casei" ? caseiKey(key) : accentiKey(key);
+  return key;
+}
 
 /**
  * Two strings in Unicode code point order: negative, zero or positive. JavaScript's `<` compares UTF-16 code units,

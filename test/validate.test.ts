@@ -9,6 +9,7 @@ import { schemaAccepts } from "./schema.ts";
 
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
+const accenti = (arg: unknown) => ({ op: "accenti", args: [arg] });
 
 const accepted: [string, unknown][] = [
   ["true", true],
@@ -35,6 +36,12 @@ const accepted: [string, unknown][] = [
   ["in dates", { op: "in", args: [p("d"), [{ date: "2022-04-14" }, { date: "2022-04-15" }]] }],
   ["in casei", { op: "in", args: [casei(p("road_class")), [casei("Οδος"), casei("Straße")]] }],
   ["= casei", { op: "=", args: [casei(p("owner")), casei("somebody else")] }],
+  ["= accenti", { op: "=", args: [accenti(p("etat_vol")), accenti("débárquér")] }],
+  ["casei of accenti, both sides", { op: "=", args: [casei(accenti(p("n"))), casei(accenti("São"))] }],
+  ["accenti of casei, both sides", { op: "=", args: [accenti(casei(p("n"))), accenti(casei("São"))] }],
+  ["like, accenti", { op: "like", args: [accenti(p("n")), accenti("Sao%")] }],
+  ["in, accenti", { op: "in", args: [accenti(p("n")), [accenti("Bogotá"), accenti("Medellín")]] }],
+  ["accenti literal against a plain property", { op: "=", args: [p("n"), accenti("São")] }],
   ["and", { op: "and", args: [{ op: ">", args: [p("floors"), 5] }, { op: "=", args: [p("pool"), true] }] }],
   ["or of three", { op: "or", args: [true, false, { op: "isNull", args: [p("x")] }] }],
   ["nested", { op: "not", args: [{ op: "or", args: [{ op: "in", args: [p("a"), ["x"]] }, { op: "like", args: [p("b"), "_%"] }] }] }],
@@ -58,7 +65,8 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["property on the right", { op: "=", args: [p("a"), p("b")] }, "outside-profile", "/args/1"],
   ["function on the left", { op: "=", args: [{ op: "upper", args: [p("a")] }, "X"] }, "outside-profile", "/args/0"],
   ["arithmetic on the right", { op: ">", args: [p("a"), { op: "+", args: [1, 2] }] }, "outside-profile", "/args/1"],
-  ["accenti", { op: "=", args: [{ op: "accenti", args: [p("a")] }, "é"] }, "outside-profile", "/args/0"],
+  ["accenti inside accenti", { op: "=", args: [{ op: "accenti", args: [{ op: "accenti", args: [p("a")] }] }, "é"] }, "outside-profile", "/args/0/args/0"],
+  ["accenti of a number", { op: "=", args: [p("a"), { op: "accenti", args: [5] }] }, "type-mismatch", "/args/1/args/0"],
   ["nested casei", { op: "=", args: [casei(casei(p("a"))), "x"] }, "outside-profile", "/args/0/args/0"],
   ["spatial", { op: "s_intersects", args: [p("geometry"), { type: "Point", coordinates: [0, 0] }] }, "outside-profile", ""],
   ["temporal", { op: "t_after", args: [p("t"), { timestamp: "2020-01-01T00:00:00Z" }] }, "outside-profile", ""],
@@ -165,6 +173,16 @@ describe("conformance", () => {
     ]);
   });
 
+  it("requiredConformance and options.conformance know Accent-insensitive Comparison", () => {
+    const filter = { op: "=", args: [casei(accenti(p("n"))), casei(accenti("São"))] };
+    expect(requiredConformance(assertValid(filter))).toEqual([CONFORMANCE.basic, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive]);
+    const result = validate(filter, { conformance: [CONFORMANCE.basic, CONFORMANCE.caseInsensitive] });
+    expect(result.valid ? [] : result.problems.map(({ code, path, conformance }) => [code, path, conformance])).toEqual([
+      ["needs-conformance", "/args/0/args/0", CONFORMANCE.accentInsensitive],
+      ["needs-conformance", "/args/1/args/0", CONFORMANCE.accentInsensitive],
+    ]);
+  });
+
   it("options.conformance: a class the server doesn't declare is a problem", () => {
     const basicOnly = { conformance: [CONFORMANCE.basic] };
     expect(validate({ op: "=", args: [p("a"), 1] }, basicOnly).valid).toBe(true);
@@ -258,6 +276,14 @@ describe("options.queryables: types from the queryables (/per/basic-cql2/type-ca
     expect(message({ op: "=", args: [p("nope"), 1] })).toBe(
       `"nope" is not a queryable here. The queryables: ${Object.keys(queryables).join(", ")}.`,
     );
+  });
+
+  it("ACCENTI needs a string property too, nested or not", () => {
+    expect(problems({ op: "=", args: [accenti(p("name")), accenti("x")] })).toEqual([]);
+    expect(problems({ op: "=", args: [accenti(p("pop")), accenti("5")] })).toEqual(["type-mismatch /args/0/args/0"]);
+    expect(problems({ op: "=", args: [casei(accenti(p("day"))), casei("x")] })).toEqual(["type-mismatch /args/0/args/0/args/0"]);
+    expect(problems({ op: "=", args: [p("pop"), accenti("5")] })).toEqual(["type-mismatch /args/1"]);
+    expect(problems({ op: "=", args: [accenti(p("nope")), accenti("x")] })).toEqual(["unknown-property /args/0/args/0"]);
   });
 
   it("LIKE and CASEI need a string property; BETWEEN a number", () => {

@@ -21,11 +21,14 @@
  *
  * Strings are compared after Unicode normalization (NFC; Recommendation 1, `/rec/core/string-normalization`), in code
  * point order (not JavaScript's UTF-16 order). `CASEI` applies Unicode's full case folding
- * (`/req/case-insensitive-comparison/casei-function` E) to exactly what it wraps. A `LIKE` `_` matches one code point.
+ * (`/req/case-insensitive-comparison/casei-function` E) and `ACCENTI` removes the nonspacing marks
+ * (`/req/accent-insensitive-comparison/accenti-function` E), each to exactly what it wraps, in the order written.
+ * A `LIKE` `_` matches one code point.
  */
-import type { CaseiProperty, CaseiString, Cql2Filter, PropertyRef, ScalarLiteral } from "../core/types.js";
+import { unwrap, type Fold } from "../core/folds.js";
+import type { Cql2Filter, FoldedString, ScalarLiteral } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
-import { caseiKey, compareCodePoints, dayOf, instantOf, likeRegExp, plainKey } from "./strings.js";
+import { compareCodePoints, dayOf, foldKey, instantOf, likeRegExp } from "./strings.js";
 
 /** TRUE, FALSE, or NULL (unknown). */
 export type Truth = boolean | null;
@@ -51,13 +54,16 @@ interface Operand {
   readonly read: (value: unknown) => Key | undefined;
 }
 
-function operand(literal: ScalarLiteral | CaseiString, caseiSubject: boolean): Operand {
-  const readString = (v: unknown): Key | undefined =>
-    typeof v === "string" ? (caseiSubject ? caseiKey(v) : plainKey(v)) : undefined;
-  if (typeof literal === "string") return { key: plainKey(literal), read: readString };
+/** `subjectFolds`: what the subject's value goes through (`CASEI`, `ACCENTI`), innermost first. */
+function operand(literal: ScalarLiteral | FoldedString, subjectFolds: readonly Fold[]): Operand {
+  const readString = (v: unknown): Key | undefined => (typeof v === "string" ? foldKey(v, subjectFolds) : undefined);
+  if (typeof literal === "string") return { key: foldKey(literal, []), read: readString };
   if (typeof literal === "number") return { key: literal, read: (v) => (typeof v === "number" ? v : undefined) };
   if (typeof literal === "boolean") return { key: literal, read: (v) => (typeof v === "boolean" ? v : undefined) };
-  if ("op" in literal) return { key: caseiKey(literal.args[0]), read: readString };
+  if ("op" in literal) {
+    const { inner, folds } = unwrap(literal);
+    return { key: foldKey(inner, folds), read: readString };
+  }
   if ("date" in literal) return { key: literal.date, read: dayOf };
   return { key: instantOf(literal.timestamp)!, read: instantOf }; // validate has checked it is an instant
 }
@@ -92,8 +98,6 @@ const not = (a: Truth): Truth => (a === null ? null : !a);
 
 type Getter<F> = (feature: F, name: string) => unknown;
 
-const nameOf = (x: PropertyRef | CaseiProperty): string => ("property" in x ? x.property : x.args[0].property);
-const isCasei = (x: PropertyRef | CaseiProperty): boolean => !("property" in x);
 
 function compile<F>(filter: Cql2Filter, get: Getter<F>): (feature: F) => Truth {
   if (typeof filter === "boolean") return () => filter;
@@ -116,14 +120,14 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>): (feature: F) => Truth {
     }
     case "like": {
       const [subject, pattern] = filter.args;
-      const name = nameOf(subject);
-      const casei = isCasei(subject);
-      // CASEI folds what it wraps; `%`, `_` and `\` fold to themselves, so the pattern's meaning survives.
-      const re = likeRegExp(typeof pattern === "string" ? plainKey(pattern) : caseiKey(pattern.args[0]));
+      const { inner, folds } = unwrap(subject);
+      // CASEI and ACCENTI fold what they wrap; `%`, `_` and `\` fold to themselves, so the pattern's meaning survives.
+      const p = unwrap(pattern);
+      const re = likeRegExp(foldKey(p.inner, p.folds));
       return (f) => {
-        const v = get(f, name);
+        const v = get(f, inner.property);
         if (isNullish(v) || typeof v !== "string") return null;
-        return re.test(casei ? caseiKey(v) : plainKey(v));
+        return re.test(foldKey(v, folds));
       };
     }
     case "between": {
@@ -136,8 +140,9 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>): (feature: F) => Truth {
     }
     case "in": {
       const [subject, list] = filter.args;
-      const name = nameOf(subject);
-      const operands = list.map((item) => operand(item, isCasei(subject)));
+      const { inner, folds } = unwrap(subject);
+      const name = inner.property;
+      const operands = list.map((item) => operand(item, folds));
       return (f) => {
         const v = get(f, name);
         if (isNullish(v)) return null;
@@ -152,8 +157,9 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>): (feature: F) => Truth {
     }
     default: {
       const [subject, value] = filter.args;
-      const name = nameOf(subject);
-      const o = operand(value, isCasei(subject));
+      const { inner, folds } = unwrap(subject);
+      const name = inner.property;
+      const o = operand(value, folds);
       const test = COMPARE[filter.op]!;
       return (f) => {
         const v = get(f, name);

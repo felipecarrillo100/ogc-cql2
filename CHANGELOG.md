@@ -4,7 +4,27 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [0.4.0] - Unreleased
+## [0.5.0] - Unreleased
+
+Accent-insensitive Comparison: `ACCENTI`, so `São Paulo` matches `Sao Paulo`, in every engine.
+
+### Added
+
+- The class Accent-insensitive Comparison, `CONFORMANCE.accentInsensitive`: `ACCENTI` in comparisons, LIKE and IN,
+  combined with `CASEI` either way (`CASEI(ACCENTI(x))`, `ACCENTI(CASEI(x))`), as the standard's grammar allows.
+  Exactly the standard's rule: canonical decomposition, the nonspacing marks (Unicode 15.0.0, category Mn) removed,
+  the Japanese voicing marks kept.
+- Types `AccentiProperty`, `AccentiString`, `CaseiOf`, `AccentiOf`, `StringSubject`, `FoldedString`.
+- `sqliteFunctions.cql2_accenti`; `postgresFunctions` also creates `cql2_accent_marks` and `cql2_accenti` (run it
+  again on an existing database); `duckdbFunctions.cql2_fold_cmp` and `cql2_fold_like`.
+
+### Changed
+
+- `OTHER_CONFORMANCE.accentInsensitive` is now `CONFORMANCE.accentInsensitive`.
+- `CaseiProperty` and `CaseiString` may wrap `ACCENTI`.
+- A page importing only `ogc-cql2/evaluate` also carries the table of marks (about 1.5 kB gzipped).
+
+## [0.4.0] - 2026-10-31
 
 Correctness checked against more sources: CQL2-text against the standard's own text examples, and the right
 conformance class for spatial literals.
@@ -111,7 +131,8 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
-[0.4.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.3.0...HEAD
+[0.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.1.0

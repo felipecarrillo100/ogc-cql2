@@ -23,8 +23,9 @@ to convert from or to. That means:
 
 ## The profile
 
-Three conformance classes, implemented completely: Basic CQL2, Advanced Comparison Operators and Case-insensitive
-Comparison. Within them, the profile accepts the form every server must support: the standard lets a server accept
+Four conformance classes, implemented completely: Basic CQL2, Advanced Comparison Operators, Case-insensitive
+Comparison and (since 0.5.0) Accent-insensitive Comparison. `CASEI` and `ACCENTI` may each wrap the other once, as the
+grammar allows (`CASEI(ACCENTI(name))`). Within them, the profile accepts the form every server must support: the standard lets a server accept
 only a property on the left and a literal on the right (`/per/basic-cql2/cql2filter`,
 `/per/advanced-comparison-operators/*`). So:
 
@@ -107,6 +108,11 @@ What the text can't express is refused as `not-expressible`, with the reason and
 - **`CASEI`** applies Unicode's full case folding (CaseFolding 15.0.0, statuses C and F), as the standard requires.
   JavaScript has none built in, so `scripts/gen-case-folding.mjs` generates a compact table
   (`src/evaluate/caseFolding.ts`, about 1.5 kB gzipped). It folds exactly what it wraps.
+- **`ACCENTI`** removes the nonspacing marks after canonical decomposition (Unicode 15.0.0, category Mn), keeping the
+  Japanese voicing marks (the standard's Recommendation 2), then recomposes to NFC. `scripts/gen-accent-marks.mjs`
+  generates the table of marks from `UnicodeData.txt` (`src/evaluate/accentMarks.ts`, 1,983 code points in 345
+  ranges, about 1.5 kB gzipped). Nested with `CASEI`, each applies in the order written, innermost first. See
+  [accent-research.md](accent-research.md).
 - **Features** are read as GeoJSON, `feature.properties[name]`; `getProperty` replaces that for other shapes.
 - **Compiled once:** `toPredicate` and `toEvaluator` validate the filter and prepare its patterns and literals, so
   each feature costs only the comparisons.
@@ -141,6 +147,7 @@ SHOULD allow for values of an unexpected type, which SQLite permits in any colum
 | booleans | only in a BOOLEAN column, as 0 / 1; elsewhere the comparison is `NULL` (SQLite stores no booleans) |
 | text | `cql2_text(c)`: NFC; binary order, which is code point order |
 | `casei(…)` | `cql2_casei(…)`: Unicode full case folding |
+| `accenti(…)` | `cql2_accenti(…)`: the accents removed; nested, the calls compose (`cql2_casei(cql2_accenti(c))`) |
 | `{date}` | `cql2_day(c)`: a `YYYY-MM-DD` value |
 | `{timestamp}` | `cql2_instant(c)`: an ISO 8601 date-time with `Z` or an offset, in milliseconds |
 | `like` | `cql2_like(view, pattern)`: case-sensitive, `%` `_` `\` |
@@ -164,6 +171,7 @@ is `NULL::boolean` when the SQL is built, and `SqlColumn.sqlType` (the declared 
 | text | `normalize(c::text, NFC) COLLATE "C"`: code point order; the database's collation sorts by language rules |
 | text against a `date` / `timestamptz` / `timestamp` column | the served text: `to_char(…)` as `YYYY-MM-DD`, UTC `…Z` with milliseconds, or without `Z` |
 | `casei(…)` | `cql2_casei(…)` |
+| `accenti(…)` | `cql2_accenti(…)`, from the table `cql2_accent_marks` (`unaccent` follows a dictionary, not the standard's rule); nested, the calls compose |
 | `{date}` | `c` against `$n::date` on a `date` column; `cql2_day(c)` on text |
 | `{timestamp}` | `date_trunc('milliseconds', c)` against `$n::timestamptz` on `timestamptz`; `cql2_instant(c)` on text; NULL on `timestamp` (no offset) |
 | `like` | native `LIKE` (case-sensitive, `\` escape) on the NFC text; a lone trailing `\` becomes a literal one |
@@ -190,6 +198,7 @@ PostgreSQL: `SqlColumn.sqlType` is the type `DESCRIBE` gives.
 | text | `nfc_normalize(c) COLLATE "binary"`: code point order, whatever the database's `default_collation` (`nocase` would make `'a' = 'A'` true) |
 | text against a `DATE` / `TIMESTAMP WITH TIME ZONE` / `TIMESTAMP` column | the served text, through `strftime` |
 | `casei(…)` | `cql2_casei_cmp(c, $n) op 0`; `IN` as `= 0` conditions joined with `OR`; LIKE as `cql2_casei_like(c, $n) = 1` |
+| `accenti(…)`, and nested with `casei` | `cql2_fold_cmp(c, $n, 'accenti,casei') op 0` and `cql2_fold_like(…) = 1`, the folds named innermost first. DuckDB's `strip_accents` differs from the standard's rule on 548 code points (Indic spacing vowel signs, enclosing marks, the Japanese voicing marks: measured over every code point), so it isn't used |
 | `{date}` | `c` against `$n::DATE` on a `DATE` column; `cql2_day(c)` (days since 1970) on text |
 | `{timestamp}` | `floor(epoch_us(c) / 1000)` (epoch milliseconds, truncated: `epoch_ms` rounds) on `TIMESTAMP WITH TIME ZONE`; from `cql2_instant_day` and `cql2_instant_ms` on text; NULL on `TIMESTAMP` |
 | `like` | native `LIKE … ESCAPE '\'` (case-sensitive, `_` one code point) on the NFC text; a lone trailing `\` becomes a literal one |
@@ -278,16 +287,19 @@ filter selects). The server never knows which store it talks to.
 - **Truth tables:** every operator against a matching value, a non-matching value, a null and a missing property;
   `AND` / `OR` / `NOT` as the standard's tables; case-folding cases; strict dates and instants.
 - **SQL against real databases (differential tests):**
-  - `test/sql.test.ts`: 5,387 generated filters on a SQLite table of awkward values (NULLs, values of an unexpected
+  - `test/sql.test.ts`: 12,984 generated filters on a SQLite table of awkward values (NULLs, values of an unexpected
     type, NFC and NFD, code points above U+FFFF, LIKE's special characters) select the same rows as `evaluate`;
-  - `test/sql-duckdb.test.ts`: 11,050 generated filters on a DuckDB table (`@duckdb/node-api`, a dev dependency, in
+  - `test/sql-duckdb.test.ts`: 24,136 generated filters on a DuckDB table (`@duckdb/node-api`, a dev dependency, in
     the test process) select the same rows as `evaluate` on the served values, also with `default_collation` set to
     `nocase` and a New York time zone;
-  - the same filters in **DuckDB-WASM**, in Chrome: run for 0.2.0 with a harness outside the repository (the same
-    table and filters, the README's registration code, Vite's build), with the same result. The browser carries an
+  - the same filters in **DuckDB-WASM**, in Chrome: run for 0.2.0 and again for 0.5.0 (24,136 filters, 9,639 of them
+    with ACCENTI) with a harness outside the repository (the same table and filters, the README's registration code,
+    Vite's build), with the same result. The browser carries an
     older engine (DuckDB 1.4.3, against 2.0 in Node), so passing in Node doesn't prove the browser;
-  - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 8,398 generated filters give the same features from
+  - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 10,016 generated filters give the same features from
     the GeoJSON file, the GeoPackage and PostgreSQL (when the database is set up; skipped otherwise);
+  - PostgreSQL's `cql2_accenti` against the JavaScript rule on every code point of the Basic Multilingual Plane
+    (63,487) for 0.5.0: no difference;
   - each rule was broken once on purpose, to show the tests catch it.
 - **Independent checks,** not part of the repository or of the package:
   - two other CQL2 parsers (cql2-rs, pycql2) read the text output back to the same CQL2-JSON;
@@ -326,9 +338,10 @@ checks that they agree.
 | 0.2.0 | The dialect interface in `src/sql` (SQLite and PostgreSQL moved onto it unchanged), and the **`duckdb`** dialect, the same SQL in Node and in the browser, tested in both; see [duckdb-case.md](duckdb-case.md) |
 | 0.3.0 | `validate` with a collection's queryables: `unknown-property` and `type-mismatch` (`/per/basic-cql2/type-casts`); the deliberate deviations documented |
 | 0.4.0 | `toText` checked against the standard's text examples (with cql2-rs); the right class for spatial literals |
+| 0.5.0 | **Accent-insensitive Comparison** (`ACCENTI`), in every engine, combined with `CASEI`; see [accent-research.md](accent-research.md) |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
+| next | **spatial**: Basic and Basic plus in every engine, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
-| next | **Accent-insensitive Comparison** (`ACCENTI`), see [accent-research.md](accent-research.md); then **spatial**: Basic and Basic plus in every engine, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
 ### 1.x.x: Oracle and SQL Server

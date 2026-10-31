@@ -11,15 +11,16 @@ export const CONFORMANCE: {
   readonly basic: string;
   readonly advancedComparison: string;
   readonly caseInsensitive: string;
+  readonly accentInsensitive: string;
 } = {
   basic: `${BASE}basic-cql2`,
   advancedComparison: `${BASE}advanced-comparison-operators`,
   caseInsensitive: `${BASE}case-insensitive-comparison`,
+  accentInsensitive: `${BASE}accent-insensitive-comparison`,
 };
 
 /** The standard's other classes, which this package doesn't implement yet. */
 export const OTHER_CONFORMANCE: {
-  readonly accentInsensitive: string;
   readonly basicSpatial: string;
   readonly basicSpatialPlus: string;
   readonly spatial: string;
@@ -29,7 +30,6 @@ export const OTHER_CONFORMANCE: {
   readonly functions: string;
   readonly arithmetic: string;
 } = {
-  accentInsensitive: `${BASE}accent-insensitive-comparison`,
   basicSpatial: `${BASE}basic-spatial-functions`,
   basicSpatialPlus: `${BASE}basic-spatial-functions-plus`,
   spatial: `${BASE}spatial-functions`,

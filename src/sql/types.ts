@@ -3,6 +3,7 @@
  * database, so that `toSql` keeps one walker for all of them.
  */
 
+import type { Fold } from "../core/folds.js";
 import type { Queryable } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb";
@@ -40,8 +41,11 @@ export interface SqlWhere {
 
 // --- The dialect interface (internal) ----------------------------------------------------------------------------
 
-/** The type of value a literal needs, and so the view of the column it is compared with. */
-export type Kind = "text" | "casei" | "number" | "boolean" | "day" | "instant";
+/**
+ * The type of value a literal needs, and so the view of the column it is compared with. `fold`: a string under CASEI
+ * and / or ACCENTI, whose folds come with the view.
+ */
+export type Kind = "text" | "fold" | "number" | "boolean" | "day" | "instant";
 
 /** A column read as one kind of value. */
 export interface View {
@@ -68,8 +72,11 @@ export interface Dialect {
   boolean(value: boolean): SqlValue;
   /** An instant literal (epoch milliseconds), as a parameter value. */
   instant(ms: number): SqlValue;
-  /** The column read as `kind`; `undefined` when no value can ever be of that kind. */
-  view(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string): View | undefined;
+  /**
+   * The column read as `kind`; `undefined` when no value can ever be of that kind. `folds`: for `fold`, what the value
+   * goes through, innermost first.
+   */
+  view(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string, folds: readonly Fold[]): View | undefined;
   /** `view LIKE pattern`, the pattern keyed as `evaluate` keys it; `param` adds a parameter. */
   like(view: View, pattern: string, param: (value: SqlValue) => string): string;
 }

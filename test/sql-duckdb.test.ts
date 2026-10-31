@@ -52,6 +52,12 @@ const ROWS: string[][] = [
   ["TRUE", "13", "13", "'NaN'::DOUBLE", "13", "'nan'", "DATE '2023-01-02'", "TIMESTAMPTZ '2023-01-02 00:00:00+00'", "TIMESTAMP '2023-01-02 00:00:00'", "'2023-01-02'", "'2023-01-02T00:00:00Z'", "'nan'"],
   ["FALSE", "14", "14", "'Infinity'::DOUBLE", "14", "'inf'", "DATE '2023-01-02'", "TIMESTAMPTZ '2023-01-02 00:00:00+00'", "TIMESTAMP '2023-01-02 00:00:00'", "'2023-01-02'", "'2023-01-02T00:00:00Z'", "'inf'"],
   ["TRUE", "15", "15", "'-Infinity'::DOUBLE", "15", "'-inf'", "DATE '2023-01-02'", "TIMESTAMPTZ '2023-01-02 00:00:00+00'", "TIMESTAMP '2023-01-02 00:00:00'", "'2023-01-02'", "'2023-01-02T00:00:00Z'", "'-inf'"],
+  // Accents: Portuguese, Spanish, Vietnamese (two marks, decomposed), Polish, Danish, Japanese voicing marks.
+  ["TRUE", "16", "16", "16", "16", "'São Paulo'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'SÃO PAULO'"],
+  ["FALSE", "17", "17", "17", "17", "'año'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'ano'"],
+  ["TRUE", "18", "18", "18", "18", "'Vie\u0323\u0302t Nam'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'VIET NAM'"],
+  ["FALSE", "19", "19", "19", "19", "'Łódź'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'Øresund'"],
+  ["TRUE", "20", "20", "20", "20", "'はじめ'", "DATE '2023-01-03'", "TIMESTAMPTZ '2023-01-03 00:00:00+00'", "TIMESTAMP '2023-01-03 00:00:00'", "'2023-01-03'", "'2023-01-03T00:00:00Z'", "'はしめ'"],
 ];
 
 /** Registers `duckdbFunctions` on a connection, as the README shows. */
@@ -112,9 +118,10 @@ const fromEvaluate = (filter: Cql2Filter): number[] =>
 
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
+const accenti = (arg: unknown) => ({ op: "accenti", args: [arg] });
 const PROPERTIES = Object.keys(COLUMNS);
 const LITERALS: unknown[] = [
-  "Straße", "STRASSE", "café", "cafe\u0301", "", "😀", "\uE000", "Riv", "river", "a_b", "Ελλάδα", "100%", "end\\",
+  "Straße", "São Paulo", "SAO PAULO", "Sao Paulo", "año", "ano", "はじめ", "はしめ", "Łodz", "Lodz", "Ma\u0300", "STRASSE", "café", "cafe\u0301", "", "😀", "\uE000", "Riv", "river", "a_b", "Ελλάδα", "100%", "end\\",
   "2020-07-26", "2023-01-01T00:00:00.000Z", "2023-01-01T10:00:00.000", "2023-01-01T00:00:00.001Z",
   0, 1, 2.5, 5, 10, -1, 12.34, 9007199254740991, true, false,
   { date: "2020-07-26" }, { date: "2021-01-01" }, { date: "0099-07-26" },
@@ -122,7 +129,7 @@ const LITERALS: unknown[] = [
   { timestamp: "2023-01-01T00:00:00.001Z" }, { timestamp: "1969-12-31T23:59:59.999Z" },
 ];
 const OPS = ["=", "<>", "<", "<=", ">", ">="];
-const PATTERNS = ["%", "_%", "", "Stra%", "%ss%", "%SS%", "100\\%", "a\\_b", "a_b", "%é", "ri%", "Ri_", "_", "%😀%", "% %", "end\\", "%T%", "2023%", "%.001%"];
+const PATTERNS = ["S_o%", "%PAULO", "ano", "は%め", "%", "_%", "", "Stra%", "%ss%", "%SS%", "100\\%", "a\\_b", "a_b", "%é", "ri%", "Ri_", "_", "%😀%", "% %", "end\\", "%T%", "2023%", "%.001%"];
 
 function generate(): Cql2Filter[] {
   const leaves: unknown[] = [true, false];
@@ -131,6 +138,10 @@ function generate(): Cql2Filter[] {
     for (const value of LITERALS) for (const op of OPS) leaves.push({ op, args: [p(name), value] });
     for (const value of LITERALS.filter((v) => typeof v === "string")) {
       for (const op of ["=", "<"]) {
+        leaves.push({ op, args: [accenti(p(name)), accenti(value)] });
+        leaves.push({ op, args: [accenti(p(name)), value] }, { op, args: [p(name), accenti(value)] });
+        leaves.push({ op, args: [casei(accenti(p(name))), casei(accenti(value))] });
+        leaves.push({ op, args: [accenti(casei(p(name))), accenti(casei(value))] });
         leaves.push({ op, args: [casei(p(name)), casei(value)] });
         leaves.push({ op, args: [casei(p(name)), value] });
         leaves.push({ op, args: [p(name), casei(value)] });
@@ -139,6 +150,8 @@ function generate(): Cql2Filter[] {
     for (const pattern of PATTERNS) {
       leaves.push({ op: "like", args: [p(name), pattern] });
       leaves.push({ op: "like", args: [casei(p(name)), casei(pattern)] });
+      leaves.push({ op: "like", args: [accenti(p(name)), accenti(pattern)] });
+      leaves.push({ op: "like", args: [casei(accenti(p(name))), casei(accenti(pattern))] });
       leaves.push({ op: "like", args: [p(name), casei(pattern)] });
     }
     leaves.push({ op: "between", args: [p(name), 0, 5] }, { op: "between", args: [p(name), -1, 2.5] });
@@ -147,6 +160,7 @@ function generate(): Cql2Filter[] {
       leaves.push({ op: "in", args: [p(name), list] });
     }
     leaves.push({ op: "in", args: [casei(p(name)), [casei("strasse"), casei("ελλάδα")]] });
+    leaves.push({ op: "in", args: [accenti(p(name)), [accenti("Sao Paulo"), accenti("ano")]] });
   }
   const valid = leaves.filter((f) => validate(f).valid) as Cql2Filter[];
   const nots = valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter);
@@ -203,8 +217,10 @@ describe("validate with the table's queryables refuses only filters evaluate can
   // the two, which CQL2 permits (/per/basic-cql2/type-casts): a date or date-time property compared with a string
   // (or LIKE) is compared as its text; a text property compared with a date or timestamp is read as one.
   const castsStringAndDate = (f: Cql2Filter) => {
-    const [subject, value] = (f as unknown as { args: unknown[] }).args as [{ property?: string; args?: [{ property: string }] }, unknown];
-    const column = COLUMNS[subject.property ?? subject.args![0].property]!;
+    const [subject, value] = (f as unknown as { args: unknown[] }).args as [unknown, unknown];
+    let inner = subject as { property?: string; args?: unknown[] };
+    while (inner.property === undefined) inner = inner.args![0] as typeof inner; // inside CASEI / ACCENTI
+    const column = COLUMNS[inner.property]!;
     const literals = Array.isArray(value) ? value : [value];
     const instant = (l: unknown) => typeof l === "object" && l !== null && ("date" in l || "timestamp" in l);
     if (column.type === "string" && column.format !== undefined) return literals.every((l) => !instant(l));

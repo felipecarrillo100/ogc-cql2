@@ -9,7 +9,8 @@
  * - CASEI, and the reading of dates and instants from text, use the functions {@link postgresFunctions} creates once
  *   in the database: PostgreSQL's `lower()` isn't Unicode case folding.
  */
-import { caseFoldingEntries } from "../../evaluate/strings.js";
+import type { Fold } from "../../core/folds.js";
+import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
 import { quote, type Dialect, type Kind, type SqlColumn, type View } from "../types.js";
 
 type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "other";
@@ -72,14 +73,16 @@ export function postgresValue(sqlColumn: string, column: SqlColumn): string | un
   return pgText(sql, cls);
 }
 
-function postgresView(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string): View | undefined {
+function postgresView(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string, folds: readonly Fold[]): View | undefined {
   const cls = pgClass(column);
   const text = pgText(sql, cls);
   switch (kind) {
     case "text":
       return text ? { sql: `${text} COLLATE "C"`, cast: "" } : undefined;
-    case "casei":
-      return text ? { sql: `${fn("cql2_casei")}(${text}) COLLATE "C"`, cast: "" } : undefined;
+    case "fold":
+      return text
+        ? { sql: `${folds.reduce((expression, fold) => `${fn(`cql2_${fold}`)}(${expression})`, text)} COLLATE "C"`, cast: "" }
+        : undefined;
     case "number":
       return cls === "number" ? { sql: `${sql}::double precision`, cast: "::double precision" } : undefined;
     case "boolean":
@@ -107,6 +110,9 @@ export function likePattern(pattern: string): string {
  * there. No extension is needed. It creates (or replaces):
  * - `cql2_casefold`: Unicode's full case folding (CaseFolding 15.0.0, statuses C and F), the package's own table;
  * - `cql2_casei(text)`: a string's canonical caseless form, as `evaluate` computes it (NFD, fold, NFC);
+ * - `cql2_accent_marks`: the nonspacing marks ACCENTI removes (Unicode 15.0.0, category Mn, except the Japanese voicing
+ *   marks), the package's own table;
+ * - `cql2_accenti(text)`: a string without accents, as `evaluate` computes it (NFD, the marks removed, NFC);
  * - `cql2_day(text)`: a `YYYY-MM-DD` text that exists, else NULL;
  * - `cql2_instant(text)`: an ISO 8601 date-time with `Z` or an offset that exists, as a timestamptz truncated to
  *   milliseconds, else NULL. The same strict rules as `evaluate`: hours 00–23, minutes and seconds 00–59.
@@ -115,6 +121,7 @@ export function postgresFunctions(schema: string): string {
   const s = quote(schema);
   const lit = (text: string): string => `'${text.replaceAll("'", "''")}'`;
   const rows = caseFoldingEntries().map(([from, to]) => `(${lit(String.fromCodePoint(from))}, ${lit(to)})`);
+  const marks = accentMarkEntries().map((code) => `(${lit(String.fromCodePoint(code))})`);
   return `-- ogc-cql2: functions for the postgres dialect of toSql. Safe to run again.
 CREATE TABLE IF NOT EXISTS ${s}.cql2_casefold (from_char text COLLATE "C" PRIMARY KEY, to_text text NOT NULL);
 TRUNCATE ${s}.cql2_casefold;
@@ -127,6 +134,20 @@ LANGUAGE sql STABLE STRICT PARALLEL SAFE AS $f$
   ELSE (SELECT normalize(coalesce(string_agg(coalesce(f.to_text, c.ch), '' ORDER BY c.n), ''), NFC)
         FROM regexp_split_to_table(normalize(t, NFD), '') WITH ORDINALITY AS c(ch, n)
         LEFT JOIN ${s}.cql2_casefold f ON f.from_char = c.ch COLLATE "C")
+  END
+$f$;
+
+CREATE TABLE IF NOT EXISTS ${s}.cql2_accent_marks (mark text COLLATE "C" PRIMARY KEY);
+TRUNCATE ${s}.cql2_accent_marks;
+INSERT INTO ${s}.cql2_accent_marks (mark) VALUES
+${marks.join(",\n")};
+
+CREATE OR REPLACE FUNCTION ${s}.cql2_accenti(t text) RETURNS text
+LANGUAGE sql STABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN t ~ '^[\\x01-\\x7F]*$' THEN t
+  ELSE (SELECT normalize(coalesce(string_agg(c.ch, '' ORDER BY c.n), ''), NFC)
+        FROM regexp_split_to_table(normalize(t, NFD), '') WITH ORDINALITY AS c(ch, n)
+        WHERE NOT EXISTS (SELECT 1 FROM ${s}.cql2_accent_marks m WHERE m.mark = c.ch COLLATE "C"))
   END
 $f$;
 

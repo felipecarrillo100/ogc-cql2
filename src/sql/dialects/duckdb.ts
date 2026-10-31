@@ -8,11 +8,12 @@
  *   {@link duckdbValue});
  * - LIKE is DuckDB's own (case-sensitive, `_` one code point) with `ESCAPE '\'`;
  * - instants compare as epoch milliseconds, truncated as `evaluate`'s, so nothing depends on the time-zone setting;
- * - CASEI, and dates and instants read from text, call the functions {@link duckdbFunctions} registers on the
+ * - CASEI, ACCENTI, and dates and instants read from text, call the functions {@link duckdbFunctions} registers on the
  *   connection. They all return 32-bit integers, the one result type DuckDB-WASM (1.32.0) passes back exactly from a
  *   JavaScript function: text comes back as zero bytes, DOUBLE as a 32-bit float, BIGINT cut to 32 bits.
  */
-import { caseiKey, compareCodePoints, dayOf, instantOf } from "../../evaluate/strings.js";
+import type { Fold } from "../../core/folds.js";
+import { caseiKey, compareCodePoints, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
 import { quote, type Dialect, type Kind, type SqlColumn, type View } from "../types.js";
 import { bareType, likePattern, queryableClass } from "./postgres.js";
 import { cachedLike } from "./sqlite.js";
@@ -78,21 +79,39 @@ const DAY_MS = 86_400_000;
 /** A `YYYY-MM-DD` day as days since 1970-01-01. */
 const dayNumber = (day: string): number => instantOf(`${day}T00:00:00Z`)! / DAY_MS;
 
-function duckdbView(sql: string, kind: Kind, column: SqlColumn): View | undefined {
+/** A fold chain as the `folds` argument of `cql2_fold_cmp` / `cql2_fold_like`: `"accenti,casei"`, innermost first. */
+const foldsText = (folds: readonly Fold[]): string => `'${folds.join(",")}'`;
+
+/** The folds argument read back; anything else is refused, so the functions never guess. */
+function foldsOf(text: string): Fold[] {
+  const folds = text.split(",");
+  if (folds.some((f) => f !== "casei" && f !== "accenti")) throw new Error(`cql2_fold_*: unknown folds "${text}"`);
+  return folds as Fold[];
+}
+
+function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: string) => string, folds: readonly Fold[]): View | undefined {
   const cls = duckClass(column);
   const text = servedText(sql, cls);
   switch (kind) {
     case "text":
       return text ? { sql: `${cls === "text" ? `nfc_normalize(${text})` : text} COLLATE "binary"`, cast: "::VARCHAR" } : undefined;
-    case "casei":
-      return text
-        ? {
-            sql: text,
-            cast: "::VARCHAR",
-            compare: (op, param) => `cql2_casei_cmp(${text}, ${param}) ${op} 0`,
-            like: (pattern, param) => `cql2_casei_like(${text}, ${param(pattern)}::VARCHAR) = 1`,
-          }
-        : undefined;
+    case "fold":
+      if (!text) return undefined;
+      // CASEI alone keeps its own functions, so its SQL is unchanged since 0.2.0.
+      if (folds.length === 1 && folds[0] === "casei") {
+        return {
+          sql: text,
+          cast: "::VARCHAR",
+          compare: (op, param) => `cql2_casei_cmp(${text}, ${param}) ${op} 0`,
+          like: (pattern, param) => `cql2_casei_like(${text}, ${param(pattern)}::VARCHAR) = 1`,
+        };
+      }
+      return {
+        sql: text,
+        cast: "::VARCHAR",
+        compare: (op, param) => `cql2_fold_cmp(${text}, ${param}, ${foldsText(folds)}) ${op} 0`,
+        like: (pattern, param) => `cql2_fold_like(${text}, ${param(pattern)}::VARCHAR, ${foldsText(folds)}) = 1`,
+      };
     case "number":
       return cls === "number" ? { sql: `CAST(${sql} AS DOUBLE)`, cast: "::DOUBLE" } : undefined;
     case "boolean":
@@ -127,6 +146,8 @@ export interface DuckdbFunction {
 export const duckdbFunctions: {
   readonly cql2_casei_cmp: DuckdbFunction;
   readonly cql2_casei_like: DuckdbFunction;
+  readonly cql2_fold_cmp: DuckdbFunction;
+  readonly cql2_fold_like: DuckdbFunction;
   readonly cql2_day: DuckdbFunction;
   readonly cql2_instant_day: DuckdbFunction;
   readonly cql2_instant_ms: DuckdbFunction;
@@ -142,6 +163,23 @@ export const duckdbFunctions: {
     parameters: ["VARCHAR", "VARCHAR"],
     returns: "INTEGER",
     call: (value, pattern) => (value === null || pattern === null ? null : cachedLike(pattern).test(caseiKey(value)) ? 1 : 0),
+  },
+  /**
+   * The sign of comparing the value, folded (`folds`: `"accenti"`, `"casei,accenti"`…, innermost first), with a key
+   * (already folded): CASEI and ACCENTI together or ACCENTI alone.
+   */
+  cql2_fold_cmp: {
+    parameters: ["VARCHAR", "VARCHAR", "VARCHAR"],
+    returns: "INTEGER",
+    call: (value, key, folds) =>
+      value === null || key === null || folds === null ? null : Math.sign(compareCodePoints(foldKey(value, foldsOf(folds)), key)),
+  },
+  /** 1 or 0: does the value, folded, match the LIKE pattern (already folded)? */
+  cql2_fold_like: {
+    parameters: ["VARCHAR", "VARCHAR", "VARCHAR"],
+    returns: "INTEGER",
+    call: (value, pattern, folds) =>
+      value === null || pattern === null || folds === null ? null : cachedLike(pattern).test(foldKey(value, foldsOf(folds))) ? 1 : 0,
   },
   /** A `YYYY-MM-DD` text that exists, as days since 1970-01-01. */
   cql2_day: {

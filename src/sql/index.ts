@@ -14,8 +14,9 @@
  * predicates.
  */
 import { Cql2Error } from "../core/errors.js";
-import type { CaseiProperty, CaseiString, Cql2Filter, PropertyRef, ScalarLiteral } from "../core/types.js";
-import { caseiKey, instantOf, plainKey } from "../evaluate/strings.js";
+import { unwrap } from "../core/folds.js";
+import type { Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, StringSubject } from "../core/types.js";
+import { foldKey, instantOf } from "../evaluate/strings.js";
 import { assertValid } from "../validate/index.js";
 import { duckdb } from "./dialects/duckdb.js";
 import { postgres } from "./dialects/postgres.js";
@@ -55,22 +56,25 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     return { column, sql: quote(column.column ?? ref.property) };
   };
 
-  /** The subject (a property, or CASEI of one) read as `kind`; `undefined` when no value can be of that kind. */
-  const subject = (x: PropertyRef | CaseiProperty, kind: Kind, path: string): View | undefined => {
-    if ("property" in x) {
-      const { column, sql } = columnOf(x, path);
-      return dialect.view(sql, kind, column, fn);
-    }
-    const { column, sql } = columnOf(x.args[0], `${path}/args/0`);
-    return dialect.view(sql, "casei", column, fn); // validate allows CASEI(property) only against strings
+  /**
+   * The subject (a property, or CASEI / ACCENTI of one) read as `kind`; `undefined` when no value can be of that kind.
+   * Under CASEI or ACCENTI it is read folded: validate allows them only against strings.
+   */
+  const subject = (x: StringSubject, kind: Kind, path: string): View | undefined => {
+    const { inner, folds } = unwrap(x);
+    const { column, sql } = columnOf(inner, path + "/args/0".repeat(folds.length));
+    return folds.length === 0 ? dialect.view(sql, kind, column, fn, folds) : dialect.view(sql, "fold", column, fn, folds);
   };
 
   /** A literal's kind and its SQL value, keyed exactly as `evaluate` keys it. */
-  const literal = (x: ScalarLiteral | CaseiString): { kind: Kind; value: SqlValue } => {
-    if (typeof x === "string") return { kind: "text", value: plainKey(x) };
+  const literal = (x: ScalarLiteral | FoldedString): { kind: Kind; value: SqlValue } => {
+    if (typeof x === "string") return { kind: "text", value: foldKey(x, []) };
     if (typeof x === "number") return { kind: "number", value: x };
     if (typeof x === "boolean") return { kind: "boolean", value: dialect.boolean(x) };
-    if ("op" in x) return { kind: "casei", value: caseiKey(x.args[0]) };
+    if ("op" in x) {
+      const { inner, folds } = unwrap(x);
+      return { kind: "fold", value: foldKey(inner, folds) };
+    }
     if ("date" in x) return { kind: "day", value: x.date };
     return { kind: "instant", value: dialect.instant(instantOf(x.timestamp)!) }; // validate has checked it is one
   };
@@ -79,8 +83,8 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valueParam = (v: View, value: SqlValue): string => param(v.value ? v.value(value) : value, v.cast);
   const compare = (v: View, op: string, p: string): string => (v.compare ? v.compare(op, p) : `${v.sql} ${op} ${p}`);
 
-  // A CASEI literal compares text: the column's text view, or its CASEI view under CASEI(property).
-  const viewKind = (kind: Kind): Kind => (kind === "casei" ? "text" : kind);
+  // A folded literal compares text: the column's text view, or its folded view under CASEI / ACCENTI (property).
+  const viewKind = (kind: Kind): Kind => (kind === "fold" ? "text" : kind);
 
   const write = (f: Cql2Filter, path: string): string => {
     if (typeof f === "boolean") return f ? dialect.true : dialect.false;
@@ -94,7 +98,8 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         return `${columnOf(f.args[0], `${path}/args/0`).sql} IS NULL`;
       case "like": {
         const [s, pattern] = f.args;
-        const text = typeof pattern === "string" ? plainKey(pattern) : caseiKey(pattern.args[0]);
+        const p = unwrap(pattern);
+        const text = foldKey(p.inner, p.folds);
         const v = subject(s, "text", `${path}/args/0`);
         if (v === undefined) return dialect.never;
         return v.like ? v.like(text, param) : dialect.like(v, text, param);

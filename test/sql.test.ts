@@ -43,6 +43,12 @@ const ROWS: Record<string, unknown>[] = [
   // Numbers that aren't finite: SQLite stores ±Infinity, and NaN as NULL.
   { b: 0, i: -Infinity, d: Infinity, s: "inf", day: "2023-01-02", ts: "2023-01-02T00:00:00Z", x: Infinity, label: "inf" },
   { b: 1, i: 11, d: NaN, s: "nan", day: "2023-01-02", ts: "2023-01-02T00:00:00Z", x: -Infinity, label: "nan" },
+  // Accents: Portuguese, Spanish, Vietnamese (two marks, decomposed), Polish, Danish, Japanese voicing marks.
+  { b: 1, i: 12, d: 12, s: "São Paulo", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "Sa\u0303o Paulo", label: "SÃO PAULO" },
+  { b: 0, i: 13, d: 13, s: "año", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "Año", label: "ano" },
+  { b: 1, i: 14, d: 14, s: "Vie\u0323\u0302t Nam", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "Việt", label: "VIET NAM" },
+  { b: 0, i: 15, d: 15, s: "Łódź", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "Lodz", label: "Øresund" },
+  { b: 1, i: 16, d: 16, s: "はじめ", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "はしめ", label: "Mà" },
 ];
 
 function makeTable(): DatabaseSync {
@@ -80,15 +86,16 @@ const fromEvaluate = (filter: Cql2Filter): number[] =>
 
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
+const accenti = (arg: unknown) => ({ op: "accenti", args: [arg] });
 const PROPERTIES = Object.keys(COLUMNS);
 const LITERALS: unknown[] = [
-  "Straße", "STRASSE", "café", "café", "", "😀", "", "Riv", "river", "a_b", "Ελλάδα", "100%",
+  "Straße", "São Paulo", "SAO PAULO", "Sao Paulo", "año", "ano", "はじめ", "はしめ", "Łodz", "Lodz", "Ma\u0300", "STRASSE", "café", "café", "", "😀", "", "Riv", "river", "a_b", "Ελλάδα", "100%",
   0, 1, 2.5, 5, 10, -1, true, false,
   { date: "2020-07-26" }, { date: "2021-01-01" },
   { timestamp: "2023-01-01T00:00:00Z" }, { timestamp: "2022-12-31T23:00:00Z" }, { timestamp: "2023-01-01T00:00:00.5Z" },
 ];
 const OPS = ["=", "<>", "<", "<=", ">", ">="];
-const PATTERNS = ["%", "_%", "", "Stra%", "%ss%", "%SS%", "100\\%", "a\\_b", "a_b", "%é", "ri%", "Ri_", "_", "%😀%", "% %"];
+const PATTERNS = ["S_o%", "%PAULO", "ano", "は%め", "%", "_%", "", "Stra%", "%ss%", "%SS%", "100\\%", "a\\_b", "a_b", "%é", "ri%", "Ri_", "_", "%😀%", "% %"];
 
 function generate(): Cql2Filter[] {
   const leaves: unknown[] = [true, false];
@@ -97,6 +104,10 @@ function generate(): Cql2Filter[] {
     for (const value of LITERALS) for (const op of OPS) leaves.push({ op, args: [p(name), value] });
     for (const value of LITERALS.filter((v) => typeof v === "string")) {
       for (const op of ["=", "<"]) {
+        leaves.push({ op, args: [accenti(p(name)), accenti(value)] });
+        leaves.push({ op, args: [accenti(p(name)), value] }, { op, args: [p(name), accenti(value)] });
+        leaves.push({ op, args: [casei(accenti(p(name))), casei(accenti(value))] });
+        leaves.push({ op, args: [accenti(casei(p(name))), accenti(casei(value))] });
         leaves.push({ op, args: [casei(p(name)), casei(value)] });
         leaves.push({ op, args: [casei(p(name)), value] });
         leaves.push({ op, args: [p(name), casei(value)] });
@@ -105,6 +116,8 @@ function generate(): Cql2Filter[] {
     for (const pattern of PATTERNS) {
       leaves.push({ op: "like", args: [p(name), pattern] });
       leaves.push({ op: "like", args: [casei(p(name)), casei(pattern)] });
+      leaves.push({ op: "like", args: [accenti(p(name)), accenti(pattern)] });
+      leaves.push({ op: "like", args: [casei(accenti(p(name))), casei(accenti(pattern))] });
       leaves.push({ op: "like", args: [p(name), casei(pattern)] });
     }
     leaves.push({ op: "between", args: [p(name), 0, 5] }, { op: "between", args: [p(name), -1, 2.5] });
@@ -113,6 +126,7 @@ function generate(): Cql2Filter[] {
       leaves.push({ op: "in", args: [p(name), list] });
     }
     leaves.push({ op: "in", args: [casei(p(name)), [casei("strasse"), casei("ελλάδα")]] });
+    leaves.push({ op: "in", args: [accenti(p(name)), [accenti("Sao Paulo"), accenti("ano")]] });
   }
   const valid = leaves.filter((f) => validate(f).valid) as Cql2Filter[];
   const nots = valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter);
