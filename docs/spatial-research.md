@@ -1,7 +1,8 @@
 # Research: CQL2's spatial operations
 
-**Status: research only, 2026-10-31.** Nothing here is implemented. It records what CQL2 1.0.0 defines for
-geometries, so that spatial support can be planned from it. Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
+**Status: research and decisions, 2026-10-31.** Nothing here is implemented yet. It records what CQL2 1.0.0 defines
+for geometries, what the candidate engines do (measured), and the design decided from it (at the end, "Engines,
+measured" and "Decisions"). Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
 grammar (`cql2.bnf`, tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3:
 Filtering (OGC 19-079r2) for the coordinate reference system.
 
@@ -93,3 +94,69 @@ Three ways to get it anyway:
 A sensible order, if it is taken up: Basic Spatial Functions first (`S_INTERSECTS` with points and boxes: small,
 no engine needed, and what most map clients ask for); then the additional literals; then the full Spatial Functions
 class once the engine question is settled.
+
+## Engines, measured
+
+Measured on 2026-10-31 with PostgreSQL 17.10 + PostGIS 3.5.6 (GEOS 3.13.1), SQLite 3.51.3 (Node's `node:sqlite`) with
+SpatiaLite 5.1.0 (GEOS 3.15.0), and DuckDB 2.0 with its spatial extension (`@duckdb/node-api`).
+
+| Engine | Spatial relations | Spatial index | Notes |
+|---|---|---|---|
+| **PostGIS** | all eight (`ST_Intersects` … `ST_Crosses`, plus `ST_Relate`) | GiST, used automatically | a point on a boundary intersects (and touches) |
+| **SQLite / GeoPackage**, plain | none | the GeoPackage R-tree extension (`gpkg_rtree_index`: tables `rtree_<table>_<column>`); SQLite's R-tree module is built into `node:sqlite` | an R-tree gives *candidates* (bounding boxes), never the answer |
+| **SQLite + SpatiaLite** | all eight, on GEOS | the same R-tree | agrees with PostGIS on the US states for every box tried, **but only on `GeomFromGPB(geom)`**: on the raw GeoPackage blob, `ST_Intersects` returns −1 ("can't compute"), which SQL reads as true, so a filter would select everything. Compare with `= 1`. One kitchen-sink geometry still gives −1 (to investigate) |
+| **DuckDB** + spatial extension | all eight (no `ST_Relate`) | an R-tree index for tables (`CREATE INDEX … USING RTREE`); not seen in `EXPLAIN` in a first test | a point on a boundary intersects; the extension also loads in DuckDB-WASM (about 1.4 s). It writes GeoParquet 1.0 metadata (one bbox per file), not the per-row bbox column of GeoParquet 1.1 |
+
+**Edges are planar, and that decides every engine.** CQL2 follows Simple Features, whose edges are straight lines in
+the coordinates: in CRS84, straight in longitude and latitude, as in PostGIS `geometry`, SpatiaLite and DuckDB.
+A geodesic edge (PostGIS `geography`, ellipsoidal geometry libraries) is a different line: along the 49th parallel
+from −123° to −95°, the two are **95 km** apart at the middle. Engines with different edge models disagree on every
+feature in that band, so every engine used for CQL2, including an application's own, must be planar.
+
+**Heights (3D).** Every engine's `ST_Intersects` ignores Z (a point at 500 m "intersects" a box from 0 to 100 m).
+Only PostGIS compares in 3D: `&&&` for n-dimensional boxes (index-capable with `gist_geometry_ops_nd`) and
+`ST_3DIntersects` for points, lines and polygons; solids (polyhedra) need its SFCGAL extension. SpatiaLite has 3D
+distance only; DuckDB has `ST_ZMin` / `ST_ZMax` (a height-range check, exact for points only).
+
+**JavaScript libraries** (public npm, 2026-10-31):
+
+| Library | What | Licence, size | Use here |
+|---|---|---|---|
+| `robust-predicates` 3.0.3 | exact orientation tests (Shewchuk) | Unlicense, no dependencies | its orientation test copied into our engine (the Unlicense permits it): what makes boundary cases agree with GEOS |
+| `@turf/boolean-*` 7.4 | planar booleans on GeoJSON | MIT | an oracle in tests, not a dependency |
+| `jsts` 2.12 | JTS ported: full DE-9IM | EPL / EDL, 3.6 MB | an engine an application may plug in |
+| `geos-wasm` 3.1 | GEOS in WebAssembly | LGPL, 3 MB | an engine an application may plug in: the same answers as PostGIS by construction |
+| `flatbush` 4.7, `rbush` 4.0 | R-tree indexes | ISC, MIT | only if `evaluate` is measured to need an index |
+
+An application may also have a geometry engine of its own (a map SDK's topology or boolean operations): through the
+hook below, without the package depending on it, provided it is planar.
+
+## Decisions (2026-10-31)
+
+1. **One meaning, many engines:** planar, CRS84, GEOS's answers as the reference. Each engine supports the classes it
+   computes exactly, and a server declares those; a client offers only them (`validate`'s `conformance`).
+
+   | Engine | Basic | Basic plus | Full |
+   |---|---|---|---|
+   | `evaluate`, built-in engine (our code and the robust orientation test) | ✅ | ✅ | — |
+   | `evaluate` with an engine the application plugs in (optional hook) | ✅ | ✅ | ✅ |
+   | SQLite / GeoPackage, plain (a registered function sharing `evaluate`'s engine, the R-tree as pre-filter) | ✅ | ✅ | — |
+   | SQLite + SpatiaLite (optional) | ✅ | ✅ | ✅ |
+   | PostGIS | ✅ | ✅ | ✅ |
+   | DuckDB + spatial extension | ✅ | ✅ | ✅ |
+
+2. **The plug-in hook is optional:** `evaluate` works without it; an engine passed in (GEOS in WebAssembly, JSTS, a
+   map SDK's) adds the full class. The engine receives the whole geometry, heights included.
+3. **Proof, as for the rest of the package:** PostGIS as the reference; differential tests showing every engine
+   selects the same features; the standard's Natural Earth counts (Table 12: 8, 10, 1, 3, 5, 10, 7, 4) as an
+   acceptance test; a test showing an index only narrows the candidates, never changes the result.
+4. **Heights:** a six-number bbox and Z coordinates are accepted and kept in the filter, and compared in 2D for now,
+   as every engine does; documented as a deliberate choice. A 3D mode comes later with JSON-FG (where `place`
+   geometries in a 3D CRS are common): PostGIS natively (SFCGAL for solids), `evaluate` through the hook.
+5. **CRS:** CRS84 only for now (the standard's default without `filter-crs`). Data stored in another CRS is the
+   engine's business (PostGIS transforms its column). `filter-crs` comes with JSON-FG, for the SQL engines that can
+   transform; `evaluate` would refuse it rather than guess.
+
+Order: Basic and Basic plus first (types, `validate` and `text` for all three classes; `evaluate`; PostGIS; SQLite;
+DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
+

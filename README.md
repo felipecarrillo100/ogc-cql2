@@ -372,7 +372,8 @@ An invalid filter, or one naming a property the collection doesn't have, is refu
 
 - [docs/vision.md](docs/vision.md): what the package is for, and its principles.
 - [docs/architecture.md](docs/architecture.md): how it is built and tested.
-- [docs/spatial-research.md](docs/spatial-research.md): research for spatial support, not implemented yet.
+- [docs/spatial-research.md](docs/spatial-research.md): spatial support: the standard, the engines measured, the decisions.
+- [docs/accent-research.md](docs/accent-research.md): accent-insensitive comparison: the standard, the engines, the decisions.
 - [docs/duckdb-case.md](docs/duckdb-case.md): why the package has a DuckDB dialect, and what was measured first.
 - [CHANGELOG.md](CHANGELOG.md)
 
