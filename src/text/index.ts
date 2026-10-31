@@ -8,7 +8,7 @@
  */
 import { Cql2Error } from "../core/errors.js";
 import { unwrap, type Fold } from "../core/folds.js";
-import type { Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, StringSubject } from "../core/types.js";
+import type { Cql2Filter, FoldedString, Geometry, Position, PropertyRef, ScalarLiteral, SpatialLiteral, StringSubject } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
 
 // `identifierStart` (cql2.bnf, cql2-1.0.0), range by range, in the grammar's order.
@@ -58,7 +58,12 @@ export type TextProblemCode =
    * literal and defines no escape for a backslash itself. In a `LIKE` pattern, `\%` and `\_` (the LIKE escapes,
    * `/req/advanced-comparison-operators/like-predicate` K) are written as they are; any other backslash is this.
    */
-  | "backslash";
+  | "backslash"
+  /**
+   * A geometry mixing positions with and without a height: WKT's `Z` (`POINT Z(…)`) covers a whole geometry, so
+   * CQL2-text can't write one that mixes them.
+   */
+  | "mixed-dimensions";
 
 export interface TextProblem {
   readonly problem: TextProblemCode;
@@ -83,6 +88,10 @@ export function textProblem(filter: Cql2Filter): TextProblem | undefined {
       return undefined;
     }
     if (typeof x !== "object" || x === null) return undefined;
+    if ("coordinates" in x && "type" in x) {
+      const dimensions = new Set(positionsOf(x as Geometry).map((p) => p.length));
+      return dimensions.size > 1 ? { problem: "mixed-dimensions", path } : undefined;
+    }
     if ("property" in x) {
       return isIdentifier((x as PropertyRef).property) ? undefined : { problem: "property-name", path };
     }
@@ -114,13 +123,60 @@ function subject(x: StringSubject): string {
 function literal(x: ScalarLiteral | FoldedString): string {
   if (typeof x === "string") return quoteString(x);
   if (typeof x === "boolean") return x ? "TRUE" : "FALSE";
-  // `scientificNumericLiteral = mantissa "E" exponent`: JavaScript writes 1e+21 and 1.5e-7 with a lowercase e.
-  if (typeof x === "number") return String(x).replace("e", "E");
+  if (typeof x === "number") return number(x);
   if ("date" in x) return `DATE(${quoteString(x.date)})`;
   if ("timestamp" in x) return `TIMESTAMP(${quoteString(x.timestamp)})`;
   const { inner, folds } = unwrap(x);
   return wrapped(quoteString(inner), folds);
 }
+
+// --- Geometries, as WKT per the grammar (`spatialInstance`) ------------------------------------------------------
+
+/** `scientificNumericLiteral = mantissa "E" exponent`: JavaScript writes 1e+21 and 1.5e-7 with a lowercase e. */
+const number = (x: number): string => String(x).replace("e", "E");
+const position = (p: Position): string => p.map(number).join(" ");
+const sequence = (ps: readonly Position[]): string => `(${ps.map(position).join(", ")})`;
+
+/** Every position of a geometry (not a collection), to decide its `Z`. */
+function positionsOf(g: Geometry): Position[] {
+  switch (g.type) {
+    case "Point":
+      return [g.coordinates];
+    case "LineString":
+    case "MultiPoint":
+      return [...g.coordinates];
+    case "Polygon":
+    case "MultiLineString":
+      return g.coordinates.flat();
+    case "MultiPolygon":
+      return g.coordinates.flat(2);
+    case "GeometryCollection":
+      return [];
+  }
+}
+
+function wkt(g: Geometry): string {
+  if (g.type === "GeometryCollection") return `GEOMETRYCOLLECTION(${g.geometries.map(wkt).join(", ")})`;
+  const z = positionsOf(g)[0]?.length === 3 ? " Z" : "";
+  switch (g.type) {
+    case "Point":
+      return `POINT${z}(${position(g.coordinates)})`;
+    case "LineString":
+      return `LINESTRING${z}${sequence(g.coordinates)}`;
+    case "Polygon":
+      return `POLYGON${z}(${g.coordinates.map(sequence).join(", ")})`;
+    case "MultiPoint":
+      // The grammar's `multiPointText`: each point in its own parentheses.
+      return `MULTIPOINT${z}(${g.coordinates.map((p) => `(${position(p)})`).join(", ")})`;
+    case "MultiLineString":
+      return `MULTILINESTRING${z}(${g.coordinates.map(sequence).join(", ")})`;
+    case "MultiPolygon":
+      return `MULTIPOLYGON${z}(${g.coordinates.map((polygon) => `(${polygon.map(sequence).join(", ")})`).join(", ")})`;
+  }
+}
+
+/** A geometry literal, or `BBOX(west, south, east, north)` / `BBOX(west, south, min, east, north, max)`. */
+const spatialLiteral = (x: SpatialLiteral): string => ("bbox" in x && !("type" in x) ? `BBOX(${x.bbox.map(number).join(", ")})` : wkt(x as Geometry));
 
 /** Each operand of AND / OR in parentheses, so precedence never depends on the reader. */
 function group(parts: readonly string[], op: "AND" | "OR"): string {
@@ -143,6 +199,15 @@ function write(filter: Cql2Filter): string {
       return `${subject(filter.args[0])} BETWEEN ${literal(filter.args[1])} AND ${literal(filter.args[2])}`;
     case "in":
       return `${subject(filter.args[0])} IN (${filter.args[1].map(literal).join(", ")})`;
+    case "s_intersects":
+    case "s_equals":
+    case "s_disjoint":
+    case "s_touches":
+    case "s_within":
+    case "s_overlaps":
+    case "s_crosses":
+    case "s_contains":
+      return `${filter.op.toUpperCase()}(${propertyName(filter.args[0])}, ${spatialLiteral(filter.args[1])})`;
     default:
       return `${subject(filter.args[0])} ${filter.op} ${literal(filter.args[1])}`;
   }

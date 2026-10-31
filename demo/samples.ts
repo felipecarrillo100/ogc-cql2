@@ -95,6 +95,8 @@ export const EXAMPLES: readonly Example[] = [
   { label: "Name equals “sao paulo”, any case and accents (CASEI + ACCENTI)", filter: { op: "=", args: [casei(accenti(p("name"))), casei(accenti("sao paulo"))] } },
   { label: "Name starts with “Reykjav”, accents ignored (ACCENTI + LIKE)", filter: { op: "like", args: [accenti(p("name")), accenti("Reykjav%")] } },
   { label: "Country is one of CA, DE", filter: { op: "in", args: [p("country"), ["CA", "DE"]] } },
+  { label: "Spatial: inside a map view (a bbox), to send to a server", filter: { op: "s_intersects", args: [p("geometry"), { bbox: [5.9, 45.8, 10.5, 47.8] }] } },
+  { label: "Spatial: within a drawn area (a polygon), to send to a server", filter: { op: "s_within", args: [p("geometry"), { type: "Polygon", coordinates: [[[-80, 40], [-70, 40], [-70, 47], [-80, 47], [-80, 40]]] }] } },
   { label: "Country is not one of CA, DE (NULL when missing)", filter: { op: "not", args: [{ op: "in", args: [p("country"), ["CA", "DE"]] }] } },
   { label: "Founded before 1800 (dates)", filter: { op: "<", args: [p("founded"), { date: "1800-01-01" }] } },
   { label: "Updated in 2026 (timestamps)", filter: { op: ">=", args: [p("updated"), { timestamp: "2026-01-01T00:00:00Z" }] } },

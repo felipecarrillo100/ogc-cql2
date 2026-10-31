@@ -29,7 +29,22 @@ const IN_PROFILE = new Set([
   "example32", "example33", "example34", "example35", "example36", "example37", "example38", "example39",
   "example40", "example41", "example42", "example43", "example44", "example71", "example86",
   "clause7_05", "example27", "example70", // Accent-insensitive Comparison, since 0.5.0
+  // The spatial classes, since 0.6.0: those with the property first.
+  "clause7_07", "clause7_10", "example07", "example08", "example23", "example24", "example25", "example45",
+  "example47", "example48", "example50", "example51", "example52",
 ]);
+
+/**
+ * Spatial examples with the geometry literal first. Permission 6 (`/per/basic-spatial-functions/spatial-predicates`)
+ * lets a server refuse that, so the profile does, without naming a class: no class makes a server accept it.
+ */
+const LITERAL_FIRST = new Set(["clause7_16", "example46", "example49", "example83", "example84"]);
+
+/**
+ * cql2-rs 0.5.6 reads a geometry's Z coordinates as dropped and BBOX(…) as a function call (measured), so for the
+ * spatial examples our text is compared with cql2-rs's reading of the standard's text, not with the standard's JSON.
+ */
+const isSpatial = (filter: unknown) => JSON.stringify(filter).includes('"op":"s_');
 
 initSync({ module: readFileSync(new URL("../node_modules/cql2-wasm/cql2_wasm_bg.wasm", import.meta.url)) });
 
@@ -75,21 +90,24 @@ describe("the standard's examples", () => {
   });
 
   it.each(examples.filter(([name]) => IN_PROFILE.has(name)))("%s: our CQL2-text means what the standard's does", (name, filter) => {
+    const standardText = readFileSync(new URL(`./fixtures/ogc/examples/text/${name}.txt`, import.meta.url), "utf8");
+    if (isSpatial(filter)) {
+      expect(readWithCql2rs(toText(filter as never))).toBe(readWithCql2rs(standardText));
+      return;
+    }
     const expected = canonical(filter);
     expect(readWithCql2rs(toText(filter as never))).toBe(expected);
-    if (!CQL2RS_MISREADS.has(name)) {
-      const standardText = readFileSync(new URL(`./fixtures/ogc/examples/text/${name}.txt`, import.meta.url), "utf8");
-      expect(readWithCql2rs(standardText)).toBe(expected);
-    }
+    if (!CQL2RS_MISREADS.has(name)) expect(readWithCql2rs(standardText)).toBe(expected);
   });
 
-  it.each(examples.filter(([name]) => !IN_PROFILE.has(name)))("%s is refused only as outside the profile", (_, filter) => {
+  it.each(examples.filter(([name]) => !IN_PROFILE.has(name)))("%s is refused only as outside the profile", (name, filter) => {
     const result = validate(filter);
     expect(result.valid).toBe(false);
     if (result.valid) return;
     for (const problem of result.problems) {
       expect(["outside-profile", "unknown-operator"]).toContain(problem.code);
-      expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
+      if (LITERAL_FIRST.has(name)) expect(problem.message).toMatch(/takes the property first/);
+      else expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
     }
   });
 });

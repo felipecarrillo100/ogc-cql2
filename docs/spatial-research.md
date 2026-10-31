@@ -1,6 +1,7 @@
 # Research: CQL2's spatial operations
 
-**Status: research and decisions, 2026-10-31.** Nothing here is implemented yet. It records what CQL2 1.0.0 defines
+**Status: research and decisions, 2026-10-31; phase A implemented in 0.6.0** (the types, `validate` and `text` for
+the three classes; the engines follow). It records what CQL2 1.0.0 defines
 for geometries, what the candidate engines do (measured), and the design decided from it (at the end, "Engines,
 measured" and "Decisions"). Sources: CQL2 1.0.0 (OGC 21-065r2) and its released
 grammar (`cql2.bnf`, tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3:
@@ -159,4 +160,14 @@ hook below, without the package depending on it, provided it is planar.
 
 Order: Basic and Basic plus first (types, `validate` and `text` for all three classes; `evaluate`; PostGIS; SQLite;
 DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.
+
+## As implemented: phase A (0.6.0)
+
+- The filter format, validation and CQL2-text for the three classes; `evaluate` and `sql` refuse spatial filters with
+  `unsupported` until their phases.
+- 13 of the standard's 19 spatial examples are in the profile (the property first); the other 6 put the literal first
+  (Permission 6) or use a function (`Buffer`). Their CQL2-text is checked with cql2-rs against the standard's own
+  text, not against its JSON: cql2-rs 0.5.6 drops Z coordinates and reads `BBOX` as a function call (measured).
+- Measured on the way: CQL2's JSON Schema refuses a geometry with its own GeoJSON `bbox` member (it is then also a
+  bbox literal, and the literal is a `oneOf`), so `validate` refuses it too.
 

@@ -17,7 +17,8 @@ import { Cql2Error } from "../core/errors.js";
 import { unwrap } from "../core/folds.js";
 import type { Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, StringSubject } from "../core/types.js";
 import { foldKey, instantOf } from "../evaluate/strings.js";
-import { assertValid } from "../validate/index.js";
+import { refuseUnsupported } from "../core/unsupported.js";
+import { assertValid, requiredConformance } from "../validate/index.js";
 import { duckdb } from "./dialects/duckdb.js";
 import { postgres } from "./dialects/postgres.js";
 import { sqlite } from "./dialects/sqlite.js";
@@ -35,9 +36,11 @@ const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, pos
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
+ * @throws Cql2Error `unsupported` for a spatial filter: the dialects have no spatial SQL yet.
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
+  refuseUnsupported(requiredConformance(valid), "ogc-cql2/sql");
   const dialect = DIALECTS[options.dialect];
   const params: SqlValue[] = [];
   const param = (value: SqlValue, cast = ""): string => {
@@ -109,6 +112,15 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         const v = subject(s, "number", `${path}/args/0`);
         return v === undefined ? dialect.never : `${v.sql} BETWEEN ${valueParam(v, low)} AND ${valueParam(v, high)}`;
       }
+      case "s_intersects":
+      case "s_equals":
+      case "s_disjoint":
+      case "s_touches":
+      case "s_within":
+      case "s_overlaps":
+      case "s_crosses":
+      case "s_contains":
+        throw new Error("unreachable: refused before writing"); // refuseUnsupported
       case "in": {
         const [s, list] = f.args;
         const items = list.map(literal);

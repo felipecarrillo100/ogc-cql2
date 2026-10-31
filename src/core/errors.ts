@@ -5,7 +5,12 @@ export type Cql2ErrorCode =
   /** `toText`: the filter is valid, but CQL2-text can't express it; `details.problem` says what. */
   | "not-expressible"
   /** `toSql`: the filter references a property that isn't one of the table's columns; `details.property` names it. */
-  | "unknown-property";
+  | "unknown-property"
+  /**
+   * `evaluate`, `toSql`: the filter is valid, but uses a conformance class this part doesn't evaluate (yet);
+   * `details.conformance` names it.
+   */
+  | "unsupported";
 
 /**
  * The error every refusal throws.

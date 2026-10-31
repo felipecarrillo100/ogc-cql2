@@ -68,7 +68,8 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["accenti inside accenti", { op: "=", args: [{ op: "accenti", args: [{ op: "accenti", args: [p("a")] }] }, "é"] }, "outside-profile", "/args/0/args/0"],
   ["accenti of a number", { op: "=", args: [p("a"), { op: "accenti", args: [5] }] }, "type-mismatch", "/args/1/args/0"],
   ["nested casei", { op: "=", args: [casei(casei(p("a"))), "x"] }, "outside-profile", "/args/0/args/0"],
-  ["spatial", { op: "s_intersects", args: [p("geometry"), { type: "Point", coordinates: [0, 0] }] }, "outside-profile", ""],
+  // The standard's conformance test (/conf/basic-spatial-functions/spatial-predicate): a latitude of 180 must fail.
+  ["POINT(90 180)", { op: "s_intersects", args: [p("geometry"), { type: "Point", coordinates: [90, 180] }] }, "invalid-geometry", "/args/1/coordinates/1"],
   ["temporal", { op: "t_after", args: [p("t"), { timestamp: "2020-01-01T00:00:00Z" }] }, "outside-profile", ""],
   ["array", { op: "a_contains", args: [p("tags"), ["a"]] }, "outside-profile", ""],
   ["an interval operand", { op: "=", args: [p("t"), { interval: ["2020-01-01", ".."] }] }, "outside-profile", "/args/1"],
@@ -123,20 +124,19 @@ describe("validate refuses, with a code and where", () => {
   );
 
   it("names the class that outside-profile CQL2 needs", () => {
-    const result = validate({ op: "s_intersects", args: [p("geometry"), { bbox: [0, 0, 1, 1] }] });
-    expect(result.valid || result.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.basicSpatial);
+    const result = validate({ op: "t_after", args: [p("built"), { timestamp: "2020-01-01T00:00:00Z" }] });
+    expect(result.valid || result.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.temporal);
     const pp = validate({ op: "=", args: [p("a"), p("b")] });
     expect(pp.valid || pp.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.propertyProperty);
   });
 
   it("names the right spatial class: points and boxes are basic; other geometries need the plus class", () => {
-    const g = (literal: unknown, op = "s_intersects") =>
-      (validate({ op, args: [p("geometry"), literal] }) as { problems: readonly { conformance?: string }[] }).problems[0]!.conformance;
-    expect(g({ type: "Point", coordinates: [1, 2] })).toBe(OTHER_CONFORMANCE.basicSpatial);
-    expect(g({ bbox: [0, 0, 1, 1] })).toBe(OTHER_CONFORMANCE.basicSpatial);
-    expect(g({ type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] })).toBe(OTHER_CONFORMANCE.basicSpatialPlus);
-    expect(g({ type: "LineString", coordinates: [[0, 0], [1, 1]] })).toBe(OTHER_CONFORMANCE.basicSpatialPlus);
-    expect(g({ type: "Point", coordinates: [1, 2] }, "s_within")).toBe(OTHER_CONFORMANCE.spatial);
+    const g = (literal: unknown, op = "s_intersects") => requiredConformance(assertValid({ op, args: [p("geometry"), literal] })).at(-1);
+    expect(g({ type: "Point", coordinates: [1, 2] })).toBe(CONFORMANCE.basicSpatial);
+    expect(g({ bbox: [0, 0, 1, 1] })).toBe(CONFORMANCE.basicSpatial);
+    expect(g({ type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] })).toBe(CONFORMANCE.basicSpatialPlus);
+    expect(g({ type: "LineString", coordinates: [[0, 0], [1, 1]] })).toBe(CONFORMANCE.basicSpatialPlus);
+    expect(g({ type: "Point", coordinates: [1, 2] }, "s_within")).toBe(CONFORMANCE.spatial);
   });
 
   it("a null says how to test for a missing value instead", () => {
@@ -224,6 +224,102 @@ describe("assertValid", () => {
       expect(error).toMatchObject({ name: "Cql2Error", code: "invalid-filter", path: "/args/1/date" });
       expect((error as { details: { problems: unknown[] } }).details.problems).toHaveLength(1);
     }
+  });
+});
+
+describe("spatial filters", () => {
+  const point = (coordinates: unknown) => ({ type: "Point", coordinates });
+  const ring = [[0, 0], [1, 0], [1, 1], [0, 0]];
+  const geometries: [string, unknown][] = [
+    ["Point", point([7.02, 49.92])],
+    ["Point with a height", point([7.02, 49.92, 300])],
+    ["LineString", { type: "LineString", coordinates: [[0, 0], [1, 1]] }],
+    ["Polygon with a hole", { type: "Polygon", coordinates: [[[0, 0], [4, 0], [4, 4], [0, 0]], [[1, 1], [2, 1], [2, 2], [1, 1]]] }],
+    ["MultiPoint", { type: "MultiPoint", coordinates: [[0, 0], [1, 1]] }],
+    ["MultiLineString", { type: "MultiLineString", coordinates: [[[0, 0], [1, 1]], [[2, 2], [3, 3]]] }],
+    ["MultiPolygon", { type: "MultiPolygon", coordinates: [[ring], [[[5, 5], [6, 5], [6, 6], [5, 5]]]] }],
+    ["GeometryCollection", { type: "GeometryCollection", geometries: [point([0, 0]), { type: "LineString", coordinates: [[0, 0], [1, 1]] }] }],
+    ["bbox", { bbox: [0, 40, 10, 50] }],
+    ["bbox across the antimeridian", { bbox: [150, -90, -150, 90] }],
+    ["bbox with heights", { bbox: [-128.1, -1.1, -99999, 180, 90, 100000] }],
+    ["the extremes", { type: "LineString", coordinates: [[-180, -90], [180, 90]] }],
+  ];
+
+  it.each(geometries)("accepts %s, and the official schema does too", (_, literal) => {
+    const filter = { op: "s_intersects", args: [p("geometry"), literal] };
+    expect(validate(filter)).toEqual({ valid: true, filter });
+    expect(schemaAccepts(filter)).toBe(true);
+  });
+
+  it.each(["s_intersects", "s_equals", "s_disjoint", "s_touches", "s_within", "s_overlaps", "s_crosses", "s_contains"])("accepts %s", (op) => {
+    expect(validate({ op, args: [p("geometry"), { bbox: [0, 0, 1, 1] }] }).valid).toBe(true);
+  });
+
+  const problems = (literal: unknown, op = "s_intersects") => {
+    const result = validate({ op, args: [p("geometry"), literal] });
+    return result.valid ? [] : result.problems.map(({ code, path }) => `${code} ${path}`);
+  };
+
+  it.each([
+    ["longitude out of range", point([181, 0]), "invalid-geometry /args/1/coordinates/0"],
+    ["latitude out of range", point([0, -90.5]), "invalid-geometry /args/1/coordinates/1"],
+    ["a position of one number", point([1]), "invalid-geometry /args/1/coordinates"],
+    ["a position of four numbers", point([1, 2, 3, 4]), "invalid-geometry /args/1/coordinates"],
+    ["a position that isn't numbers", point(["1", 2]), "invalid-geometry /args/1/coordinates"],
+    ["a LineString of one position", { type: "LineString", coordinates: [[0, 0]] }, "invalid-geometry /args/1/coordinates"],
+    ["a ring not closed", { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1]]] }, "invalid-geometry /args/1/coordinates/0/3"],
+    ["a ring too short", { type: "Polygon", coordinates: [[[0, 0], [1, 0], [0, 0]]] }, "invalid-geometry /args/1/coordinates/0"],
+    ["a hole out of range", { type: "Polygon", coordinates: [ring, [[0, 0], [1, 0], [1, 95], [0, 0]]] }, "invalid-geometry /args/1/coordinates/1/2/1"],
+    ["a collection of one", { type: "GeometryCollection", geometries: [point([0, 0])] }, "invalid-geometry /args/1/geometries"],
+    ["a collection inside a collection", { type: "GeometryCollection", geometries: [point([0, 0]), { type: "GeometryCollection", geometries: [point([0, 0]), point([1, 1])] }] }, "invalid-geometry /args/1/geometries/1"],
+    ["an unknown geometry type", { type: "Circle", coordinates: [0, 0] }, "invalid-geometry /args/1/type"],
+    // GeoJSON allows a geometry's own bbox; CQL2's schema doesn't (geometry and bbox literal at once: oneOf fails).
+    ["a geometry with its own GeoJSON bbox", { type: "Point", coordinates: [1, 2], bbox: [1, 2, 1, 2] }, "invalid-geometry /args/1/bbox"],
+    ["a bbox of 5 numbers", { bbox: [0, 0, 1, 1, 1] }, "invalid-geometry /args/1/bbox"],
+    ["a bbox with south above north", { bbox: [0, 50, 10, 40] }, "invalid-geometry /args/1/bbox"],
+    ["a bbox with min height above max", { bbox: [0, 0, 100, 1, 1, 50] }, "invalid-geometry /args/1/bbox"],
+    ["a bbox out of range", { bbox: [-200, 0, 10, 10] }, "invalid-geometry /args/1/bbox/0"],
+  ])("refuses %s", (_, literal, problem) => {
+    expect(problems(literal)).toEqual([problem]);
+  });
+
+  it("the literal second; a property-property comparison and functions are outside the profile", () => {
+    const first = validate({ op: "s_equals", args: [point([1, 2]), p("geometry")] });
+    expect(first.valid ? [] : first.problems.map(({ code, path, conformance }) => [code, path, conformance])).toEqual([["outside-profile", "/args/0", undefined]]);
+    expect(problems(p("other"))).toEqual(["outside-profile /args/1"]);
+    const buffer = validate({ op: "s_within", args: [p("road"), { op: "Buffer", args: [p("geometry"), 10, "m"] }] });
+    expect(buffer.valid || buffer.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.functions);
+    expect(validate({ op: "=", args: [p("a"), point([1, 2])] }).valid).toBe(false); // a geometry in a comparison
+  });
+
+  it("names the class a server must declare", () => {
+    const declared = [CONFORMANCE.basic, CONFORMANCE.basicSpatial];
+    const check = (literal: unknown, op = "s_intersects") => {
+      const result = validate({ op, args: [p("geometry"), literal] }, { conformance: declared });
+      return result.valid ? "ok" : result.problems.map((x) => x.conformance).join();
+    };
+    expect(check({ bbox: [0, 0, 1, 1] })).toBe("ok");
+    expect(check(point([1, 2]))).toBe("ok");
+    expect(check({ type: "Polygon", coordinates: [ring] })).toBe(CONFORMANCE.basicSpatialPlus);
+    expect(check(point([1, 2]), "s_within")).toBe(CONFORMANCE.spatial);
+  });
+
+  it("with queryables: a geometry property only, described by format or by a GeoJSON schema", () => {
+    const queryables = {
+      geometry: { format: "geometry-any" },
+      footprint: { $ref: "https://geojson.org/schema/Polygon.json" },
+      name: { type: "string" },
+    };
+    const check = (filter: unknown) => {
+      const result = validate(filter, { queryables });
+      return result.valid ? [] : result.problems.map(({ code, path }) => `${code} ${path}`);
+    };
+    const box = { bbox: [0, 0, 1, 1] };
+    expect(check({ op: "s_intersects", args: [p("geometry"), box] })).toEqual([]);
+    expect(check({ op: "s_intersects", args: [p("footprint"), box] })).toEqual([]);
+    expect(check({ op: "s_intersects", args: [p("name"), box] })).toEqual(["type-mismatch /args/0"]);
+    expect(check({ op: "=", args: [p("geometry"), "x"] })).toEqual(["type-mismatch /args/1"]);
+    expect(check({ op: "isNull", args: [p("geometry")] })).toEqual([]);
   });
 });
 

@@ -51,6 +51,37 @@ const cases: [Cql2Filter, string][] = [
   [{ op: "and", args: [true, false] }, "(TRUE) AND (FALSE)"],
 ];
 
+describe("geometries, as WKT per the grammar", () => {
+  const s = (literal: unknown, op = "s_intersects") => toText({ op, args: [p("geom"), literal] } as Cql2Filter);
+  it.each([
+    [{ type: "Point", coordinates: [7.02, 49.92] }, "S_INTERSECTS(geom, POINT(7.02 49.92))"],
+    [{ type: "Point", coordinates: [-1.5, 2, 300] }, "S_INTERSECTS(geom, POINT Z(-1.5 2 300))"],
+    [{ type: "LineString", coordinates: [[0, 0], [1, 1.5e-7]] }, "S_INTERSECTS(geom, LINESTRING(0 0, 1 1.5E-7))"],
+    [{ type: "Polygon", coordinates: [[[0, 0], [4, 0], [4, 4], [0, 0]], [[1, 1], [2, 1], [2, 2], [1, 1]]] },
+      "S_INTERSECTS(geom, POLYGON((0 0, 4 0, 4 4, 0 0), (1 1, 2 1, 2 2, 1 1)))"],
+    [{ type: "MultiPoint", coordinates: [[0, 0], [1, 1]] }, "S_INTERSECTS(geom, MULTIPOINT((0 0), (1 1)))"],
+    [{ type: "MultiLineString", coordinates: [[[0, 0], [1, 1]], [[2, 2], [3, 3]]] }, "S_INTERSECTS(geom, MULTILINESTRING((0 0, 1 1), (2 2, 3 3)))"],
+    [{ type: "MultiPolygon", coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 0]]]] }, "S_INTERSECTS(geom, MULTIPOLYGON(((0 0, 1 0, 1 1, 0 0))))"],
+    [{ type: "GeometryCollection", geometries: [{ type: "Point", coordinates: [1, 2] }, { type: "LineString", coordinates: [[0, 0, 1], [1, 1, 2]] }] },
+      "S_INTERSECTS(geom, GEOMETRYCOLLECTION(POINT(1 2), LINESTRING Z(0 0 1, 1 1 2)))"],
+    [{ bbox: [0, 40, 10, 50] }, "S_INTERSECTS(geom, BBOX(0, 40, 10, 50))"],
+    [{ bbox: [-128.1, -1.1, -99999, 180, 90, 100000] }, "S_INTERSECTS(geom, BBOX(-128.1, -1.1, -99999, 180, 90, 100000))"],
+  ])("%j", (literal, text) => {
+    expect(s(literal)).toBe(text);
+  });
+
+  it("each relation, upper case; a property name that is a keyword is quoted", () => {
+    expect(s({ bbox: [0, 0, 1, 1] }, "s_within")).toBe("S_WITHIN(geom, BBOX(0, 0, 1, 1))");
+    expect(toText({ op: "s_contains", args: [p("point"), { type: "Point", coordinates: [0, 0] }] } as Cql2Filter)).toBe('S_CONTAINS("point", POINT(0 0))');
+  });
+
+  it("refuses a geometry mixing 2D and 3D positions: WKT's Z covers the whole geometry", () => {
+    const mixed = { op: "s_intersects", args: [p("geom"), { type: "LineString", coordinates: [[0, 0], [1, 1, 5]] }] } as Cql2Filter;
+    expect(textProblem(mixed)).toEqual({ problem: "mixed-dimensions", path: "/args/1" });
+    expect(() => toText(mixed)).toThrow(expect.objectContaining({ code: "not-expressible" }));
+  });
+});
+
 describe("toText", () => {
   it.each(cases)("%j → %s", (filter, text) => {
     expect(toText(filter)).toBe(text);

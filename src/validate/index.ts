@@ -38,7 +38,12 @@ export type ProblemCode =
   /** `{ "timestamp": … }` that isn't `YYYY-MM-DDThh:mm:ss[.fff]Z`, or an instant that doesn't exist. */
   | "invalid-timestamp"
   /** A conformance class of the profile that `options.conformance` leaves out (a server that doesn't declare it). */
-  | "needs-conformance";
+  | "needs-conformance"
+  /**
+   * A geometry literal that isn't valid: coordinates out of range (CRS84: longitude −180…180, latitude −90…90), a
+   * position of fewer than 2 or more than 3 numbers, a ring not closed or too short, a bbox of the wrong size…
+   */
+  | "invalid-geometry";
 
 export interface Problem {
   readonly code: ProblemCode;
@@ -94,6 +99,10 @@ function isRealDay(year: number, month: number, day: number): boolean {
 type Json = Record<string, unknown>;
 const isObject = (x: unknown): x is Json => typeof x === "object" && x !== null && !Array.isArray(x);
 const isPropertyRef = (x: unknown): x is { property: unknown } => isObject(x) && "property" in x;
+const isFiniteNumber = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+/** A geometry literal or a bbox: a GeoJSON `type`, or a `bbox` member alone. */
+const isSpatialLiteral = (x: unknown): x is Json =>
+  isObject(x) && (typeof x.type === "string" || ("bbox" in x && !("op" in x) && !("property" in x)));
 const opOf = (x: unknown): string | undefined => (isObject(x) && typeof x.op === "string" ? x.op : undefined);
 const argsOf = (x: Json): unknown[] | undefined => (Array.isArray(x.args) ? x.args : undefined);
 
@@ -101,10 +110,14 @@ const argsOf = (x: Json): unknown[] | undefined => (Array.isArray(x.args) ? x.ar
 type LiteralKind = "string" | "number" | "boolean" | "date" | "timestamp" | "folded-string";
 
 /** What a queryable holds, for the type checks; `any` when it doesn't say. */
-type HeldKind = "text" | "date" | "instant" | "number" | "boolean" | "other" | "any";
+type HeldKind = "text" | "date" | "instant" | "number" | "boolean" | "geometry" | "other" | "any";
 
 function heldKind(q: Queryable): HeldKind {
-  if (typeof q.format === "string" && q.format.startsWith("geometry-")) return "other";
+  // OGC API Features Part 3 describes a geometry queryable by a format (`geometry-point`, `geometry-any`…) or by a
+  // reference to a GeoJSON schema.
+  if (typeof q.format === "string" && q.format.startsWith("geometry-")) return "geometry";
+  const ref = (q as { $ref?: unknown }).$ref;
+  if (typeof ref === "string" && /geojson\.org\/schema\//.test(ref)) return "geometry";
   // JSON Schema allows a list of types: a nullable property is ["string", "null"]. NULL is always possible in CQL2.
   const types: unknown = Array.isArray(q.type) ? q.type.filter((t) => t !== "null") : q.type;
   const type = Array.isArray(types) ? (types.length === 1 ? types[0] : undefined) : types;
@@ -122,6 +135,7 @@ const ACCEPTS: Readonly<Record<HeldKind, readonly LiteralKind[]>> = {
   instant: ["timestamp"],
   number: ["number"],
   boolean: ["boolean"],
+  geometry: [],
   other: [],
   any: ["string", "folded-string", "number", "boolean", "date", "timestamp"],
 };
@@ -133,6 +147,7 @@ const WRITE: Readonly<Record<Exclude<HeldKind, "any">, string>> = {
   instant: `is an instant: compare it with a timestamp literal, e.g. { "timestamp": "2020-07-26T12:00:00Z" }`,
   number: `is a number: compare it with a number, e.g. 5 (not "5")`,
   boolean: `is a boolean: compare it with true or false`,
+  geometry: `is a geometry: test it with a spatial function, e.g. s_intersects, or with isNull`,
   other: `can't be compared in the profile; it can only be tested with isNull`,
 };
 
@@ -194,14 +209,7 @@ class Checker {
     if (op === "in") return this.inList(args, path);
     if (op === "isNull") return this.isNull(args, path);
 
-    if (SPATIAL.has(op)) {
-      // Basic Spatial Functions has S_INTERSECTS with points and boxes only; any other geometry literal needs the
-      // class "with additional Spatial Literals" (`basic-spatial-functions-plus`).
-      const otherGeometry = args.some((a) => isObject(a) && typeof a.type === "string" && a.type !== "Point");
-      const conformance = op !== "s_intersects" ? OTHER_CONFORMANCE.spatial
-        : otherGeometry ? OTHER_CONFORMANCE.basicSpatialPlus : OTHER_CONFORMANCE.basicSpatial;
-      return this.report("outside-profile", path, `"${op}" is a spatial function, not in the profile yet.`, conformance);
-    }
+    if (SPATIAL.has(op)) return this.spatial(op, args, path);
     if (TEMPORAL.has(op)) {
       return this.report(
         "outside-profile", path, `"${op}" is a temporal function, not in the profile yet.`, OTHER_CONFORMANCE.temporal,
@@ -349,8 +357,7 @@ class Checker {
   /** Reports an operand outside the profile, naming the class it would need, or invalid if it's not CQL2 at all. */
   notInProfile(x: unknown, path: string, where: string): void {
     const op = opOf(x);
-    const { propertyProperty, arithmetic, functions, arrays, temporal, basicSpatial } =
-      OTHER_CONFORMANCE;
+    const { propertyProperty, arithmetic, functions, arrays, temporal } = OTHER_CONFORMANCE;
     if (isPropertyRef(x)) {
       this.report(
         "outside-profile", path,
@@ -379,7 +386,7 @@ class Checker {
     } else if (isObject(x) && "interval" in x) {
       this.report("outside-profile", path, `${where} is an interval: it needs the Temporal Functions class.`, temporal);
     } else if (isObject(x) && ("type" in x || "bbox" in x)) {
-      this.report("outside-profile", path, `${where} is a geometry: it needs a spatial functions class.`, basicSpatial);
+      this.report("wrong-arguments", path, `${where} is a geometry: a geometry goes in a spatial function, e.g. s_intersects.`);
     } else if (x === null) {
       // CQL2 has no null literal; a missing value is tested with IS NULL only.
       this.report(
@@ -471,6 +478,155 @@ class Checker {
     }
   }
 
+  /**
+   * A spatial relation: a geometry property first, a geometry literal second. The class: S_INTERSECTS with a point
+   * or a box is Basic Spatial Functions, with any other geometry Basic plus; any other relation Spatial Functions.
+   */
+  spatial(op: string, args: unknown[], path: string): void {
+    const what = op.toUpperCase();
+    if (args.length !== 2) {
+      return this.report("wrong-arguments", `${path}/args`, `"${op}" needs two arguments: a property and a geometry.`);
+    }
+    const [first, second] = args;
+    if (!isPropertyRef(first)) {
+      if (isSpatialLiteral(first)) {
+        // Permission 6 (`/per/basic-spatial-functions/spatial-predicates`) lets a server refuse a literal first.
+        return this.report(
+          "outside-profile", `${path}/args/0`,
+          `${what} takes the property first and the geometry second, as every server must accept: swap them.`,
+        );
+      }
+      return this.notInProfile(first, `${path}/args/0`, `The first argument of ${what}`);
+    }
+    const held = this.property(first, `${path}/args/0`);
+    if (held !== undefined && held !== "geometry" && held !== "any") {
+      this.report("type-mismatch", `${path}/args/0`, `${what} tests a geometry, and "${first.property}" isn't one.`);
+    }
+    if (!isSpatialLiteral(second)) return this.notInProfile(second, `${path}/args/1`, `The second argument of ${what}`);
+    const kind = this.spatialLiteral(second, `${path}/args/1`);
+    if (kind === undefined) return;
+    const conformance = op !== "s_intersects" ? CONFORMANCE.spatial
+      : kind === "point-or-box" ? CONFORMANCE.basicSpatial : CONFORMANCE.basicSpatialPlus;
+    this.uses(conformance, path, what);
+  }
+
+  /** A geometry literal or a bbox: whether it is a point or a box (Basic) or another geometry; `undefined` if invalid. */
+  spatialLiteral(x: Json, path: string): "point-or-box" | "other" | undefined {
+    const before = this.problems.length;
+    if (!("type" in x)) {
+      this.bbox(x.bbox, `${path}/bbox`);
+      return this.problems.length === before ? "point-or-box" : undefined;
+    }
+    this.geometry(x, path, true);
+    if (this.problems.length !== before) return undefined;
+    return x.type === "Point" ? "point-or-box" : "other";
+  }
+
+  invalidGeometry(path: string, message: string): void {
+    this.report("invalid-geometry", path, message);
+  }
+
+  /** A GeoJSON geometry: its type, its coordinates, and its own optional GeoJSON `bbox`. */
+  geometry(x: Json, path: string, collectionAllowed: boolean): void {
+    if ("bbox" in x) {
+      // GeoJSON allows it, but CQL2's schema doesn't: a literal is a geometry *or* a bbox (`oneOf`), and an object
+      // with both "type" and "bbox" is both.
+      this.invalidGeometry(`${path}/bbox`, `A geometry literal can't carry its own "bbox" in CQL2-JSON: leave it out.`);
+    }
+    const c = x.coordinates;
+    switch (x.type) {
+      case "Point":
+        return this.position(c, `${path}/coordinates`);
+      case "LineString":
+      case "MultiPoint":
+        return this.positions(c, `${path}/coordinates`, x.type === "LineString" ? 2 : 1, x.type);
+      case "Polygon":
+        return this.polygon(c, `${path}/coordinates`);
+      case "MultiLineString":
+        if (!this.list(c, `${path}/coordinates`, 1, "A MultiLineString's coordinates are a list of LineStrings")) return;
+        return (c as unknown[]).forEach((line, i) => this.positions(line, `${path}/coordinates/${i}`, 2, "LineString"));
+      case "MultiPolygon":
+        if (!this.list(c, `${path}/coordinates`, 1, "A MultiPolygon's coordinates are a list of Polygons")) return;
+        return (c as unknown[]).forEach((polygon, i) => this.polygon(polygon, `${path}/coordinates/${i}`));
+      case "GeometryCollection": {
+        if (!collectionAllowed) {
+          return this.invalidGeometry(path, `A GeometryCollection can't hold another GeometryCollection.`);
+        }
+        const members = x.geometries;
+        if (!this.list(members, `${path}/geometries`, 2, `A GeometryCollection holds two or more geometries`)) return;
+        return (members as unknown[]).forEach((g, i) => {
+          if (isObject(g) && typeof g.type === "string") this.geometry(g, `${path}/geometries/${i}`, false);
+          else this.invalidGeometry(`${path}/geometries/${i}`, `This isn't a GeoJSON geometry.`);
+        });
+      }
+      default:
+        return this.invalidGeometry(
+          `${path}/type`,
+          `"${String(x.type)}" isn't a GeoJSON geometry type: Point, LineString, Polygon, MultiPoint, MultiLineString, MultiPolygon or GeometryCollection.`,
+        );
+    }
+  }
+
+  /** An array of at least `min` items; reports and returns false otherwise. */
+  list(x: unknown, path: string, min: number, what: string): boolean {
+    if (Array.isArray(x) && x.length >= min) return true;
+    this.invalidGeometry(path, `${what}${min > 1 ? ` (at least ${min})` : ""}.`);
+    return false;
+  }
+
+  /** A position: 2 or 3 finite numbers, longitude −180…180 and latitude −90…90 (CRS84). */
+  position(x: unknown, path: string): void {
+    if (!Array.isArray(x) || x.length < 2 || x.length > 3 || !x.every(isFiniteNumber)) {
+      return this.invalidGeometry(path, `A position is 2 or 3 numbers: longitude, latitude and optionally a height.`);
+    }
+    const [lon, lat] = x as number[];
+    if (lon! < -180 || lon! > 180) this.invalidGeometry(`${path}/0`, `Longitude ${lon} is outside −180…180 (CRS84: longitude first).`);
+    if (lat! < -90 || lat! > 90) this.invalidGeometry(`${path}/1`, `Latitude ${lat} is outside −90…90 (CRS84: latitude second).`);
+  }
+
+  positions(x: unknown, path: string, min: number, what: string): void {
+    if (!this.list(x, path, min, `A ${what} needs ${min === 1 ? "one or more positions" : `${min} or more positions`}`)) return;
+    (x as unknown[]).forEach((p, i) => this.position(p, `${path}/${i}`));
+  }
+
+  /** A Polygon's rings: each 4 or more positions, its last equal to its first. */
+  polygon(x: unknown, path: string): void {
+    if (!this.list(x, path, 1, "A Polygon's coordinates are a list of rings: the outer ring, then any holes")) return;
+    (x as unknown[]).forEach((ring, i) => {
+      const at = `${path}/${i}`;
+      if (!Array.isArray(ring) || ring.length < 4) {
+        return this.invalidGeometry(at, `A ring needs 4 or more positions, the last the same as the first.`);
+      }
+      const before = this.problems.length;
+      ring.forEach((p, j) => this.position(p, `${at}/${j}`));
+      if (this.problems.length !== before) return;
+      const first = ring[0] as number[];
+      const last = ring[ring.length - 1] as number[];
+      if (first.length !== last.length || first.some((v, k) => v !== last[k])) {
+        this.invalidGeometry(`${at}/${ring.length - 1}`, `A ring is closed: its last position must be the same as its first.`);
+      }
+    });
+  }
+
+  /** `[west, south, east, north]` or `[west, south, min, east, north, max]`; west > east crosses the antimeridian. */
+  bbox(x: unknown, path: string): void {
+    if (!Array.isArray(x) || (x.length !== 4 && x.length !== 6) || !x.every(isFiniteNumber)) {
+      return this.invalidGeometry(
+        path, `A bbox is 4 numbers, [west, south, east, north], or 6 with heights, [west, south, min, east, north, max].`,
+      );
+    }
+    const n = x as number[];
+    const [west, south, east, north] = n.length === 4 ? n : [n[0], n[1], n[3], n[4]];
+    for (const [value, i] of [[west, 0], [east, n.length === 4 ? 2 : 3]] as const) {
+      if (value! < -180 || value! > 180) this.invalidGeometry(`${path}/${i}`, `Longitude ${value} is outside −180…180.`);
+    }
+    for (const [value, i] of [[south, 1], [north, n.length === 4 ? 3 : 4]] as const) {
+      if (value! < -90 || value! > 90) this.invalidGeometry(`${path}/${i}`, `Latitude ${value} is outside −90…90.`);
+    }
+    if (south! > north!) this.invalidGeometry(path, `A bbox's south (${south}) is above its north (${north}).`);
+    if (n.length === 6 && n[2]! > n[5]!) this.invalidGeometry(path, `A bbox's minimum height (${n[2]}) is above its maximum (${n[5]}).`);
+  }
+
   isNull(args: unknown[], path: string): void {
     this.uses(CONFORMANCE.basic, path, "IS NULL");
     if (args.length !== 1) {
@@ -530,9 +686,14 @@ export function requiredConformance(filter: Cql2Filter): string[] {
     if (x.op === "like" || x.op === "between" || x.op === "in") used.add(CONFORMANCE.advancedComparison);
     if (x.op === "casei") used.add(CONFORMANCE.caseInsensitive);
     if (x.op === "accenti") used.add(CONFORMANCE.accentInsensitive);
+    if (typeof x.op === "string" && SPATIAL.has(x.op) && Array.isArray(x.args)) {
+      const literal = x.args[1];
+      const pointOrBox = isObject(literal) && (literal.type === "Point" || !("type" in literal));
+      used.add(x.op !== "s_intersects" ? CONFORMANCE.spatial : pointOrBox ? CONFORMANCE.basicSpatial : CONFORMANCE.basicSpatialPlus);
+      return; // a geometry literal holds no other class
+    }
     if (Array.isArray(x.args)) walk(x.args);
   };
   walk(filter);
-  return [CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive]
-    .filter((c) => used.has(c));
+  return Object.values(CONFORMANCE).filter((c) => used.has(c));
 }

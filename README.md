@@ -20,17 +20,23 @@ npm install ogc-cql2
 
 ## What it covers
 
-The package implements these conformance classes, completely:
+The package implements these conformance classes:
 
-| Conformance class | Operators |
-|---|---|
-| Basic CQL2 | `=` `<>` `<` `<=` `>` `>=`, `isNull`, `and` `or` `not`, `true` / `false`, `{ "date" }` and `{ "timestamp" }` literals |
-| Advanced Comparison Operators | `like`, `between`, `in` |
-| Case-insensitive Comparison | `casei` |
-| Accent-insensitive Comparison | `accenti` |
+| Conformance class | Operators | `validate`, `text` | `evaluate`, `sql` |
+|---|---|---|---|
+| Basic CQL2 | `=` `<>` `<` `<=` `>` `>=`, `isNull`, `and` `or` `not`, `true` / `false`, `{ "date" }` and `{ "timestamp" }` literals | ✅ | ✅ |
+| Advanced Comparison Operators | `like`, `between`, `in` | ✅ | ✅ |
+| Case-insensitive Comparison | `casei` | ✅ | ✅ |
+| Accent-insensitive Comparison | `accenti` | ✅ | ✅ |
+| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | not yet |
+| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | not yet |
+| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | not yet |
+
+Spatial filters can be built, validated and sent to servers today (see "Spatial filters" below); `evaluate` and
+`sql` refuse them with the code `unsupported` until their spatial engines arrive.
 
 It accepts the form every server of those classes must support: a property on the left, a literal on the right.
-Anything else that is valid CQL2 (spatial, temporal and array functions, arithmetic, comparing two
+Anything else that is valid CQL2 (temporal and array functions, arithmetic, comparing two
 properties, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
 will follow.
 
@@ -330,6 +336,34 @@ open().then(({ db, connection }) => {
   `evaluate` in DuckDB (Node) and in DuckDB-WASM (Chrome), also with a `nocase` default collation and another time
   zone. Tested with `@duckdb/node-api` 2.0.0 and `@duckdb/duckdb-wasm` 1.32.0.
 
+## Spatial filters
+
+A spatial filter is a geometry property, then a geometry literal: a GeoJSON geometry, or a box.
+
+```js
+// The map view, as a box: [west, south, east, north] in longitude / latitude.
+const inView = { op: "s_intersects", args: [{ property: "geometry" }, { bbox: [5.9, 45.8, 10.5, 47.8] }] };
+toText(inView); // "S_INTERSECTS(geometry, BBOX(5.9, 45.8, 10.5, 47.8))"
+
+// A drawn area, as a polygon.
+const inArea = { op: "s_within", args: [{ property: "geometry" }, {
+  type: "Polygon", coordinates: [[[-80, 40], [-70, 40], [-70, 47], [-80, 47], [-80, 40]]],
+}] };
+requiredConformance(inArea); // Basic CQL2, Spatial Functions
+```
+
+- **The class a server must declare** follows the standard: `s_intersects` with a point or a box is Basic Spatial
+  Functions; with any other geometry, Basic plus; any other relation, Spatial Functions. Check it against what a
+  server declares with `validate`'s `conformance`.
+- **Coordinates are CRS84**, longitude then latitude, as the standard says without `filter-crs`: a longitude outside
+  −180…180 or a latitude outside −90…90 is refused (`invalid-geometry`). So is a ring that isn't closed, a
+  LineString of one position, or a box with its south above its north.
+- **A box across the antimeridian** has its west greater than its east: `[170, -10, -170, 10]`.
+- **Heights** are kept: a position of three numbers, a box of six (`[west, south, min, east, north, max]`).
+- **With queryables**, the property must be a geometry (`"format": "geometry-…"`, or a `$ref` to a GeoJSON schema).
+- **Not accepted:** a geometry literal first (the standard lets servers refuse it, so swap the two), a geometry's own
+  GeoJSON `bbox` member (CQL2's schema refuses it), functions such as `Buffer`.
+
 ## LIKE patterns
 
 `%` matches any number of characters, `_` exactly one. To match a literal `%` or `_`, write `\%` or `\_`:
@@ -353,8 +387,9 @@ them:
 ## Errors
 
 Every refusal throws a `Cql2Error` with a `code`, a `path` and `details`: `invalid-filter` (not a valid filter in the
-profile), `not-expressible` (`toText`: valid, but CQL2-text can't write it) or `unknown-property` (`toSql`: a property
-that isn't one of the table's columns).
+profile), `not-expressible` (`toText`: valid, but CQL2-text can't write it), `unknown-property` (`toSql`: a property
+that isn't one of the table's columns) or `unsupported` (`evaluate`, `toSql`: a valid filter of a class they don't
+evaluate yet, the spatial ones; `details.conformance` names it).
 Test `error.code`, not `instanceof`: that keeps working when two copies of the package end up in one application.
 
 ## Playground and demo server
