@@ -22,15 +22,15 @@ npm install ogc-cql2
 
 The package implements these conformance classes:
 
-| Conformance class | Operators | `validate`, `text` | `evaluate`, `sql` |
-|---|---|---|---|
-| Basic CQL2 | `=` `<>` `<` `<=` `>` `>=`, `isNull`, `and` `or` `not`, `true` / `false`, `{ "date" }` and `{ "timestamp" }` literals | ✅ | ✅ |
-| Advanced Comparison Operators | `like`, `between`, `in` | ✅ | ✅ |
-| Case-insensitive Comparison | `casei` | ✅ | ✅ |
-| Accent-insensitive Comparison | `accenti` | ✅ | ✅ |
-| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | `evaluate` ✅, `sql` not yet |
-| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | `evaluate` ✅, `sql` not yet |
-| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | not yet |
+| Conformance class | Operators | `validate`, `text` | `evaluate` | `sql` |
+|---|---|---|---|---|
+| Basic CQL2 | `=` `<>` `<` `<=` `>` `>=`, `isNull`, `and` `or` `not`, `true` / `false`, `{ "date" }` and `{ "timestamp" }` literals | ✅ | ✅ | ✅ |
+| Advanced Comparison Operators | `like`, `between`, `in` | ✅ | ✅ | ✅ |
+| Case-insensitive Comparison | `casei` | ✅ | ✅ | ✅ |
+| Accent-insensitive Comparison | `accenti` | ✅ | ✅ | ✅ |
+| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | not yet |
+| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | not yet |
+| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | not yet | not yet |
 
 Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
 `s_intersects` in memory; the other relations, and spatial SQL, are refused with the code `unsupported` until their
