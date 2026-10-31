@@ -98,7 +98,7 @@ const opOf = (x: unknown): string | undefined => (isObject(x) && typeof x.op ===
 const argsOf = (x: Json): unknown[] | undefined => (Array.isArray(x.args) ? x.args : undefined);
 
 /** The type of a literal on the right, for the type checks. */
-type LiteralKind = "string" | "number" | "boolean" | "date" | "timestamp" | "casei-string";
+type LiteralKind = "string" | "number" | "boolean" | "date" | "timestamp" | "folded-string";
 
 /** What a queryable holds, for the type checks; `any` when it doesn't say. */
 type HeldKind = "text" | "date" | "instant" | "number" | "boolean" | "other" | "any";
@@ -117,13 +117,13 @@ function heldKind(q: Queryable): HeldKind {
 
 /** The literals each kind of property can be compared with. */
 const ACCEPTS: Readonly<Record<HeldKind, readonly LiteralKind[]>> = {
-  text: ["string", "casei-string"],
+  text: ["string", "folded-string"],
   date: ["date"],
   instant: ["timestamp"],
   number: ["number"],
   boolean: ["boolean"],
   other: [],
-  any: ["string", "casei-string", "number", "boolean", "date", "timestamp"],
+  any: ["string", "folded-string", "number", "boolean", "date", "timestamp"],
 };
 
 /** What to compare a property of this kind with, for the messages. */
@@ -136,9 +136,9 @@ const WRITE: Readonly<Record<Exclude<HeldKind, "any">, string>> = {
   other: `can't be compared in the profile; it can only be tested with isNull`,
 };
 
-/** A subject that passed the checks: whether it is `casei(…)`, and its property's kind (`any` without queryables). */
+/** A subject that passed the checks: whether it is `casei(…)` / `accenti(…)`, and its property's kind (`any` without queryables). */
 interface Subject {
-  readonly casei: boolean;
+  readonly folded: boolean;
   readonly name: string;
   readonly held: HeldKind;
 }
@@ -226,33 +226,50 @@ class Checker {
   }
 
   /** The left side: a property, or `casei(property)`; `undefined` if invalid. */
-  subject(x: unknown, path: string, allowCasei = true): Subject | undefined {
+  subject(x: unknown, path: string, allowFolds = true): Subject | undefined {
     if (isPropertyRef(x)) {
       const held = this.property(x, path);
-      return held === undefined ? undefined : { casei: false, name: x.property as string, held };
+      return held === undefined ? undefined : { folded: false, name: x.property as string, held };
     }
-    if (opOf(x) === "casei" && allowCasei) {
-      const args = argsOf(x as Json);
-      if (!args || args.length !== 1) {
-        this.report("wrong-arguments", `${path}/args`, `"casei" needs exactly one argument.`);
-        return undefined;
-      }
-      if (!isPropertyRef(args[0])) {
-        this.notInProfile(args[0], `${path}/args/0`, "Inside casei(…) on the left side");
-        return undefined;
-      }
-      this.uses(CONFORMANCE.caseInsensitive, path, "CASEI");
-      const held = this.property(args[0], `${path}/args/0`);
-      if (held === undefined) return undefined;
-      const name = args[0].property as string;
-      if (held !== "text" && held !== "any") {
-        this.report("type-mismatch", `${path}/args/0`, `casei(…) works on strings, and "${name}" ${WRITE[held]}.`);
-        return undefined;
-      }
-      return { casei: true, name, held };
-    }
+    const op = opOf(x);
+    if ((op === "casei" || op === "accenti") && allowFolds) return this.foldedSubject(x as Json, op, path, undefined);
     this.notInProfile(x, path, "The left side");
     return undefined;
+  }
+
+  /** The arguments of `casei` / `accenti`, checked and noted as using its class; `undefined` after reporting. */
+  foldArgs(x: Json, op: "casei" | "accenti", path: string): unknown[] | undefined {
+    const args = argsOf(x);
+    if (!args || args.length !== 1) {
+      this.report("wrong-arguments", `${path}/args`, `"${op}" needs exactly one argument.`);
+      return undefined;
+    }
+    if (op === "casei") this.uses(CONFORMANCE.caseInsensitive, path, "CASEI");
+    else this.uses(CONFORMANCE.accentInsensitive, path, "ACCENTI");
+    return args;
+  }
+
+  /** `casei(…)` / `accenti(…)` on the left: of a property, or of the other function of a property (once). */
+  foldedSubject(x: Json, op: "casei" | "accenti", path: string, outer: "casei" | "accenti" | undefined): Subject | undefined {
+    const args = this.foldArgs(x, op, path);
+    if (!args) return undefined;
+    const inner = args[0];
+    const innerOp = opOf(inner);
+    if (outer === undefined && (innerOp === "casei" || innerOp === "accenti") && innerOp !== op) {
+      return this.foldedSubject(inner as Json, innerOp, `${path}/args/0`, op);
+    }
+    if (!isPropertyRef(inner)) {
+      this.notInProfile(inner, `${path}/args/0`, `Inside ${op}(…) on the left side`);
+      return undefined;
+    }
+    const held = this.property(inner, `${path}/args/0`);
+    if (held === undefined) return undefined;
+    const name = inner.property as string;
+    if (held !== "text" && held !== "any") {
+      this.report("type-mismatch", `${path}/args/0`, `${op}(…) works on strings, and "${name}" ${WRITE[held]}.`);
+      return undefined;
+    }
+    return { folded: true, name, held };
   }
 
   /** A property reference: its kind (`any` without queryables), or `undefined` after reporting a problem. */
@@ -306,28 +323,33 @@ class Checker {
       );
       return undefined;
     }
-    if (opOf(x) === "casei") {
-      const args = argsOf(x as Json);
-      if (!args || args.length !== 1) {
-        this.report("wrong-arguments", `${path}/args`, `"casei" needs exactly one argument.`);
-        return undefined;
-      }
-      if (typeof args[0] !== "string") {
-        if (isObject(args[0])) this.notInProfile(args[0], `${path}/args/0`, "Inside casei(…) on the right side");
-        else this.report("type-mismatch", `${path}/args/0`, `"casei" works on strings only.`);
-        return undefined;
-      }
-      this.uses(CONFORMANCE.caseInsensitive, path, "CASEI");
-      return "casei-string";
-    }
+    const op = opOf(x);
+    if (op === "casei" || op === "accenti") return this.foldedLiteral(x as Json, op, path, undefined);
     this.notInProfile(x, path, "The right side");
     return undefined;
+  }
+
+  /** `casei('…')` / `accenti('…')` on the right: of a string, or of the other function of a string (once). */
+  foldedLiteral(x: Json, op: "casei" | "accenti", path: string, outer: "casei" | "accenti" | undefined): LiteralKind | undefined {
+    const args = this.foldArgs(x, op, path);
+    if (!args) return undefined;
+    const inner = args[0];
+    const innerOp = opOf(inner);
+    if (outer === undefined && (innerOp === "casei" || innerOp === "accenti") && innerOp !== op) {
+      return this.foldedLiteral(inner as Json, innerOp, `${path}/args/0`, op);
+    }
+    if (typeof inner !== "string") {
+      if (isObject(inner)) this.notInProfile(inner, `${path}/args/0`, `Inside ${op}(…) on the right side`);
+      else this.report("type-mismatch", `${path}/args/0`, `"${op}" works on strings only.`);
+      return undefined;
+    }
+    return "folded-string";
   }
 
   /** Reports an operand outside the profile, naming the class it would need, or invalid if it's not CQL2 at all. */
   notInProfile(x: unknown, path: string, where: string): void {
     const op = opOf(x);
-    const { propertyProperty, accentInsensitive, arithmetic, functions, arrays, temporal, basicSpatial } =
+    const { propertyProperty, arithmetic, functions, arrays, temporal, basicSpatial } =
       OTHER_CONFORMANCE;
     if (isPropertyRef(x)) {
       this.report(
@@ -343,12 +365,13 @@ class Checker {
         "outside-profile", path,
         `${where} is a literal: a literal there needs the Property-Property Comparisons class.`, propertyProperty,
       );
-    } else if (op === "accenti") {
-      this.report("outside-profile", path, `"accenti" is not in the profile yet.`, accentInsensitive);
     } else if (op !== undefined && ARITHMETIC.has(op)) {
       this.report("outside-profile", path, `"${op}" is arithmetic, not in the profile yet.`, arithmetic);
-    } else if (op === "casei") {
-      this.report("outside-profile", path, `${where}: casei(…) inside casei(…) is not in the profile.`);
+    } else if (op === "casei" || op === "accenti") {
+      this.report(
+        "outside-profile", path,
+        `${where}: ${op}(…) is not in the profile here; casei(…) and accenti(…) may each wrap the other once.`,
+      );
     } else if (op !== undefined) {
       this.report("outside-profile", path, `${where} is a function call ("${op}"): it needs the Functions class.`, functions);
     } else if (Array.isArray(x)) {
@@ -375,8 +398,8 @@ class Checker {
     const subject = this.subject(args[0], `${path}/args/0`);
     const kind = this.literal(args[1], `${path}/args/1`);
     // CASEI('x') against a plain property is valid: the property's value is then compared as it is.
-    if (subject?.casei && kind && kind !== "string" && kind !== "casei-string") {
-      this.report("type-mismatch", `${path}/args/1`, `casei(…) is a string, so it can only be compared with a string.`);
+    if (subject?.folded && kind && kind !== "string" && kind !== "folded-string") {
+      this.report("type-mismatch", `${path}/args/1`, `${opOf(args[0])}(…) gives a string, so it can only be compared with a string.`);
     } else {
       this.against(subject, kind, `${path}/args/1`);
     }
@@ -387,7 +410,7 @@ class Checker {
     if (args.length !== 2) return this.report("wrong-arguments", `${path}/args`, `"like" needs exactly two arguments.`);
     const subject = this.subject(args[0], `${path}/args/0`);
     const kind = this.literal(args[1], `${path}/args/1`);
-    if (kind && kind !== "string" && kind !== "casei-string") {
+    if (kind && kind !== "string" && kind !== "folded-string") {
       this.report("type-mismatch", `${path}/args/1`, `A LIKE pattern is a string, e.g. "Riv%".`);
     } else if (subject && subject.held !== "text" && subject.held !== "any") {
       this.report("type-mismatch", `${path}/args/0`, `LIKE works on strings, and "${subject.name}" ${WRITE[subject.held]}.`);
@@ -402,8 +425,8 @@ class Checker {
       );
     }
     let subject: Subject | undefined;
-    if (opOf(args[0]) === "casei") {
-      this.report("type-mismatch", `${path}/args/0`, `BETWEEN works on numbers only, and casei(…) is a string.`);
+    if (opOf(args[0]) === "casei" || opOf(args[0]) === "accenti") {
+      this.report("type-mismatch", `${path}/args/0`, `BETWEEN works on numbers only, and ${opOf(args[0])}(…) gives a string.`);
     } else {
       subject = this.subject(args[0], `${path}/args/0`, false);
     }
@@ -434,15 +457,15 @@ class Checker {
     const kinds = new Set<LiteralKind>();
     list.forEach((item, i) => {
       const kind = this.literal(item, `${path}/args/1/${i}`);
-      if (kind) kinds.add(kind === "casei-string" ? "string" : kind);
+      if (kind) kinds.add(kind === "folded-string" ? "string" : kind);
     });
     if (kinds.size > 1) {
       this.report(
         "mixed-list", `${path}/args/1`,
         `The values of an IN list must all be of one type; this one mixes ${[...kinds].join(", ")}.`,
       );
-    } else if (subject?.casei && kinds.size === 1 && !kinds.has("string")) {
-      this.report("type-mismatch", `${path}/args/1`, `casei(…) is a string, so the list must hold strings.`);
+    } else if (subject?.folded && kinds.size === 1 && !kinds.has("string")) {
+      this.report("type-mismatch", `${path}/args/1`, `${opOf(args[0])}(…) gives a string, so the list must hold strings.`);
     } else if (kinds.size === 1) {
       this.against(subject, [...kinds][0], `${path}/args/1`);
     }
@@ -506,8 +529,10 @@ export function requiredConformance(filter: Cql2Filter): string[] {
     if (!isObject(x)) return;
     if (x.op === "like" || x.op === "between" || x.op === "in") used.add(CONFORMANCE.advancedComparison);
     if (x.op === "casei") used.add(CONFORMANCE.caseInsensitive);
+    if (x.op === "accenti") used.add(CONFORMANCE.accentInsensitive);
     if (Array.isArray(x.args)) walk(x.args);
   };
   walk(filter);
-  return [CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive].filter((c) => used.has(c));
+  return [CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive]
+    .filter((c) => used.has(c));
 }

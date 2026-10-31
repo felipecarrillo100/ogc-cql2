@@ -38,30 +38,60 @@ export type InstantLiteral = DateLiteral | TimestampLiteral;
 /** A literal a property can be compared with. */
 export type ScalarLiteral = string | number | boolean | InstantLiteral;
 
-/** `CASEI(property)`: the property's value, case-folded. */
+/** `CASEI(property)`: the property's value, case-folded; it may wrap `ACCENTI(property)`. */
 export interface CaseiProperty {
   readonly op: "casei";
-  readonly args: readonly [PropertyRef];
+  readonly args: readonly [PropertyRef | AccentiOf<PropertyRef>];
 }
 
-/** `CASEI('text')`: a string literal, case-folded. */
+/** `CASEI('text')`: a string literal, case-folded; it may wrap `ACCENTI('text')`. */
 export interface CaseiString {
   readonly op: "casei";
-  readonly args: readonly [string];
+  readonly args: readonly [string | AccentiOf<string>];
 }
+
+/** `ACCENTI(property)`: the property's value without accents; it may wrap `CASEI(property)`. */
+export interface AccentiProperty {
+  readonly op: "accenti";
+  readonly args: readonly [PropertyRef | CaseiOf<PropertyRef>];
+}
+
+/** `ACCENTI('text')`: a string literal without accents; it may wrap `CASEI('text')`. */
+export interface AccentiString {
+  readonly op: "accenti";
+  readonly args: readonly [string | CaseiOf<string>];
+}
+
+/** `CASEI(x)` of a property or a string, one level: the inner part of `ACCENTI(CASEI(x))`. */
+export interface CaseiOf<T extends PropertyRef | string> {
+  readonly op: "casei";
+  readonly args: readonly [T];
+}
+
+/** `ACCENTI(x)` of a property or a string, one level: the inner part of `CASEI(ACCENTI(x))`. */
+export interface AccentiOf<T extends PropertyRef | string> {
+  readonly op: "accenti";
+  readonly args: readonly [T];
+}
+
+/** The left side of a string comparison: a property, or `CASEI` / `ACCENTI` of one. */
+export type StringSubject = PropertyRef | CaseiProperty | AccentiProperty;
+
+/** A string folded by `CASEI` and / or `ACCENTI`. */
+export type FoldedString = CaseiString | AccentiString;
 
 export type ComparisonOperator = "=" | "<>" | "<" | "<=" | ">" | ">=";
 
-/** `property op literal`. With `casei` on either side, the other side is a string or a `casei` string. */
+/** `property op literal`. With `casei` or `accenti` on either side, the other side is a string or a folded string. */
 export interface Comparison {
   readonly op: ComparisonOperator;
-  readonly args: readonly [PropertyRef | CaseiProperty, ScalarLiteral | CaseiString];
+  readonly args: readonly [StringSubject, ScalarLiteral | FoldedString];
 }
 
 /** `property LIKE 'pattern'`: `%` matches any run of characters, `_` one character, `\` escapes either. */
 export interface Like {
   readonly op: "like";
-  readonly args: readonly [PropertyRef | CaseiProperty, string | CaseiString];
+  readonly args: readonly [StringSubject, string | FoldedString];
 }
 
 /** `property BETWEEN low AND high`, inclusive; numbers only. */
@@ -73,7 +103,7 @@ export interface Between {
 /** `property IN (…)`: the list holds literals of one type. */
 export interface In {
   readonly op: "in";
-  readonly args: readonly [PropertyRef | CaseiProperty, readonly (ScalarLiteral | CaseiString)[]];
+  readonly args: readonly [StringSubject, readonly (ScalarLiteral | FoldedString)[]];
 }
 
 /** `property IS NULL`. */

@@ -27,9 +27,10 @@ The package implements these conformance classes, completely:
 | Basic CQL2 | `=` `<>` `<` `<=` `>` `>=`, `isNull`, `and` `or` `not`, `true` / `false`, `{ "date" }` and `{ "timestamp" }` literals |
 | Advanced Comparison Operators | `like`, `between`, `in` |
 | Case-insensitive Comparison | `casei` |
+| Accent-insensitive Comparison | `accenti` |
 
 It accepts the form every server of those classes must support: a property on the left, a literal on the right.
-Anything else that is valid CQL2 (spatial, temporal and array functions, arithmetic, `accenti`, comparing two
+Anything else that is valid CQL2 (spatial, temporal and array functions, arithmetic, comparing two
 properties, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
 will follow.
 
@@ -99,7 +100,7 @@ filtering; a client can do the same before sending, so that a person or an AI wr
 
 | Queryable | Compared with |
 |---|---|
-| `"type": "string"` | strings, `casei(…)`; LIKE |
+| `"type": "string"` | strings, `casei(…)`, `accenti(…)`; LIKE |
 | `"type": "string"`, `"format": "date"` | `{ "date": … }` |
 | `"type": "string"`, `"format": "date-time"` | `{ "timestamp": … }` |
 | `"type": "number"` or `"integer"` | numbers; BETWEEN |
@@ -152,6 +153,20 @@ The rules are the standard's:
   in a filter is refused (`invalid-timestamp`): no engine can compare it.
 - **Strings** are compared after Unicode normalization (NFC). **`casei`** applies Unicode's full case folding, so
   `"Straße"` matches `"STRASSE"`; it folds exactly what it wraps.
+- **`accenti`** removes accents, as the standard defines it: the nonspacing marks after canonical decomposition, so
+  `"São Paulo"` matches `"Sao Paulo"` and `"Bogotá"` `"Bogota"`. Put it on both sides, and combine it with `casei` to
+  ignore case too:
+
+  ```js
+  { op: "=", args: [
+    { op: "casei", args: [{ op: "accenti", args: [{ property: "city" }] }] },
+    { op: "casei", args: [{ op: "accenti", args: ["SAO PAULO"] }] },
+  ] }
+  ```
+
+  Following the standard exactly: `ñ` loses its tilde (`año` matches `ano`); `ł`, `ø` and `đ` are letters of their
+  own and stay (`Łódź` becomes `Łodz`); the Japanese voicing marks stay (`はじめ` is not `はしめ`), and so do the
+  spacing vowel signs of Indic scripts.
 
 ## SQL (SQLite)
 
@@ -193,7 +208,7 @@ import { postgresFunctions, postgresValue, toSql } from "ogc-cql2/sql";
 
 const client = new pg.Client(); // the connection from PGHOST, PGDATABASE, PGUSER, PGPASSWORD…
 await client.connect();
-await client.query(postgresFunctions("myschema")); // once: creates cql2_casei, cql2_day, cql2_instant there
+await client.query(postgresFunctions("myschema")); // once: creates cql2_casei, cql2_accenti, cql2_day… there
 
 const columns = {
   name: { type: "string", sqlType: "text" },
@@ -208,7 +223,8 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
 - **Text compares in code point order** (`COLLATE "C"`) after NFC normalization: the database's own collation sorts by
   language rules, which CQL2 doesn't.
 - **`postgresFunctions(schema)`** returns the SQL to run once: Unicode full case folding for CASEI (PostgreSQL's
-  `lower()` isn't), and strict readers of dates and instants in text columns. It needs no extension, only the right to
+  `lower()` isn't), accent removal for ACCENTI (PostgreSQL's `unaccent` extension follows a dictionary instead: it
+  turns `ø` into `o`), and strict readers of dates and instants in text columns. It needs no extension, only the right to
   create objects in that schema.
 - **`postgresValue(column)`** is what to SELECT for each column, so that what you serve is exactly what the SQL
   compared: dates as `YYYY-MM-DD`, instants as UTC `…Z` with milliseconds, numbers as double precision.
@@ -233,7 +249,9 @@ const select = Object.entries(columns).map(([name, c]) => `${duckdbValue(name, c
 const sql = `SELECT ${select} FROM 'places.parquet' WHERE ${where}`;
 ```
 
-Register `duckdbFunctions` on the connection first (CASEI, and dates or instants held in text, use them). In Node:
+Register `duckdbFunctions` on the connection first (CASEI, ACCENTI, and dates or instants held in text, use them).
+DuckDB's own `strip_accents` isn't used for ACCENTI: it also strips the spacing vowel signs of Indic scripts and the
+Japanese voicing marks (548 code points differ from the standard's rule, measured). In Node:
 
 ```js
 import { DuckDBInstance, DuckDBScalarFunction, INTEGER, VARCHAR } from "@duckdb/node-api";

@@ -8,6 +8,7 @@ import { evaluate, toEvaluator, toPredicate, type Truth } from "ogc-cql2/evaluat
 
 const p = (property: string) => ({ property });
 const casei = <T>(arg: T) => ({ op: "casei", args: [arg] }) as const;
+const accenti = <T>(arg: T) => ({ op: "accenti", args: [arg] }) as const;
 const f = (properties: Record<string, unknown>) => ({ type: "Feature", properties, geometry: null });
 const F = (filter: unknown) => filter as Cql2Filter;
 
@@ -213,6 +214,66 @@ describe("CASEI: Unicode full case folding (casei-function E)", () => {
     expect(evaluate(filter, f({ v: "STRASSE" }))).toBe(true);
     expect(evaluate(filter, f({ v: "road" }))).toBe(false);
     expect(evaluate(filter, f({ v: null }))).toBe(null); // casei-function D
+  });
+});
+
+describe("ACCENTI: the nonspacing marks removed (accenti-function E)", () => {
+  const key = (value: string) => {
+    // The value's key is what ACCENTI(v) = ACCENTI(value) matches: test it against itself and its stripped form.
+    const filter = F({ op: "=", args: [accenti(p("v")), accenti(value)] });
+    return (other: string) => evaluate(filter, f({ v: other }));
+  };
+
+  it.each([
+    ["São Paulo", "Sao Paulo"],
+    ["Bogotá", "Bogota"],
+    ["Ação", "Acao"],
+    ["año", "ano"], // ñ is n + a combining tilde: the standard's rule removes it
+    ["Việt Nam", "Viet Nam"], // two marks on one letter
+    ["Ångström", "Angstrom"],
+    ["cafe\u0301", "café"], // decomposed input
+    ["Łódź", "Łodz"], // ł has no decomposition: a letter of its own, kept
+    ["Đà Nẵng", "Đa Nang"], // đ kept
+    ["한국", "한국"], // Hangul syllables decompose to jamo and recompose: nothing removed
+    ["\u{11107}\u{11134}", "\u{11107}"], // a mark above U+FFFF (Chakma U+11134, on the letter U+11107) is removed
+  ])("%s ~ %s", (a, b) => {
+    expect(key(a)(b)).toBe(true);
+  });
+
+  it.each([
+    ["Øresund", "Oresund"], // ø has no decomposition
+    ["はじめ", "はしめ"], // the Japanese voicing marks are kept (Recommendation 2)
+    ["が", "か"],
+    ["Sao", "Sau"],
+    ["भारत", "भरत"], // a spacing vowel sign (U+093E, category Mc) is kept: only nonspacing marks (Mn) go
+  ])("%s ≁ %s", (a, b) => {
+    expect(key(a)(b)).toBe(false);
+  });
+
+  it("folds exactly what it wraps, and combines with CASEI either way", () => {
+    expect(evaluate(F({ op: "=", args: [accenti(p("v")), "São"] }), f({ v: "Sao" }))).toBe(false); // literal not stripped
+    expect(evaluate(F({ op: "=", args: [p("v"), accenti("São")] }), f({ v: "Sao" }))).toBe(true);
+    const both = (subject: unknown, literal: unknown) => evaluate(F({ op: "=", args: [subject, literal] }), f({ v: "SÃO PAULO" }));
+    expect(both(casei(accenti(p("v"))), casei(accenti("são paulo")))).toBe(true);
+    expect(both(accenti(casei(p("v"))), accenti(casei("são paulo")))).toBe(true);
+    expect(both(accenti(p("v")), accenti("são paulo"))).toBe(false); // case still matters
+  });
+
+  it("recomposes what remains: a kept mark or a Hangul syllable is still one character for LIKE's _", () => {
+    const one = (value: string) => evaluate(F({ op: "like", args: [accenti(p("v")), accenti("_")] }), f({ v: value }));
+    expect(one("が")).toBe(true); // か + the kept voicing mark, recomposed
+    expect(one("한")).toBe(true); // three jamo after decomposition, recomposed
+    expect(one("é")).toBe(true);
+  });
+
+  it("in LIKE, IN, order, and on a null", () => {
+    expect(evaluate(F({ op: "like", args: [accenti(p("v")), accenti("Sao%")] }), f({ v: "São Paulo" }))).toBe(true);
+    expect(evaluate(F({ op: "like", args: [casei(accenti(p("v"))), casei(accenti("%PAULO"))] }), f({ v: "São Paulo" }))).toBe(true);
+    const list = F({ op: "in", args: [accenti(p("v")), [accenti("Bogotá"), accenti("Medellín")]] });
+    expect(evaluate(list, f({ v: "Medellin" }))).toBe(true);
+    expect(evaluate(list, f({ v: null }))).toBe(null); // accenti-function D
+    expect(evaluate(F({ op: "<", args: [accenti(p("v")), accenti("é")] }), f({ v: "f" }))).toBe(false); // e < f, not é
+    expect(evaluate(F({ op: "<", args: [accenti(p("v")), accenti("f")] }), f({ v: "é" }))).toBe(true);
   });
 });
 

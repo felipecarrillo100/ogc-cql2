@@ -28,6 +28,7 @@ const IN_PROFILE = new Set([
   "example17", "example18", "example19", "example26", "example28", "example29", "example30", "example31",
   "example32", "example33", "example34", "example35", "example36", "example37", "example38", "example39",
   "example40", "example41", "example42", "example43", "example44", "example71", "example86",
+  "clause7_05", "example27", "example70", // Accent-insensitive Comparison, since 0.5.0
 ]);
 
 initSync({ module: readFileSync(new URL("../node_modules/cql2-wasm/cql2_wasm_bg.wasm", import.meta.url)) });

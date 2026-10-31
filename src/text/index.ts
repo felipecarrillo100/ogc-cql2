@@ -7,7 +7,8 @@
  * express is never written loosely: {@link textProblem} names it, and {@link toText} refuses it.
  */
 import { Cql2Error } from "../core/errors.js";
-import type { CaseiProperty, CaseiString, Cql2Filter, PropertyRef, ScalarLiteral } from "../core/types.js";
+import { unwrap, type Fold } from "../core/folds.js";
+import type { Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, StringSubject } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
 
 // `identifierStart` (cql2.bnf, cql2-1.0.0), range by range, in the grammar's order.
@@ -101,18 +102,24 @@ function propertyName(ref: PropertyRef): string {
   return KEYWORDS.has(ref.property.toUpperCase()) ? `"${ref.property}"` : ref.property;
 }
 
-function subject(x: PropertyRef | CaseiProperty): string {
-  return "property" in x ? propertyName(x) : `CASEI(${propertyName(x.args[0])})`;
+/** `inner` wrapped in the folds, innermost first: accenti, casei → `CASEI(ACCENTI(inner))`. */
+const wrapped = (inner: string, folds: readonly Fold[]): string =>
+  folds.reduce((text, fold) => `${fold.toUpperCase()}(${text})`, inner);
+
+function subject(x: StringSubject): string {
+  const { inner, folds } = unwrap(x);
+  return wrapped(propertyName(inner), folds);
 }
 
-function literal(x: ScalarLiteral | CaseiString): string {
+function literal(x: ScalarLiteral | FoldedString): string {
   if (typeof x === "string") return quoteString(x);
   if (typeof x === "boolean") return x ? "TRUE" : "FALSE";
   // `scientificNumericLiteral = mantissa "E" exponent`: JavaScript writes 1e+21 and 1.5e-7 with a lowercase e.
   if (typeof x === "number") return String(x).replace("e", "E");
   if ("date" in x) return `DATE(${quoteString(x.date)})`;
   if ("timestamp" in x) return `TIMESTAMP(${quoteString(x.timestamp)})`;
-  return `CASEI(${quoteString(x.args[0])})`;
+  const { inner, folds } = unwrap(x);
+  return wrapped(quoteString(inner), folds);
 }
 
 /** Each operand of AND / OR in parentheses, so precedence never depends on the reader. */

@@ -33,6 +33,7 @@ export const COLUMNS: readonly string[] = ["name", "country", "population", "cap
 
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
+const accenti = (arg: unknown) => ({ op: "accenti", args: [arg] });
 
 export interface Example {
   readonly label: string;
@@ -91,6 +92,8 @@ export const EXAMPLES: readonly Example[] = [
   { label: "Name starts with “s”, any case (LIKE + CASEI)", filter: { op: "like", args: [casei(p("name")), casei("s%")] } },
   { label: "Name equals “straßburg”, any case (full case folding)", filter: { op: "=", args: [casei(p("name")), casei("straßburg")] } },
   { label: "Name equals “ΑΘΉΝΑ”, any case (Greek)", filter: { op: "=", args: [casei(p("name")), casei("ΑΘΉΝΑ")] } },
+  { label: "Name equals “sao paulo”, any case and accents (CASEI + ACCENTI)", filter: { op: "=", args: [casei(accenti(p("name"))), casei(accenti("sao paulo"))] } },
+  { label: "Name starts with “Reykjav”, accents ignored (ACCENTI + LIKE)", filter: { op: "like", args: [accenti(p("name")), accenti("Reykjav%")] } },
   { label: "Country is one of CA, DE", filter: { op: "in", args: [p("country"), ["CA", "DE"]] } },
   { label: "Country is not one of CA, DE (NULL when missing)", filter: { op: "not", args: [{ op: "in", args: [p("country"), ["CA", "DE"]] }] } },
   { label: "Founded before 1800 (dates)", filter: { op: "<", args: [p("founded"), { date: "1800-01-01" }] } },

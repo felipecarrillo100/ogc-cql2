@@ -49,6 +49,7 @@ after(() => pool?.end());
 
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
+const accenti = (arg: unknown) => ({ op: "accenti", args: [arg] });
 const PROPERTIES = ["name", "code", "small", "count", "big", "ratio", "amount", "active", "day", "at", "local_at", "note"];
 const LITERALS: unknown[] = [
   "Straße", "STRASSE", "straße", "café", "café", "", "😀", "", "Riv", "river", "a_b", "Ελλάδα", "ΣΊΣΥΦΟΣ", "100%",
@@ -66,9 +67,11 @@ function generate(): Cql2Filter[] {
     for (const value of LITERALS) for (const op of ["=", "<>", "<", "<=", ">", ">="]) leaves.push({ op, args: [p(name), value] });
     for (const value of LITERALS.filter((v) => typeof v === "string")) {
       leaves.push({ op: "=", args: [casei(p(name)), casei(value)] }, { op: "<", args: [casei(p(name)), value] });
+      leaves.push({ op: "=", args: [accenti(p(name)), accenti(value)] }, { op: "<", args: [casei(accenti(p(name))), casei(accenti(value))] });
     }
     for (const pattern of PATTERNS) {
       leaves.push({ op: "like", args: [p(name), pattern] }, { op: "like", args: [casei(p(name)), casei(pattern)] });
+      leaves.push({ op: "like", args: [accenti(casei(p(name))), accenti(casei(pattern))] });
     }
     leaves.push({ op: "between", args: [p(name), 0, 5] }, { op: "between", args: [p(name), -1, 2.5] });
     for (const list of [["Straße", "café"], [5, 10], [true], [{ date: "2020-07-26" }, { date: "1999-12-31" }], [{ timestamp: "2023-01-01T00:00:00Z" }]]) {
