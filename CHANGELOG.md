@@ -4,6 +4,28 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.7.0] - 2026-10-31
+
+Spatial filters, phase B: `evaluate` tests `s_intersects` in memory.
+
+### Added
+
+- `evaluate`: `s_intersects` (Basic Spatial Functions and Basic plus), planar, boundaries included, heights ignored,
+  with exact orientation (Shewchuk's `orient2d`, public domain, copied in), so a point exactly on an edge is decided
+  as GEOS decides it. A box across the antimeridian is two boxes. A feature without a geometry, or with something that
+  isn't a GeoJSON geometry, is NULL.
+- `EvaluateOptions.geometryProperty` (default `"geometry"`): the property that means `feature.geometry`.
+
+### Changed
+
+- `evaluate` no longer refuses Basic Spatial Functions and Basic plus; Spatial Functions (`s_within` and the other
+  relations) and spatial SQL stay `unsupported`.
+
+### Tests
+
+- The standard's Natural Earth acceptance test (Table 12): all eight counts.
+- Against GEOS (through PostGIS) on the US states: 5,705 generated literals, many exactly on vertices and edges.
+
 ## [0.6.0] - 2026-10-31
 
 Spatial filters, phase A: the three spatial classes in the types, `validate` and `text`, so a client can build,
@@ -157,7 +179,8 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
-[0.6.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.5.0...HEAD
+[0.7.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.2.0...v0.3.0

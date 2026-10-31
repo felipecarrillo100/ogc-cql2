@@ -277,11 +277,11 @@ describe("ACCENTI: the nonspacing marks removed (accenti-function E)", () => {
   });
 });
 
-describe("spatial filters: no engine yet", () => {
+describe("spatial relations other than S_INTERSECTS: no engine yet", () => {
   it("are refused with unsupported, naming the class, instead of being evaluated", () => {
-    const filter = F({ op: "and", args: [{ op: "=", args: [p("a"), 1] }, { op: "s_intersects", args: [p("geometry"), { bbox: [0, 0, 1, 1] }] }] });
+    const filter = F({ op: "and", args: [{ op: "=", args: [p("a"), 1] }, { op: "s_within", args: [p("geometry"), { bbox: [0, 0, 1, 1] }] }] });
     expect(() => toPredicate(filter)).toThrow(
-      expect.objectContaining({ name: "Cql2Error", code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-functions" } }),
+      expect.objectContaining({ name: "Cql2Error", code: "unsupported", details: { conformance: "http://www.opengis.net/spec/cql2/1.0/conf/spatial-functions" } }),
     );
   });
 });

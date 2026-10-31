@@ -28,12 +28,13 @@ The package implements these conformance classes:
 | Advanced Comparison Operators | `like`, `between`, `in` | ✅ | ✅ |
 | Case-insensitive Comparison | `casei` | ✅ | ✅ |
 | Accent-insensitive Comparison | `accenti` | ✅ | ✅ |
-| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | not yet |
-| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | not yet |
+| Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | `evaluate` ✅, `sql` not yet |
+| Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | `evaluate` ✅, `sql` not yet |
 | Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | not yet |
 
-Spatial filters can be built, validated and sent to servers today (see "Spatial filters" below); `evaluate` and
-`sql` refuse them with the code `unsupported` until their spatial engines arrive.
+Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
+`s_intersects` in memory; the other relations, and spatial SQL, are refused with the code `unsupported` until their
+engines arrive.
 
 It accepts the form every server of those classes must support: a property on the left, a literal on the right.
 Anything else that is valid CQL2 (temporal and array functions, arithmetic, comparing two
@@ -363,6 +364,21 @@ requiredConformance(inArea); // the URIs of Basic CQL2 and Spatial Functions
 - **With queryables**, the property must be a geometry (`"format": "geometry-…"`, or a `$ref` to a GeoJSON schema).
 - **Not accepted:** a geometry literal first (the standard lets servers refuse it, so swap the two), a geometry's own
   GeoJSON `bbox` member (CQL2's schema refuses it), functions such as `Buffer`.
+
+**In memory**, `evaluate` tests `s_intersects` on each feature's `geometry`, as GeoJSON keeps it:
+
+```js
+const inView = toPredicate({ op: "s_intersects", args: [{ property: "geometry" }, { bbox: [5, 45, 15, 51] }] });
+features.filter(inView); // the features the box touches
+```
+
+- **The same answers as GEOS** (PostGIS, SpatiaLite, DuckDB): planar, in the coordinates as given, boundaries
+  included (a point on an edge intersects), decided with exact arithmetic. Heights are ignored. A feature without a
+  geometry is NULL.
+- **`geometryProperty`** (default `"geometry"`) names the property that means `feature.geometry`; any other property
+  in a spatial filter is read with `getProperty` and must hold a GeoJSON geometry.
+- **Tested** with the standard's own Natural Earth test (Table 12: 8, 10, 1, 3, 5, 10, 7, 4 features), and against
+  GEOS on the US states for thousands of generated literals placed exactly on their vertices and edges.
 
 ## LIKE patterns
 

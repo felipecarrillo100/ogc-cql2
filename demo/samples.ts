@@ -3,27 +3,27 @@
 export interface SampleFeature {
   readonly type: "Feature";
   readonly id: number;
-  readonly geometry: null;
+  readonly geometry: { readonly type: "Point"; readonly coordinates: readonly [number, number] } | null;
   readonly properties: Readonly<Record<string, unknown>>;
 }
 
-const feature = (id: number, properties: Record<string, unknown>): SampleFeature => ({
+const feature = (id: number, properties: Record<string, unknown>, lonLat?: readonly [number, number]): SampleFeature => ({
   type: "Feature",
   id,
-  geometry: null,
+  geometry: lonLat ? { type: "Point", coordinates: lonLat } : null,
   properties,
 });
 
-/** Chosen to exercise the rules: Unicode names, a null, a missing property, a number stored as text. */
+/** Chosen to exercise the rules: Unicode names, a null, a missing property, a number stored as text, no geometry. */
 export const FEATURES: readonly SampleFeature[] = [
-  feature(1, { name: "Toronto", country: "CA", population: 2794356, capital: false, founded: "1793-08-27", updated: "2026-01-15T10:00:00Z" }),
-  feature(2, { name: "Ottawa", country: "CA", population: 1017449, capital: true, founded: "1826-09-26", updated: "2025-11-02T08:30:00Z" }),
-  feature(3, { name: "Frankfurt am Main", country: "DE", population: 773068, capital: false, founded: "0794-02-22", updated: "2026-03-01T00:00:00Z" }),
-  feature(4, { name: "München", country: "DE", population: 1512491, capital: false, founded: "1158-06-14", updated: "2024-07-19T16:45:00+02:00" }),
-  feature(5, { name: "Αθήνα", country: "GR", population: 643452, capital: true, founded: null, updated: "2025-05-05T12:00:00Z" }),
-  feature(6, { name: "São Paulo", country: "BR", population: 11451245, capital: false, founded: "1554-01-25", updated: "2026-02-20T09:00:00Z" }),
-  feature(7, { name: "Reykjavík", country: "IS", population: 139875, capital: true, founded: "1786-08-18", updated: "2023-09-30T23:59:59Z" }),
-  feature(8, { name: "STRASSBURG", country: "FR", population: 290576, capital: false, founded: "0012-01-01" }),
+  feature(1, { name: "Toronto", country: "CA", population: 2794356, capital: false, founded: "1793-08-27", updated: "2026-01-15T10:00:00Z" }, [-79.3832, 43.6532]),
+  feature(2, { name: "Ottawa", country: "CA", population: 1017449, capital: true, founded: "1826-09-26", updated: "2025-11-02T08:30:00Z" }, [-75.6972, 45.4215]),
+  feature(3, { name: "Frankfurt am Main", country: "DE", population: 773068, capital: false, founded: "0794-02-22", updated: "2026-03-01T00:00:00Z" }, [8.6821, 50.1109]),
+  feature(4, { name: "München", country: "DE", population: 1512491, capital: false, founded: "1158-06-14", updated: "2024-07-19T16:45:00+02:00" }, [11.582, 48.1351]),
+  feature(5, { name: "Αθήνα", country: "GR", population: 643452, capital: true, founded: null, updated: "2025-05-05T12:00:00Z" }, [23.7275, 37.9838]),
+  feature(6, { name: "São Paulo", country: "BR", population: 11451245, capital: false, founded: "1554-01-25", updated: "2026-02-20T09:00:00Z" }, [-46.6333, -23.5505]),
+  feature(7, { name: "Reykjavík", country: "IS", population: 139875, capital: true, founded: "1786-08-18", updated: "2023-09-30T23:59:59Z" }, [-21.8174, 64.1265]),
+  feature(8, { name: "STRASSBURG", country: "FR", population: 290576, capital: false, founded: "0012-01-01" }, [7.7521, 48.5734]),
   feature(9, { name: "Unnamed hamlet", country: "IS", population: null, capital: false }),
   feature(10, { name: "Survey point 17", population: "40", capital: false }),
 ];
@@ -95,8 +95,9 @@ export const EXAMPLES: readonly Example[] = [
   { label: "Name equals “sao paulo”, any case and accents (CASEI + ACCENTI)", filter: { op: "=", args: [casei(accenti(p("name"))), casei(accenti("sao paulo"))] } },
   { label: "Name starts with “Reykjav”, accents ignored (ACCENTI + LIKE)", filter: { op: "like", args: [accenti(p("name")), accenti("Reykjav%")] } },
   { label: "Country is one of CA, DE", filter: { op: "in", args: [p("country"), ["CA", "DE"]] } },
-  { label: "Spatial: inside a map view (a bbox), to send to a server", filter: { op: "s_intersects", args: [p("geometry"), { bbox: [5.9, 45.8, 10.5, 47.8] }] } },
-  { label: "Spatial: within a drawn area (a polygon), to send to a server", filter: { op: "s_within", args: [p("geometry"), { type: "Polygon", coordinates: [[[-80, 40], [-70, 40], [-70, 47], [-80, 47], [-80, 40]]] }] } },
+  { label: "Spatial: in a map view (a bbox around central Europe)", filter: { op: "s_intersects", args: [p("geometry"), { bbox: [5, 45, 15, 51] }] } },
+  { label: "Spatial: in a drawn area (a polygon around Ontario)", filter: { op: "s_intersects", args: [p("geometry"), { type: "Polygon", coordinates: [[[-81, 42], [-74, 42], [-74, 47], [-81, 47], [-81, 42]]] }] } },
+  { label: "Spatial: S_WITHIN (Spatial Functions): valid, to send to servers; not evaluated here yet", filter: { op: "s_within", args: [p("geometry"), { bbox: [-81, 42, -74, 47] }] } },
   { label: "Country is not one of CA, DE (NULL when missing)", filter: { op: "not", args: [{ op: "in", args: [p("country"), ["CA", "DE"]] }] } },
   { label: "Founded before 1800 (dates)", filter: { op: "<", args: [p("founded"), { date: "1800-01-01" }] } },
   { label: "Updated in 2026 (timestamps)", filter: { op: ">=", args: [p("updated"), { timestamp: "2026-01-01T00:00:00Z" }] } },

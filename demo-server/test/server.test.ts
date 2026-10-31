@@ -138,11 +138,20 @@ describe("refusals, as application/problem+json", () => {
     assert.equal(answer.problems[0].path, "/args/0");
   });
 
-  it("a spatial filter: the stores don't evaluate it yet, so the class is missing", async () => {
-    const filter = { op: "s_intersects", args: [{ property: "POP1996" }, { bbox: [-110, 35, -100, 45] }] };
-    const answer = await problem(await query("states", { filter }), 400, "invalid-filter");
-    assert.ok(answer.problems.some((x: { code: string; conformance?: string }) =>
+  it("a spatial filter: GeoJSON collections answer it; the SQL stores lack the class, so they refuse it", async () => {
+    const filter = { op: "s_intersects", args: [{ property: "geometry" }, { bbox: [-110, 35, -100, 45] }] };
+    const answer = await read(query("states", { filter }));
+    assert.equal(answer.numberMatched, 11);
+    const refused = await problem(await query("gpkg-states", { filter }), 400, "invalid-filter");
+    assert.ok(refused.problems.some((x: { code: string; conformance?: string }) =>
       x.code === "needs-conformance" && x.conformance === "http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-functions"));
+    const notGeometry = await problem(await query("states", { filter: { ...filter, args: [{ property: "POP1996" }, filter.args[1]] } }), 400, "invalid-filter");
+    assert.equal(notGeometry.problems[0].code, "type-mismatch");
+  });
+
+  it("the queryables list the geometry, as OGC API Features Part 3 does", async () => {
+    const answer = await read(fetch(`${base}/collections/states/queryables`));
+    assert.deepEqual(answer.properties.geometry, { format: "geometry-any" });
   });
 
   it("a literal of another type than the queryable's, instead of an empty answer", async () => {
