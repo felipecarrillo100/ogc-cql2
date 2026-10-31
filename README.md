@@ -7,8 +7,9 @@ JavaScript and TypeScript. It works on filters in the standard's JSON encoding, 
 - **`ogc-cql2/text`** writes it as CQL2-text, for the `filter` parameter of OGC API Features Part 3;
 - **`ogc-cql2/evaluate`** tests features against it in memory, with CQL2's three-valued logic, so it selects the
   same features a CQL2 server would;
-- **`ogc-cql2/sql`** turns it into a parameterized `WHERE` clause for SQLite / GeoPackage or PostgreSQL / PostGIS that
-  selects exactly what `evaluate` selects. It builds the SQL; your own driver runs it.
+- **`ogc-cql2/sql`** turns it into a parameterized `WHERE` clause for SQLite / GeoPackage, PostgreSQL / PostGIS or
+  DuckDB (GeoParquet and other files, in Node and in the browser) that selects exactly what `evaluate` selects. It
+  builds the SQL; your own driver runs it.
 
 It runs in browsers and in Node 20 or later and has no dependencies. Each part is its own entry point, so an
 application loads only what it uses.
@@ -185,6 +186,76 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
 - **Tested on real databases:** thousands of generated filters give the same features from a GeoJSON file
   (`evaluate`), a GeoPackage (SQLite) and PostgreSQL / PostGIS.
 
+## SQL (DuckDB)
+
+The `duckdb` dialect runs on DuckDB tables and straight on files, GeoParquet among them, with `$1`, `$2` …
+placeholders. **The same SQL works in Node (`@duckdb/node-api`) and in the browser (`@duckdb/duckdb-wasm`)**, so a web
+page can filter a large file locally with the filters it sends to servers.
+
+```js
+import { duckdbFunctions, duckdbValue, toSql } from "ogc-cql2/sql";
+
+const columns = {
+  name: { type: "string", sqlType: "VARCHAR" },
+  opened: { type: "string", format: "date-time", sqlType: "TIMESTAMP WITH TIME ZONE" },
+};
+const { where, params } = toSql(filter, { dialect: "duckdb", columns });
+const select = Object.entries(columns).map(([name, c]) => `${duckdbValue(name, c)} AS "${name}"`).join(", ");
+const sql = `SELECT ${select} FROM 'places.parquet' WHERE ${where}`;
+```
+
+Register `duckdbFunctions` on the connection first (CASEI, and dates or instants held in text, use them). In Node:
+
+```js
+import { DuckDBInstance, DuckDBScalarFunction, INTEGER, VARCHAR } from "@duckdb/node-api";
+
+const connection = await (await DuckDBInstance.create()).connect();
+const types = { VARCHAR, INTEGER };
+for (const [name, f] of Object.entries(duckdbFunctions)) {
+  connection.registerScalarFunction(DuckDBScalarFunction.create({
+    name,
+    returnType: types[f.returns],
+    parameterTypes: f.parameters.map((t) => types[t]),
+    mainFunction: (info, input, output) => {
+      const args = f.parameters.map((_, i) => input.getColumnVector(i));
+      for (let row = 0; row < input.rowCount; row++) output.setItem(row, f.call(...args.map((a) => a.getItem(row))));
+      output.flush();
+    },
+  }));
+}
+const rows = (await connection.runAndReadAll(sql, params)).getRowObjects();
+```
+
+In the browser, DuckDB-WASM registers JavaScript functions only in its synchronous ("blocking") build, which belongs
+in a Web Worker. It isn't listed in the package's `exports`, so import it by its file:
+
+```js
+// in a Web Worker
+import * as duckdb from "@duckdb/duckdb-wasm/dist/duckdb-browser-blocking.mjs"; // or a bundler alias to the file
+import * as arrow from "apache-arrow";
+
+const db = await duckdb.createDuckDB(bundles, new duckdb.VoidLogger(), duckdb.BROWSER_RUNTIME);
+await db.instantiate();
+db.open({});
+const connection = db.connect();
+for (const [name, f] of Object.entries(duckdbFunctions)) {
+  connection.createScalarFunction(name, new arrow.Int32(), (...args) => f.call(...args));
+}
+db.registerFileURL("places.parquet", url, duckdb.DuckDBDataProtocol.HTTP, false); // read by byte ranges
+const rows = connection.prepare(sql).query(...params).toArray();
+```
+
+- **`sqlType`** is the column's type as `DESCRIBE` gives it.
+- **Text compares in code point order** (`COLLATE "binary"`) after NFC normalization, whatever the database's
+  `default_collation`.
+- **Instants compare as epoch milliseconds,** so the time-zone setting changes nothing.
+- **`duckdbFunctions` all return 32-bit integers:** DuckDB-WASM (1.32.0) returns text, DOUBLE and BIGINT results of a
+  JavaScript function wrongly, so the functions avoid them, and work the same in both runtimes.
+- **`duckdbValue(column)`** is what to SELECT for each column, as `postgresValue` is for PostgreSQL. A GeoParquet
+  geometry is read with `geom::BLOB`, which is WKB.
+- **Tested in DuckDB itself:** thousands of generated filters on a table of awkward values select the same rows as
+  `evaluate`, also with a `nocase` default collation and another time zone.
+
 ## LIKE patterns
 
 `%` matches any number of characters, `_` exactly one. To match a literal `%` or `_`, write `\%` or `\_`:
@@ -246,6 +317,7 @@ An invalid filter, or one naming a property the collection doesn't have, is refu
 - [docs/vision.md](docs/vision.md): what the package is for, and its principles.
 - [docs/architecture.md](docs/architecture.md): how it is built and tested.
 - [docs/spatial-research.md](docs/spatial-research.md): research for spatial support, not implemented yet.
+- [docs/duckdb-case.md](docs/duckdb-case.md): why the package has a DuckDB dialect, and what was measured first.
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Licence

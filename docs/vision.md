@@ -14,7 +14,8 @@
   - accept a CQL2-JSON filter;
   - check it;
   - evaluate it against stored features, for example collections kept in files;
-  - or translate it to SQL for a database: SQLite / GeoPackage, PostgreSQL / PostGIS.
+  - or translate it to SQL for a database: SQLite / GeoPackage, PostgreSQL / PostGIS, or DuckDB, which also filters
+    GeoParquet and other files in place, in Node and in the browser.
 
 When client and server read a filter the same way, a filter selects the same features in memory as on the server.
 That is the point of the package.
@@ -77,7 +78,7 @@ against sources independent of this package:
 - its grammar;
 - other implementations;
 - real OGC API Features servers;
-- real databases: the same filters must select the same features in memory, in SQLite and in PostgreSQL.
+- real databases: the same filters must select the same features in memory, in SQLite, in PostgreSQL and in DuckDB.
 
 ## Not in scope
 

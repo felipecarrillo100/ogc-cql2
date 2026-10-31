@@ -1,6 +1,6 @@
 {
   "name": "ogc-cql2",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text, in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS) for CQL2-JSON filters, in browsers and Node.",
   "keywords": [
     "cql2",
@@ -72,6 +72,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",
+    "@duckdb/node-api": "^2.0.0-r.1",
     "@types/node": "^24.19.2",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
