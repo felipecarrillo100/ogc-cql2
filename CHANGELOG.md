@@ -4,6 +4,14 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Tests
+
+- `npm run check:duckdb`: the DuckDB spatial suite on the newest engines (the newest `@duckdb/node-api`, and the
+  engine inside the newest DuckDB-WASM), installed in a temporary folder, with what to update for each failing test.
+  Not part of `npm test`, nor of publishing.
+
 ## [0.9.0] - 2026-10-31
 
 Spatial filters, phase D: `s_intersects` in the `sqlite` (GeoPackage) and `duckdb` dialects, exact in both.
@@ -43,6 +51,8 @@ Spatial filters, phase D: `s_intersects` in the `sqlite` (GeoPackage) and `duckd
 - `test/duckdb-spatial.ts`, run on DuckDB 2.0 and on DuckDB 1.4.3, the engine DuckDB-WASM 1.32.0 ships (a new
   devDependency, `@duckdb/node-api-1.4`): the same filters on `GEOMETRY` and `BLOB` columns, without and with a
   covering; the R-tree index's use; and canaries that fail when a DuckDB release changes what the dialect relies on.
+  The timing canary only reports its ratio, and fails only with `CQL2_CANARY_TIMING=1`, so the machine's load can't
+  fail a test run.
 
 ## [0.8.0] - 2026-10-31
 

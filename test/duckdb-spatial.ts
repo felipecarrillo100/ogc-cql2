@@ -38,7 +38,18 @@ const bboxOf = (g: string, type: "DOUBLE" | "FLOAT", raw?: string) =>
   `CASE ${raw ? `WHEN ${raw} IS NOT NULL AND ${g} IS NULL THEN {'xmin': 100, 'ymin': 50, 'xmax': 101, 'ymax': 51}::STRUCT(xmin ${type}, ymin ${type}, xmax ${type}, ymax ${type}) ` : ""}` +
   `WHEN ${g} IS NULL OR ST_IsEmpty(${g}) THEN NULL ELSE {'xmin': ST_XMin(${g})::${type}, 'ymin': ST_YMin(${g})::${type}, 'xmax': ST_XMax(${g})::${type}, 'ymax': ST_YMax(${g})::${type}} END`;
 
-export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engine: Engine): void {
+/**
+ * Which engine the suite runs on: the exact `SELECT version()` (without the `v`), and its line, which picks the
+ * canaries' expectations. `"1.4"`: the spatial extension's own GEOMETRY type, as in 1.4.x; `"core"`: GEOMETRY in
+ * DuckDB's core (from 1.5), with statistics per row group. A new release is held to its line's behaviour, so what
+ * changed shows as a failure (scripts/check-duckdb.mjs).
+ */
+export interface EngineProfile {
+  readonly version: string;
+  readonly line: "1.4" | "core";
+}
+
+export function duckdbSpatialSuite(name: string, { version, line }: EngineProfile, engine: Engine): void {
   let duck: Connection;
   let spatial = "";
   const dir = mkdtempSync(join(tmpdir(), "ogc-cql2-duckdb-"));
@@ -71,7 +82,7 @@ export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engin
   describe(`${name}: selects exactly what evaluate selects`, () => {
     it(`is DuckDB ${version}`, async (context) => {
       if (spatial) return context.skip(spatial);
-      expect(String((await rows("SELECT version()"))[0]![0])).toBe(`v${version === "2.0" ? "2.0.0" : version}`);
+      expect(String((await rows("SELECT version()"))[0]![0])).toBe(`v${version}`);
     });
 
     // In a BLOB column the text is bytes too, which aren't WKB: NULL, as `evaluate` gives for a string.
@@ -137,14 +148,14 @@ export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engin
         .rejects.toThrow();
     });
 
-    it(version === "2.0"
+    it(line === "core"
       ? "a covering on a table with an R-tree index still fails (DuckDB 2.0's bug): keep the limitation documented"
       : "a covering on a table with an R-tree index works", async (context) => {
       if (spatial) return context.skip(spatial);
       await duck.run("CREATE OR REPLACE TABLE ixc AS SELECT ST_Point(x, x) AS geom, {'xmin': x::DOUBLE, 'ymin': x::DOUBLE, 'xmax': x::DOUBLE, 'ymax': x::DOUBLE} AS bbox FROM range(0, 5000) t(x); CREATE INDEX ixc_geom ON ixc USING RTREE (geom)");
       const { where, params } = toSql(leaf({ bbox: [10, 10, 20, 20] }) as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: { sqlType: "GEOMETRY", column: "geom", covering: COVERING } } });
       const run = rows(`SELECT count(*) FROM ixc WHERE ${where}`, params);
-      if (version === "2.0") {
+      if (line === "core") {
         await expect(run, "DuckDB now filters on a covering on an indexed table: lift the limitation (SqlColumn.covering, README, docs/architecture.md)")
           .rejects.toThrow(/Failed to bind column reference/);
       } else {
@@ -152,7 +163,7 @@ export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engin
       }
     });
 
-    it.runIf(version === "2.0")("DuckDB still doesn't use a GeoParquet 1.1 covering by itself: the dialect writes its comparisons", async (context) => {
+    it.runIf(line === "core")("DuckDB still doesn't use a GeoParquet 1.1 covering by itself: the dialect writes its comparisons", async (context) => {
       if (spatial) return context.skip(spatial);
       const file = join(dir, "covering.parquet");
       const geo = JSON.stringify({ version: "1.1.0", primary_column: "geom", columns: { geom: { encoding: "WKB", geometry_types: [], covering: COVERING } } });
@@ -167,17 +178,19 @@ export function duckdbSpatialSuite(name: string, version: "2.0" | "1.4.3", engin
           (n.children ?? n.operator ?? []).forEach((c) => walk(c as never));
         };
         walk(profile);
-        return found!;
+        return found;
       };
-      const [plain, groups] = await scanned({ sqlType: "GEOMETRY", column: "geom" });
+      const counted = await scanned({ sqlType: "GEOMETRY", column: "geom" });
+      if (!counted) return context.skip("this DuckDB's profile doesn't count the row groups scanned: can't tell");
+      const [plain, groups] = counted;
       expect(plain, "DuckDB now skips row groups from a covering by itself: the covering's comparisons may become unnecessary (SqlColumn.covering, docs)").toBe(groups);
-      const [covered] = await scanned({ sqlType: "GEOMETRY", column: "geom", covering: COVERING });
+      const [covered] = (await scanned({ sqlType: "GEOMETRY", column: "geom", covering: COVERING }))!;
       expect(covered).toBeLessThan(groups);
     });
 
     // A measurement, not a gate: timings move with the machine's load (other test files run in parallel), so it only
     // reports the ratio, and fails on it only when asked to (CQL2_CANARY_TIMING=1, e.g. after a DuckDB upgrade).
-    it.runIf(version === "2.0")("ST_Intersects alone without an index, against ST_Intersects with ST_Intersects_Extent: the evidence an engine option would need", async (context) => {
+    it.runIf(line === "core")("ST_Intersects alone without an index, against ST_Intersects with ST_Intersects_Extent: the evidence an engine option would need", async (context) => {
       if (spatial) return context.skip(spatial);
       await duck.run("SELECT setseed(0.1)");
       await duck.run("CREATE OR REPLACE TABLE noidx AS SELECT ST_Point(random() * 360 - 180, random() * 180 - 90) AS geom FROM range(200000)");
