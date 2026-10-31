@@ -227,22 +227,48 @@ const rows = (await connection.runAndReadAll(sql, params)).getRowObjects();
 ```
 
 In the browser, DuckDB-WASM registers JavaScript functions only in its synchronous ("blocking") build, which belongs
-in a Web Worker. It isn't listed in the package's `exports`, so import it by its file:
+in a Web Worker. That build isn't listed in its package's `exports`, so give it an alias; with Vite:
 
 ```js
-// in a Web Worker
-import * as duckdb from "@duckdb/duckdb-wasm/dist/duckdb-browser-blocking.mjs"; // or a bundler alias to the file
-import * as arrow from "apache-arrow";
+// vite.config.js
+import { fileURLToPath } from "node:url";
+export default {
+  resolve: {
+    alias: {
+      "duckdb-wasm-blocking": fileURLToPath(
+        new URL("./node_modules/@duckdb/duckdb-wasm/dist/duckdb-browser-blocking.mjs", import.meta.url),
+      ),
+    },
+  },
+  worker: { format: "es" },
+};
+```
 
-const db = await duckdb.createDuckDB(bundles, new duckdb.VoidLogger(), duckdb.BROWSER_RUNTIME);
-await db.instantiate();
-db.open({});
-const connection = db.connect();
-for (const [name, f] of Object.entries(duckdbFunctions)) {
-  connection.createScalarFunction(name, new arrow.Int32(), (...args) => f.call(...args));
+```js
+// worker.js, started with new Worker(new URL("./worker.js", import.meta.url), { type: "module" })
+import * as duckdb from "duckdb-wasm-blocking";
+import * as arrow from "apache-arrow";
+import mvp from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
+import eh from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
+import { duckdbFunctions, toSql } from "ogc-cql2/sql";
+
+// No top-level await: Vite's default browser targets refuse it.
+async function open() {
+  const bundles = { mvp: { mainModule: mvp, mainWorker: "" }, eh: { mainModule: eh, mainWorker: "" } };
+  const db = await duckdb.createDuckDB(bundles, new duckdb.VoidLogger(), duckdb.BROWSER_RUNTIME);
+  await db.instantiate();
+  db.open({});
+  const connection = db.connect();
+  for (const [name, f] of Object.entries(duckdbFunctions)) {
+    connection.createScalarFunction(name, new arrow.Int32(), (...args) => f.call(...args));
+  }
+  return { db, connection };
 }
-db.registerFileURL("places.parquet", url, duckdb.DuckDBDataProtocol.HTTP, false); // read by byte ranges
-const rows = connection.prepare(sql).query(...params).toArray();
+
+open().then(({ db, connection }) => {
+  db.registerFileURL("places.parquet", url, duckdb.DuckDBDataProtocol.HTTP, false); // read by byte ranges
+  const rows = connection.prepare(sql).query(...params).toArray().map((row) => row.toJSON());
+});
 ```
 
 - **`sqlType`** is the column's type as `DESCRIBE` gives it.
@@ -253,8 +279,9 @@ const rows = connection.prepare(sql).query(...params).toArray();
   JavaScript function wrongly, so the functions avoid them, and work the same in both runtimes.
 - **`duckdbValue(column)`** is what to SELECT for each column, as `postgresValue` is for PostgreSQL. A GeoParquet
   geometry is read with `geom::BLOB`, which is WKB.
-- **Tested in DuckDB itself:** thousands of generated filters on a table of awkward values select the same rows as
-  `evaluate`, also with a `nocase` default collation and another time zone.
+- **Tested in both runtimes:** 11,050 generated filters on a table of awkward values select the same rows as
+  `evaluate` in DuckDB (Node) and in DuckDB-WASM (Chrome), also with a `nocase` default collation and another time
+  zone. Tested with `@duckdb/node-api` 2.0.0 and `@duckdb/duckdb-wasm` 1.32.0.
 
 ## LIKE patterns
 

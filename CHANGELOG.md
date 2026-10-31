@@ -4,10 +4,11 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-31
 
-DuckDB: the same CQL2 filters on GeoParquet and other files, in Node and in the browser (DuckDB-WASM). In progress:
-the package part is done; the GeoParquet store in `demo-server` and DuckDB-WASM in the playground are still to come.
+DuckDB: the same CQL2 filters on GeoParquet and other files, in Node and in the browser (DuckDB-WASM). Tested in both:
+11,050 generated filters select what `evaluate` selects in `@duckdb/node-api` 2.0.0 and in `@duckdb/duckdb-wasm`
+1.32.0 (Chrome).
 
 ### Added
 
