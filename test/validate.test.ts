@@ -198,3 +198,95 @@ describe("assertValid", () => {
     }
   });
 });
+
+describe("options.queryables: types from the queryables (/per/basic-cql2/type-casts)", () => {
+  // A queryables response's `properties`, as OGC API Features Part 3 serves them: extra keys are ignored.
+  const queryables = {
+    name: { type: "string", title: "Name" },
+    day: { type: "string", format: "date" },
+    at: { type: "string", format: "date-time" },
+    pop: { type: "integer" },
+    ratio: { type: "number" },
+    active: { type: "boolean" },
+    tags: { type: "array", items: { type: "string" } },
+    geometry: { format: "geometry-point" },
+    loose: { description: "no type: any literal" },
+  };
+  const problems = (filter: unknown) => {
+    const result = validate(filter, { queryables });
+    return result.valid ? [] : result.problems.map(({ code, path }) => `${code} ${path}`);
+  };
+  const literals: Record<string, unknown> = {
+    string: "5", number: 5, boolean: true, date: { date: "2020-07-26" }, timestamp: { timestamp: "2020-07-26T12:00:00Z" },
+  };
+  const accepts: Record<string, string[]> = {
+    name: ["string"], day: ["date"], at: ["timestamp"], pop: ["number"], ratio: ["number"], active: ["boolean"],
+    tags: [], geometry: [], loose: Object.keys(literals),
+  };
+
+  it("a comparison accepts exactly the literals of the property's type", () => {
+    for (const [property, ok] of Object.entries(accepts)) {
+      for (const [kind, literal] of Object.entries(literals)) {
+        for (const op of ["=", "<"]) {
+          expect(problems({ op, args: [p(property), literal] }), `${property} ${op} ${kind}`).toEqual(
+            ok.includes(kind) ? [] : ["type-mismatch /args/1"],
+          );
+        }
+        expect(problems({ op: "in", args: [p(property), [literal]] }), `${property} in [${kind}]`).toEqual(
+          ok.includes(kind) ? [] : ["type-mismatch /args/1"],
+        );
+      }
+    }
+  });
+
+  it("says what to write instead", () => {
+    const message = (filter: unknown) => (validate(filter, { queryables }) as { problems: readonly { message: string }[] }).problems[0]!.message;
+    expect(message({ op: "=", args: [p("pop"), "5"] })).toBe(`"pop" is a number: compare it with a number, e.g. 5 (not "5").`);
+    expect(message({ op: "=", args: [p("day"), "2020-07-26"] })).toBe(
+      `"day" is a date: compare it with a date literal, e.g. { "date": "2020-07-26" }.`,
+    );
+    expect(message({ op: "=", args: [p("nope"), 1] })).toBe(
+      `"nope" is not a queryable here. The queryables: ${Object.keys(queryables).join(", ")}.`,
+    );
+  });
+
+  it("LIKE and CASEI need a string property; BETWEEN a number", () => {
+    expect(problems({ op: "like", args: [p("name"), "M%"] })).toEqual([]);
+    expect(problems({ op: "like", args: [p("day"), "2020%"] })).toEqual(["type-mismatch /args/0"]);
+    expect(problems({ op: "like", args: [casei(p("pop")), casei("5%")] })).toEqual(["type-mismatch /args/0/args/0"]);
+    expect(problems({ op: "=", args: [casei(p("name")), casei("main")] })).toEqual([]);
+    expect(problems({ op: "=", args: [casei(p("at")), casei("x")] })).toEqual(["type-mismatch /args/0/args/0"]);
+    expect(problems({ op: "=", args: [p("name"), casei("main")] })).toEqual([]);
+    expect(problems({ op: "=", args: [p("pop"), casei("5")] })).toEqual(["type-mismatch /args/1"]);
+    expect(problems({ op: "between", args: [p("ratio"), 0, 1] })).toEqual([]);
+    expect(problems({ op: "between", args: [p("name"), 0, 1] })).toEqual(["type-mismatch /args/0"]);
+    expect(problems({ op: "between", args: [p("loose"), 0, 1] })).toEqual([]);
+  });
+
+  it("isNull accepts any queryable; an unknown property is reported wherever it is", () => {
+    for (const property of Object.keys(queryables)) expect(problems({ op: "isNull", args: [p(property)] })).toEqual([]);
+    expect(problems({ op: "and", args: [{ op: "isNull", args: [p("x")] }, { op: "=", args: [casei(p("y")), casei("a")] }] })).toEqual([
+      "unknown-property /args/0/args/0", "unknown-property /args/1/args/0/args/0",
+    ]);
+    expect(problems({ op: "=", args: [p("toString"), 1] })).toEqual(["unknown-property /args/0"]);
+  });
+
+  it("problems the filter has anyway are reported once, as without queryables", () => {
+    expect(problems({ op: "=", args: [casei(p("name")), 5] })).toEqual(["type-mismatch /args/1"]);
+    expect(problems({ op: "between", args: [casei(p("pop")), 0, "x"] })).toEqual(["type-mismatch /args/0", "type-mismatch /args/2"]);
+    expect(problems({ op: "in", args: [p("pop"), [1, "2"]] })).toEqual(["mixed-list /args/1"]);
+  });
+
+  it("a list of types, as JSON Schema allows: null is left out; several others accept any literal", () => {
+    const listed = { n: { type: ["integer", "null"] }, mixed: { type: ["string", "number"] } };
+    const check = (filter: unknown) => validate(filter, { queryables: listed }).valid;
+    expect(check({ op: "=", args: [p("n"), 5] })).toBe(true);
+    expect(check({ op: "=", args: [p("n"), "5"] })).toBe(false);
+    expect(check({ op: "=", args: [p("mixed"), "5"] })).toBe(true);
+  });
+
+  it("without queryables, nothing changes", () => {
+    expect(validate({ op: "=", args: [p("pop"), "5"] }).valid).toBe(true);
+    expect(validate({ op: "=", args: [p("anything"), { date: "2020-07-26" }] }).valid).toBe(true);
+  });
+});

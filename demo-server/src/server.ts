@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Cql2Filter } from "ogc-cql2";
-import { filterProperties, validate } from "ogc-cql2/validate";
+import { validate } from "ogc-cql2/validate";
 import { readConfig } from "./config.ts";
 import { sendProblem } from "./problems.ts";
 import { loadGeoJsonStore } from "./stores/geojson.ts";
@@ -81,19 +81,11 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
       return refuse(req, res, 400, "invalid-request", "Invalid request", `"limit" is an integer from 1 to ${MAX_LIMIT}, "offset" an integer from 0.`);
     }
 
-    const result = validate(body.filter);
+    // The collection's queryables: an unknown property, or a literal of another type than the property's, is refused
+    // here (CQL2 lets a server answer a type mismatch with an error), instead of silently matching nothing.
+    const result = validate(body.filter, { queryables: store.queryables() });
     if (!result.valid) {
-      return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile.", result.problems);
-    }
-    const queryables = store.queryables();
-    const unknown = filterProperties(result.filter).filter((name) => !Object.hasOwn(queryables, name));
-    if (unknown.length > 0) {
-      const problems = unknown.map((name) => ({
-        code: "unknown-property",
-        path: "",
-        message: `"${name}" is not a queryable of this collection. Its queryables: ${Object.keys(queryables).join(", ")}.`,
-      }));
-      return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter uses properties the collection doesn't have.", problems);
+      return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile, or doesn't fit this collection's queryables.", result.problems);
     }
 
     const { features, numberMatched } = await store.query(result.filter as Cql2Filter, { limit, offset });

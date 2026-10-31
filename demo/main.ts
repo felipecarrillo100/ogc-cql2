@@ -1,4 +1,4 @@
-import { CONFORMANCE, CQL2_VERSION, OTHER_CONFORMANCE } from "ogc-cql2";
+import { CONFORMANCE, CQL2_VERSION, OTHER_CONFORMANCE, type Queryable } from "ogc-cql2";
 import { toEvaluator, type Truth } from "ogc-cql2/evaluate";
 import { textProblem, toText } from "ogc-cql2/text";
 import { requiredConformance, validate, type Problem } from "ogc-cql2/validate";
@@ -52,7 +52,7 @@ interface ServerCollection {
 }
 
 /** `undefined`: the sample features in this browser. */
-let collection: (ServerCollection & { columns: readonly string[] }) | undefined;
+let collection: (ServerCollection & { columns: readonly string[]; queryables: Record<string, Queryable> }) | undefined;
 let examples: readonly Example[] = EXAMPLES;
 let serverCollections: ServerCollection[] = [];
 
@@ -88,9 +88,9 @@ async function selectSource(id: string): Promise<void> {
     examples = EXAMPLES;
   } else {
     const schema = (await (await fetch(`api/collections/${encodeURIComponent(id)}/queryables`)).json()) as {
-      properties: Record<string, unknown>;
+      properties: Record<string, Queryable>;
     };
-    collection = { ...found, columns: Object.keys(schema.properties) };
+    collection = { ...found, columns: Object.keys(schema.properties), queryables: schema.properties };
     examples = SERVER_EXAMPLES[id] ?? ANY_COLLECTION;
     renderTable("id", collection.columns, []);
   }
@@ -251,7 +251,9 @@ function run(): void {
     return;
   }
 
-  const result = validate(value, { conformance: [...declared] });
+  // With a server collection, also against its queryables: a literal of another type than the property's is shown
+  // as a type-mismatch, as the server will answer.
+  const result = validate(value, { conformance: [...declared], ...(collection ? { queryables: collection.queryables } : {}) });
   validationOut.append(
     result.valid
       ? el("p", `Valid. It uses: ${requiredConformance(result.filter).map(nameOf).join(", ")}.`, "ok")

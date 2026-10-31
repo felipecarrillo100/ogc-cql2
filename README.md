@@ -64,7 +64,8 @@ validate({ op: "=", args: [{ property: "population" }, null] });
 ```
 
 Every problem has a stable `code`, a `path` (a JSON Pointer into the filter) and a `message`. Among the codes:
-`unknown-operator`, `outside-profile`, `type-mismatch`, `mixed-list`, `invalid-date`, `invalid-timestamp`.
+`unknown-operator`, `outside-profile`, `type-mismatch`, `mixed-list`, `invalid-date`, `invalid-timestamp`,
+`unknown-property`.
 
 To check a filter against what a server declares, pass its conformance classes. A class the filter needs but the
 server lacks is reported as `needs-conformance`:
@@ -77,8 +78,36 @@ validate(filter, { conformance: [CONFORMANCE.basic] });
 requiredConformance(filter); // the classes the filter uses
 ```
 
-`assertValid(value)` returns the filter or throws. `filterProperties(filter)` lists the property names a filter uses,
-for example to check them against a collection's queryables.
+To check a filter against a collection, pass its **queryables** (OGC API Features Part 3): the `properties` of a
+queryables response, as it comes. A property that isn't one of them is `unknown-property`; a literal of another type
+than the property's is `type-mismatch`, with a message saying what to write:
+
+```js
+const { properties } = await (await fetch(`${collectionUrl}/queryables`)).json();
+
+validate({ op: ">", args: [{ property: "population" }, "10000000"] }, { queryables: properties });
+// { valid: false, problems: [{
+//     code: "type-mismatch", path: "/args/1",
+//     message: '"population" is a number: compare it with a number, e.g. 5 (not "5").' }] }
+```
+
+Without queryables, such a filter is valid and simply matches nothing: the value and the literal never compare, so
+the comparison is NULL. CQL2 lets a server answer a type mismatch with an error instead (Permission
+`/per/basic-cql2/type-casts`), which is what the queryables make possible. A server should validate with them before
+filtering; a client can do the same before sending, so that a person or an AI writing the filter learns what is wrong.
+`evaluate` and `toSql` don't check types against queryables: they are the engines, and give NULL as before.
+
+| Queryable | Compared with |
+|---|---|
+| `"type": "string"` | strings, `casei(…)`; LIKE |
+| `"type": "string"`, `"format": "date"` | `{ "date": … }` |
+| `"type": "string"`, `"format": "date-time"` | `{ "timestamp": … }` |
+| `"type": "number"` or `"integer"` | numbers; BETWEEN |
+| `"type": "boolean"` | `true`, `false` |
+| another type, or a geometry (`"format": "geometry-…"`) | nothing: only `isNull` |
+| no `type` | anything |
+
+`assertValid(value)` returns the filter or throws. `filterProperties(filter)` lists the property names a filter uses.
 
 ## Write CQL2-text
 

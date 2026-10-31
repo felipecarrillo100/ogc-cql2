@@ -7,6 +7,17 @@
  * anything else). `validate` checks a value against them; these types describe what it lets through.
  */
 
+/**
+ * What a property holds, as a queryable describes it (OGC API Features Part 3): the JSON Schema `type` (or a list of
+ * them, `["string", "null"]` for a nullable one), and `format` for dates (`date`) and instants (`date-time`). A queryables response's `properties` can be passed as it comes; other
+ * keys (`title`, `description`…) are ignored. `string`, `number`, `integer` and `boolean` can be compared; other types
+ * (`array`, `object`) and geometries (`format: "geometry-…"`) can only be tested with `isNull` in the profile.
+ */
+export interface Queryable {
+  readonly type?: string | readonly string[];
+  readonly format?: string;
+}
+
 /** A reference to a property of the features, `{ "property": "name" }`. */
 export interface PropertyRef {
   readonly property: string;

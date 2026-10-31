@@ -3,10 +3,12 @@
  * database, so that `toSql` keeps one walker for all of them.
  */
 
+import type { Queryable } from "../core/types.js";
+
 export type SqlDialect = "sqlite" | "postgres" | "duckdb";
 
 /** A table column, as its queryable describes it. Without a `type`, its values' types are checked as they come. */
-export interface SqlColumn {
+export interface SqlColumn extends Queryable {
   readonly type?: "string" | "number" | "integer" | "boolean";
   readonly format?: "date" | "date-time";
   /** The column's name in the table, when it isn't the property's name. */

@@ -4,6 +4,25 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.3.0] - Unreleased
+
+Type checks against a collection's queryables: a filter comparing a property with a literal of another type is
+refused with an error, instead of silently matching nothing, as CQL2 permits (`/per/basic-cql2/type-casts`).
+
+### Added
+
+- `validate(filter, { queryables })`: the `properties` of an OGC API Features Part 3 queryables response, as it
+  comes. A property that isn't one of them is `unknown-property` (a new `ProblemCode`); a literal that can't be of the
+  property's type is `type-mismatch`, with a message saying what to write instead (`"5"` for a number, a string for a
+  date, LIKE or CASEI on a non-string, BETWEEN on a non-number). A JSON Schema list of types (`["integer", "null"]`)
+  is understood. Without `queryables`, `validate` is unchanged.
+- Type `Queryable` (`type`, `format`); `SqlColumn` extends it.
+
+### Unchanged
+
+- `evaluate` and `toSql` still give NULL for a type mismatch: the check is at the boundary, where the queryables are
+  known.
+
 ## [0.2.0] - 2026-10-31
 
 DuckDB: the same CQL2 filters on GeoParquet and other files, in Node and in the browser (DuckDB-WASM). Tested in both:
@@ -71,6 +90,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
-[0.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.1.0...HEAD
+[0.3.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.1.0
 [0.0.1]: https://github.com/felipecarrillo100/ogc-cql2/releases/tag/v0.0.1

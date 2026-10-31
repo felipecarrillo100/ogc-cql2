@@ -62,6 +62,15 @@ drops the rest.
 - **Valid CQL2 outside the profile** is `outside-profile`, never "invalid", and names the class it needs.
 - **`options.conformance`:** the classes a server declares. A profile class the filter uses but the list lacks is
   `needs-conformance`.
+- **`options.queryables`:** a collection's queryables (OGC API Features Part 3), as the response gives them. A property
+  not among them is `unknown-property`; a literal that can't be of the property's type (`"5"` for a number, a string
+  for a date) is `type-mismatch`, with a message saying what to write. CQL2 requires both sides of a comparison to be
+  of one type (`/req/basic-cql2/binary-comparison-predicate` D) and lets a server answer a mismatch with an error or a
+  cast (`/per/basic-cql2/type-casts`). Without queryables the package can't know a property's type, and the
+  engines give NULL, which is neither: the queryables are what lets a server give the error. Measured on the DuckDB
+  test's typed table: 2,950 of 4,548 generated single comparisons are refused; 2,343 of them could never select a row
+  (an empty answer without a word, before), and the other 607 matched only through a cast between strings and dates
+  (GeoJSON has no date type, so a date is served as text). A test checks that nothing else is ever refused.
 - **Every problem** is reported, each with a code, a JSON Pointer and a message.
 - **The official schema is used in the tests:** every filter the tests treat as valid must pass it, and every
   structurally broken one must fail it.
@@ -200,6 +209,16 @@ milliseconds into that day. Nothing depends on the time-zone setting: instants a
 - **Callers test the `code`, not `instanceof`.** That keeps working even when two copies of the package end up in one
   application.
 
+## Deviations, deliberate
+
+Where the standard leaves a choice, or recommends without requiring, the package's choice and why.
+
+| Point | The standard | The package | Why |
+|---|---|---|---|
+| Unicode normalization form | strings SHOULD be normalized before comparing, and NFD is the recommended form (Recommendation 1, `/rec/core/string-normalization` B) | normalizes, to **NFC** | the same answers for `=`, `<>`, `IN` and CASEI (canonically equivalent forms); NFD would reorder 0.8% of string pairs in the tests' data (`<`, `>`…) and break LIKE's `_` on accented letters (`'caf_'` would no longer match `café`, as `é` is two code points in NFD); NFC is the W3C's form for string matching on the web and how data is stored; DuckDB has no NFD |
+| Instants' precision | left to the server ("how this is implemented is a decision of the server") | milliseconds, a finer fraction truncated | JavaScript's precision; every engine (SQLite, PostgreSQL, DuckDB) is made to truncate the same way, so the results agree |
+| A type mismatch in the data | — | NULL | a value of an unexpected type in the data (which GeoPackage permits) is a problem of the data, not of the filter; a mismatch in the filter itself is refused by `validate` with the queryables |
+
 ## How it is used
 
 - **A client application:**
@@ -267,6 +286,14 @@ filter selects). The server never knows which store it talks to.
   - each rule was broken once on purpose, to show the tests catch it.
 - **Independent checks,** not part of the repository or of the package:
   - two other CQL2 parsers (cql2-rs, pycql2) read the text output back to the same CQL2-JSON;
+  - **cql2-rs's evaluator** (Development Seed; `cql2` on PyPI, about 200,000 downloads a month, and `cql2-wasm` on
+    npm, version 0.5.6), 2026-10-31: the DuckDB test's 11,050 filters on its 15 rows, 165,750 answers. 46% agree;
+    52% are errors in cql2-rs (a type mismatch, which the standard lets it refuse; a missing property, where the
+    standard requires NULL); 2% differ, all explained by the standard: dates and timestamps compared with each other
+    (cql2-rs casts), CASEI (cql2-rs lowercases instead of the required full Unicode case folding: `Straße` vs
+    `STRASSE`), `IN` with dates or timestamps (a bug in cql2-rs: its `=` agrees), normalization (cql2-rs has none),
+    and precision below a millisecond. No bug of `ogc-cql2` was found. Both accept the same 47 of the standard's 109
+    examples (those in the profile);
   - real OGC API Features servers, comparing the features a server returns with those `ogc-cql2/evaluate` selects
     from the same data.
 
@@ -294,6 +321,7 @@ checks that they agree.
 | 0.0.1 | The foundation: build, tests, demo, `CQL2_VERSION`, `quoteString` |
 | 0.1.0 | The profile: types, `ogc-cql2/validate`, `ogc-cql2/text`, `ogc-cql2/evaluate`, `ogc-cql2/sql` (SQLite / GeoPackage, PostgreSQL / PostGIS); the playground and `demo-server` |
 | 0.2.0 | The dialect interface in `src/sql` (SQLite and PostgreSQL moved onto it unchanged), and the **`duckdb`** dialect, the same SQL in Node and in the browser, tested in both; see [duckdb-case.md](duckdb-case.md) |
+| 0.3.0 | `validate` with a collection's queryables: `unknown-property` and `type-mismatch` (`/per/basic-cql2/type-casts`); the deliberate deviations documented |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes, one at a time: spatial (`S_INTERSECTS` with points and boxes first, see [spatial-research.md](spatial-research.md); DuckDB's spatial extension), temporal, arrays; an index-friendly SQL mode |
