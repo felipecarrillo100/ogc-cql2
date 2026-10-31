@@ -4,10 +4,11 @@
  * Both must select the same states; so must the GeoPackage store (`cql2_intersects` in SQLite) and the PostgreSQL
  * store. The PostgreSQL parts run against the database in `.env` with `cql2demo` loaded; skipped otherwise.
  *
- * The reference is GEOS's exact predicate, `NOT ST_Disjoint`. PostGIS's `ST_Intersects` takes a shortcut of its own
- * for a point in a polygon, which isn't exact for a point lying exactly on an edge: measured on PostGIS 3.5.6, it
- * says false where GEOS's DE-9IM matrix (`ST_Relate`), `ST_Disjoint` and `ST_Distance` = 0 all say the point is on the
- * boundary. The test counts those cases too.
+ * The reference is GEOS's DE-9IM matrix: `NOT ST_Relate(geom, literal, 'FF*FF****')`. PostGIS answers `ST_Intersects`
+ * (and, from PostGIS 3.7, `ST_Disjoint`) for a point and a polygon with a point-in-polygon test of its own, which on
+ * arm64 builds misses a point lying exactly on an edge: its side test is compiled to a fused multiply-add, which
+ * rounds differently (measured on PostGIS 3.1–3.7: exact on amd64, 109 misses here on arm64). The test counts those
+ * cases too.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -97,6 +98,17 @@ function generate(): Literal[] {
   out.push({ bbox: [170, 50, -170, 60] }, { bbox: [-179, 50, 179, 60] }, { bbox: [150, -90, -150, 90] }); // antimeridian
   out.push({ type: "MultiPoint", coordinates: [vertex(), vertex(), vertex()] });
   out.push({ type: "GeometryCollection", geometries: [{ type: "Point", coordinates: vertex() }, { type: "LineString", coordinates: edge() }] });
+  for (let i = 0; i < 100; i++) {
+    // Collections (GEOS 3.11 can't relate one): a point on an edge, an along-edge line, a triangle sharing an edge.
+    const [a, b] = edge();
+    const t = random();
+    const c = [a[0]! + between(-1, 1), a[1]! + between(-1, 1)];
+    out.push({ type: "GeometryCollection", geometries: [
+      { type: "Point", coordinates: [a[0]! + (b[0]! - a[0]!) * t, a[1]! + (b[1]! - a[1]!) * t] },
+      { type: "LineString", coordinates: edge() },
+      { type: "Polygon", coordinates: [[a, b, c, a]] },
+    ] });
+  }
   return out;
 }
 const LITERALS = generate();
@@ -105,10 +117,10 @@ const LITERALS = generate();
 function postgisCondition(literal: Literal): { sql: string; params: unknown[] } {
   if ("bbox" in literal) {
     const [w, s, e, n] = literal.bbox as number[];
-    const env = (a: number, b: number) => `NOT ST_Disjoint(geom, ST_MakeEnvelope(${a}, ${s}, ${b}, ${n}, 4326))`;
+    const env = (a: number, b: number) => `NOT ST_Relate(geom, ST_MakeEnvelope(${a}, ${s}, ${b}, ${n}, 4326), 'FF*FF****')`;
     return { sql: w! > e! ? `(${env(w!, 180)} OR ${env(-180, e!)})` : env(w!, e!), params: [] };
   }
-  return { sql: "NOT ST_Disjoint(geom, ST_SetSRID(ST_GeomFromGeoJSON($1), 4326))", params: [JSON.stringify(literal)] };
+  return { sql: "NOT ST_Relate(geom, ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), 'FF*FF****')", params: [JSON.stringify(literal)] };
 }
 
 describe("S_INTERSECTS: evaluate against PostGIS, on the US states", () => {
@@ -170,13 +182,13 @@ describe("S_INTERSECTS: evaluate against PostGIS, on the US states", () => {
       const g = JSON.stringify(literal);
       const { rows } = await pool!.query(
         `SELECT count(*)::int AS n FROM cql2demo.states, (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1), 4326) AS g) q
-          WHERE ST_Intersects(geom, q.g) <> NOT ST_Disjoint(geom, q.g)`, [g]);
+          WHERE ST_Intersects(geom, q.g) <> NOT ST_Relate(geom, q.g, 'FF*FF****')`, [g]);
       if (rows[0].n === 0) continue;
       departures += rows[0].n;
       // Each departure: GEOS's matrix puts the point on the state's boundary (BI = 0).
       const { rows: m } = await pool!.query(
         `SELECT ST_Relate(geom, q.g) AS m FROM cql2demo.states, (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1), 4326) AS g) q
-          WHERE ST_Intersects(geom, q.g) <> NOT ST_Disjoint(geom, q.g)`, [g]);
+          WHERE ST_Intersects(geom, q.g) <> NOT ST_Relate(geom, q.g, 'FF*FF****')`, [g]);
       for (const { m: matrix } of m) assert.equal((matrix as string)[3], "0", `${g}: ${matrix}`);
     }
     t.diagnostic(`ST_Intersects departs from GEOS for ${departures} point-state pairs, each a point exactly on the state's boundary`);

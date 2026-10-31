@@ -11,7 +11,7 @@
  */
 import type { Fold } from "../../core/folds.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
-import type { SpatialLiteral } from "../../core/types.js";
+import type { Geometry, SpatialLiteral } from "../../core/types.js";
 import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "geometry" | "geography" | "other";
@@ -194,18 +194,25 @@ function sridOf(column: SqlColumn): number {
 }
 
 /**
- * S_INTERSECTS in PostGIS, exactly as `evaluate` (and GEOS) decide it, using the spatial index:
- * `column && literal AND NOT ST_Disjoint(column, literal)`. The bounding-box test `&&` uses the GiST index, and GEOS's
- * `ST_Disjoint` decides exactly. PostGIS's own `ST_Intersects` takes a shortcut for a point in a polygon that isn't
- * exact for a point lying exactly on an edge (measured on PostGIS 3.5.6), so it isn't used. A column in another SRID
- * is transformed to 4326 (planar in CRS84, as CQL2 compares; a planar comparison in Mercator would draw other edges),
- * which can't use a plain index on the column. Heights are ignored (GEOS's predicates are 2D).
+ * S_INTERSECTS in PostGIS, exactly as `evaluate` (and GEOS's DE-9IM) decide it, using the spatial index:
+ * `column && literal AND NOT ST_Relate(column, literal, 'FF*FF****')`. The bounding-box test `&&` uses the GiST index;
+ * the relate pattern (DE-9IM's "disjoint") decides from GEOS's full matrix. Neither `ST_Intersects` nor `ST_Disjoint`
+ * is used: PostGIS answers them for a point and a polygon with its own point-in-polygon test, which misses a point
+ * lying exactly on an edge on arm64 builds (a fused multiply-add rounds its side test), for `ST_Intersects` always and
+ * for `ST_Disjoint` from PostGIS 3.7 (measured on 3.1–3.7, amd64 and arm64).
+ * - A GeometryCollection literal is the OR of its members (two or more, none a collection, as the profile requires):
+ *   the same answer, each member with its own `&&`, and GEOS 3.11's `ST_Relate` refuses collections.
+ * - A box across the antimeridian is two boxes joined with OR (the index applies to both).
+ * - A column in another SRID is transformed to 4326 (planar in CRS84, as CQL2 compares; a planar comparison in Mercator
+ *   would draw other edges): give it an index on `ST_Transform(column, 4326)`; a geography column, one on
+ *   `(column::geometry)`. Heights are ignored (GEOS's predicates are 2D).
  */
 function postgresIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
   const cls = pgClass(column);
   if (cls !== "geometry" && cls !== "geography") return undefined;
   const srid = cls === "geography" ? 4326 : sridOf(column);
   const g = cls === "geography" ? `${sql}::geometry` : srid === 4326 ? sql : `ST_Transform(${sql}, 4326)`;
+  const geojson = (l: Geometry) => `ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(l))}), 4326)`;
   const parts: string[] = [];
   if ("bbox" in literal && !("type" in literal)) {
     const b = literal.bbox;
@@ -216,9 +223,10 @@ function postgresIntersects(sql: string, column: SqlColumn, literal: SpatialLite
     if (west > east) parts.push(box(param(west), "180"), box("-180", param(east))); // across the antimeridian: two boxes
     else parts.push(box(param(west), param(east)));
   } else {
-    parts.push(`ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(literal))}), 4326)`);
+    const geometry = literal as Geometry;
+    parts.push(...(geometry.type === "GeometryCollection" ? geometry.geometries : [geometry]).map(geojson));
   }
-  const tests = parts.map((l) => `(${g} && ${l} AND NOT ST_Disjoint(${g}, ${l}))`);
+  const tests = parts.map((l) => `(${g} && ${l} AND NOT ST_Relate(${g}, ${l}, 'FF*FF****'))`);
   return tests.length === 1 ? tests[0]! : `(${tests.join(" OR ")})`;
 }
 

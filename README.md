@@ -241,12 +241,21 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
   turns `ø` into `o`), and strict readers of dates and instants in text columns. It needs no extension, only the right to
   create objects in that schema.
 - **Spatial filters (PostGIS):** give the geometry column as `{ sqlType: "geometry", column: "geom" }` (or
-  `geometry(MultiPolygon, 4326)`, `geography`). `s_intersects` becomes `geom && literal AND NOT ST_Disjoint(geom,
-  literal)`: the box test uses the GiST index, and GEOS decides exactly, as `evaluate` does. PostGIS's own
-  `ST_Intersects` isn't used: for a point lying exactly on an edge it can answer false (its point-in-polygon shortcut
-  isn't exact there). A column in another SRID (`srid: 3857`, or `geometry(Point, 3857)`) is transformed to 4326,
-  so the comparison is planar in CRS84 as CQL2's is; that can't use a plain index on the column (an expression index
-  on `ST_Transform(geom, 4326)` can), and data stored in another CRS isn't exact on its original vertices any more.
+  `geometry(MultiPolygon, 4326)`, `geography`). `s_intersects` becomes `geom && literal AND NOT ST_Relate(geom,
+  literal, 'FF*FF****')`: the box test uses the GiST index, and GEOS's DE-9IM matrix decides exactly, as `evaluate`
+  does. PostGIS's own `ST_Intersects`, and from PostGIS 3.7 `ST_Disjoint`, aren't used: on arm64 machines (Apple
+  Silicon, AWS Graviton) they miss a point lying exactly on an edge. A GeometryCollection literal is tested member by
+  member, which GEOS 3.11 needs; a column holding GeometryCollections needs GEOS 3.13 or later (3.9 works too).
+- **Another SRID, or geography:** a column in another SRID (`srid: 3857`, or `geometry(Point, 3857)`) is transformed
+  to 4326, so the comparison is planar in CRS84, as CQL2's is; a geography column is read as geometry. Neither can
+  use a plain index on the column, so give it an expression index, which the SQL then uses:
+
+  ```sql
+  CREATE INDEX ON places USING GIST (ST_Transform(geom, 4326)); -- a column in another SRID
+  CREATE INDEX ON places USING GIST ((geog::geometry));          -- a geography column
+  ```
+
+  Data stored in another CRS isn't exact on its original vertices any more (5 comes back as 4.999999999999998).
 - **`postgresValue(column)`** is what to SELECT for each column, so that what you serve is exactly what the SQL
   compared: dates as `YYYY-MM-DD`, instants as UTC `…Z` with milliseconds, numbers as double precision.
 - **Tested on real databases:** thousands of generated filters give the same features from a GeoJSON file
