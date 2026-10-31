@@ -190,6 +190,7 @@ is `NULL::boolean` when the SQL is built, and `SqlColumn.sqlType` (the declared 
 | `{date}` | `c` against `$n::date` on a `date` column; `cql2_day(c)` on text |
 | `{timestamp}` | `date_trunc('milliseconds', c)` against `$n::timestamptz` on `timestamptz`; `cql2_instant(c)` on text; NULL on `timestamp` (no offset) |
 | `like` | native `LIKE` (case-sensitive, `\` escape) on the NFC text; a lone trailing `\` becomes a literal one |
+| `s_intersects` (PostGIS, since 0.8.0) | `geom && literal AND NOT ST_Disjoint(geom, literal)`, the literal as `ST_SetSRID(ST_GeomFromGeoJSON($n), 4326)` or `ST_MakeEnvelope(…)` (across the antimeridian two, joined with OR). Chosen by measurement: on a million points with a GiST index, as fast as `ST_Intersects` (0.6 ms for a map-view box, 71 ms for a quarter of the world) and exact (0 of 5,705 literals differ from `evaluate`, where `ST_Intersects` gives 99); `NOT ST_Disjoint` alone is exact but skips the index (121 ms). Another SRID: the column transformed to 4326; geography as `::geometry` |
 
 `postgresFunctions(schema)` is the SQL creating `cql2_casefold` (the package's case-folding table), `cql2_casei`,
 `cql2_day` and `cql2_instant`. PostgreSQL's `lower()` isn't Unicode case folding, and `casefold()` only came with
@@ -320,6 +321,10 @@ filter selects). The server never knows which store it talks to.
     `ST_Intersects` isn't the reference: its shortcut for a point in a polygon isn't exact for a point exactly on an
     edge (109 point-state pairs where it says false and GEOS's DE-9IM matrix puts the point on the boundary, measured
     on PostGIS 3.5.6); the test checks that every departure is such a point. This matters for the PostGIS dialect;
+  - the same 5,705 literals through `toSql` (`postgres`) and demo-server's PostgreSQL store: the same states as
+    `evaluate`; the four-store comparison has spatial filters too, from GeoJSON and PostgreSQL in 4326 (also exactly on
+    vertices) and in 3857 (with margin: 58 of 141 literals placed exactly on the original vertices differ there,
+    because the stored 3857 coordinates don't convert back exactly);
   - PostgreSQL's `cql2_accenti` against the JavaScript rule on every code point of the Basic Multilingual Plane
     (63,487) for 0.5.0: no difference;
   - each rule was broken once on purpose, to show the tests catch it.
@@ -363,8 +368,9 @@ checks that they agree.
 | 0.5.0 | **Accent-insensitive Comparison** (`ACCENTI`), in every engine, combined with `CASEI`; see [accent-research.md](accent-research.md) |
 | 0.6.0 | **Spatial, phase A:** the three spatial classes in the types, `validate` and `text` (WKT per the grammar), so spatial filters can be built, checked and sent; `evaluate` and `sql` refuse them (`unsupported`) |
 | 0.7.0 | **Spatial, phase B:** `evaluate` tests `s_intersects` (Basic Spatial Functions and Basic plus) in memory, checked with the standard's Natural Earth test and against GEOS |
+| 0.8.0 | **Spatial, phase C:** `s_intersects` in the `postgres` dialect (PostGIS), exact and indexed |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
-| next | **spatial engines**: Basic and Basic plus in the SQL dialects, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
+| next | **spatial engines**: Basic and Basic plus in SQLite / GeoPackage and DuckDB, Full in PostGIS, SpatiaLite, DuckDB and through an optional engine hook in `evaluate`, see [spatial-research.md](spatial-research.md) |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 

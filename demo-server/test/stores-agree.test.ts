@@ -99,6 +99,49 @@ async function differences(a: Store, b: Store, label: string): Promise<string[]>
   return out;
 }
 
+// --- Spatial filters: GeoJSON (evaluate) and PostgreSQL (PostGIS); GeoPackage's spatial SQL comes later ------------
+
+/** Every position of the kitchen sink's geometries. */
+const positions: number[][] = [];
+const collect = (c: unknown): void => {
+  if (Array.isArray(c) && typeof c[0] === "number") positions.push(c as number[]);
+  else if (Array.isArray(c)) c.forEach(collect);
+};
+for (const f of file.features as { geometry: { coordinates?: unknown; geometries?: { coordinates: unknown }[] } | null }[]) {
+  if (f.geometry?.coordinates) collect(f.geometry.coordinates);
+  f.geometry?.geometries?.forEach((g) => collect(g.coordinates));
+}
+const s_intersects = (literal: unknown) => ({ op: "s_intersects", args: [p("geometry"), literal] });
+
+/** Literals with some margin around the data: the same answers in any CRS the column is stored in. */
+const SPATIAL_MARGIN: unknown[] = [
+  // Offsets that can't land on the data's coordinates (whole numbers and two decimals).
+  ...positions.map(([x, y]) => s_intersects({ bbox: [x! - 0.5137, y! - 0.4871, x! + 0.5213, y! + 0.4789] })),
+  ...positions.map(([x, y]) => s_intersects({ bbox: [x! + 0.1093, y! + 0.1171, x! + 2.9137, y! + 3.0571] })),
+  s_intersects({ bbox: [-10, 35, 30, 60] }),
+  s_intersects({ bbox: [170, -80, -170, 80] }),
+  s_intersects({ type: "Polygon", coordinates: [[[-5, 35], [30, 35], [30, 55], [-5, 55], [-5, 35]], [[0, 40], [10, 40], [10, 50], [0, 50], [0, 40]]] }),
+  s_intersects({ type: "LineString", coordinates: [[-10, 40], [30, 50]] }),
+  { op: "not", args: [s_intersects({ bbox: [-10, 35, 30, 60] })] },
+  { op: "and", args: [s_intersects({ bbox: [-10, 35, 30, 60] }), { op: "like", args: [p("name"), "%a%"] }] },
+];
+/** And literals exactly on the data's vertices: for a column stored as given (4326). */
+const SPATIAL_EXACT: unknown[] = [
+  ...positions.map((c) => s_intersects({ type: "Point", coordinates: c })),
+  ...positions.map(([x, y]) => s_intersects({ bbox: [x!, y!, x! + 1, y! + 1] })),
+  ...positions.map(([x, y]) => s_intersects({ bbox: [x! - 1, y! - 1, x!, y!] })),
+];
+
+async function spatialDifferences(store: Store, filters: unknown[], label: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const filter of filters) {
+    const [x, y] = await Promise.all([fromFile.query(filter as Cql2Filter, PAGE), store.query(filter as Cql2Filter, PAGE)]);
+    const ids = (r: { features: readonly Feature[] }) => r.features.map((f) => f.id).join(",");
+    if (ids(x) !== ids(y)) out.push(`${JSON.stringify(filter).slice(0, 140)}\n    geojson ${ids(x)} / ${label} ${ids(y)}`);
+  }
+  return out;
+}
+
 describe("the kitchen sink, three stores", () => {
   it("the same queryables", (t) => {
     assert.deepEqual(fromGpkg.queryables(), fromFile.queryables());
@@ -120,6 +163,18 @@ describe("the kitchen sink, three stores", () => {
     const sets = new Set<string>();
     for (const filter of FILTERS) sets.add(JSON.stringify((await fromFile.query(filter, PAGE)).features.map((f) => f.id)));
     assert.ok(sets.size > 150, `${sets.size} different results`);
+  });
+
+  it(`spatial filters: GeoJSON and PostgreSQL (4326) give the same features, also exactly on vertices`, async (t) => {
+    if (pgSkip) return t.skip(pgSkip);
+    assert.equal((await spatialDifferences(fromPg!, [...SPATIAL_MARGIN, ...SPATIAL_EXACT], "postgres")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`spatial filters: PostgreSQL in Web Mercator gives the same features (with margin; its vertices moved in the round trip)`, async (t) => {
+    if (pgSkip || !fromPg3857) return t.skip(pgSkip || "kitchen_sink_3857 isn't loaded");
+    assert.equal((await spatialDifferences(fromPg3857, SPATIAL_MARGIN, "postgres 3857")).slice(0, 10).join("\n"), "");
+    const exact = await spatialDifferences(fromPg3857, SPATIAL_EXACT, "postgres 3857");
+    t.diagnostic(`literals exactly on the 4326 vertices: ${exact.length} of ${SPATIAL_EXACT.length} differ for the 3857 table`);
   });
 
   it("PostgreSQL in Web Mercator: the same rows; geometry converted back to WGS 84", async (t) => {

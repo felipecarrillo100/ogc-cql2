@@ -119,6 +119,8 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
   const warnings: string[] = [];
   const geometryAttribute = attributes.find((a) => a.typname === "geometry");
   let geometrySelect: string | undefined;
+  /** The geometry column for spatial filters, as the server names it in the queryables: "geometry". */
+  let geometryColumn: SqlColumn | undefined;
   if (geometryAttribute) {
     const { rows } = await pool.query(
       "SELECT srid FROM geometry_columns WHERE f_table_schema = $1 AND f_table_name = $2 AND f_geometry_column = $3",
@@ -126,6 +128,7 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
     );
     const srid = Number(rows[0]?.srid ?? 0);
     const g = quote(geometryAttribute.name);
+    if (srid > 0) geometryColumn = { sqlType: "geometry", srid, column: geometryAttribute.name };
     if (srid === 4326) geometrySelect = `ST_AsBinary(${g})`;
     else if (srid > 0) geometrySelect = `ST_AsBinary(ST_Transform(${g}, 4326))`;
     else warnings.push(`Its geometry column "${geometryAttribute.name}" has no SRID: features are served without geometry.`);
@@ -175,7 +178,8 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
     describe: () => description,
     queryables: () => queryables,
     async query(filter: Cql2Filter, { limit, offset }) {
-      const { where, params } = toSql(filter, { dialect: "postgres", columns, ...(functionSchema ? { functionSchema } : {}) });
+      const filterColumns = geometryColumn && !Object.hasOwn(columns, "geometry") ? { ...columns, geometry: geometryColumn } : columns;
+      const { where, params } = toSql(filter, { dialect: "postgres", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}) });
       const n = params.length;
       const [page, count] = await Promise.all([
         pool.query(`SELECT ${select} FROM ${relation.name} WHERE ${where} ORDER BY ${quote(idColumn)} LIMIT $${n + 1} OFFSET $${n + 2}`, [...params, limit, offset]),
