@@ -1,11 +1,12 @@
 {
   "name": "ogc-cql2",
-  "version": "0.10.0",
-  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text, in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS) for CQL2-JSON filters, in browsers and Node.",
+  "version": "0.11.0",
+  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text (written and read), in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS) for CQL2-JSON filters, in browsers and Node.",
   "keywords": [
     "cql2",
     "cql2-json",
     "cql2-text",
+    "parser",
     "ogc",
     "ogc-api",
     "ogc-api-features",
@@ -40,6 +41,10 @@
     "./text": {
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
+    },
+    "./parse": {
+      "types": "./dist/parse/index.d.ts",
+      "import": "./dist/parse/index.js"
     },
     "./evaluate": {
       "types": "./dist/evaluate/index.d.ts",

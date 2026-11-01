@@ -1,6 +1,6 @@
 # Architecture
 
-The design as of 0.1.0. For the reasons behind it, see [vision.md](vision.md).
+The design as of 0.11.0. For the reasons behind it, see [vision.md](vision.md).
 
 ## One format inside: CQL2-JSON
 
@@ -49,9 +49,11 @@ drops the rest.
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate` | 0.1.0 |
 | `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb` |
-| `ogc-cql2/parse` | `src/parse/` | CQL2-text → CQL2-JSON, for a Node server that receives text | 1.x.x |
+| `ogc-cql2/parse` | `src/parse/` | `fromText` (CQL2-text → CQL2-JSON, then the profile check), for a server that receives text | 0.11.0 |
 
-`text`, `evaluate` and `sql` validate their input first, so they load `validate` too.
+`text`, `parse`, `evaluate` and `sql` validate their input (or their result) first, so they load `validate` too.
+`text` and `parse` share the grammar's lexical rules (`src/core/grammar.ts`: identifiers, keywords, whitespace, the
+characters a string can hold).
 
 ## The parts
 
@@ -88,16 +90,56 @@ drops the rest.
 
 It follows the text encoding's released grammar (`cql2.bnf`, tag `cql2-1.0.0`) exactly:
 - **identifiers:** a property name equal to one of the standard's 51 keywords, in any case, is written in double
-  quotes. A name that isn't an `identifier` can't be written at all;
+  quotes, and so is one holding U+1680 (Ogham space mark), which the grammar puts in both `whitespace` and
+  `identifierStart`: a reader taking it for a space would otherwise read another property. A name that isn't an
+  `identifier` can't be written at all;
 - **character literals:** in single quotes, with each quote doubled;
 - **`LIKE` patterns:** written as they are; `%`, `_` and their escapes `\%`, `\_` are the standard's own;
 - **backslashes:** Requirement 21 makes `\` the escape character in every literal and defines no escape for itself,
   so any other backslash in a string can't be written;
+- **characters a string can't hold:** U+0000–U+0006, U+000E–U+001F, U+FFFE, U+FFFF and lone surrogates are outside
+  the grammar's `character`, with no escape, so a string holding one can't be written. BEL, BS, tab, LF, VT, FF and
+  CR are written as they are: the grammar allows them;
 - **numbers:** with the grammar's exponent `E` (`1E+21`);
 - **dates and timestamps:** `DATE('…')` and `TIMESTAMP('…')`;
 - **AND / OR:** each operand in parentheses, so precedence never depends on the reader.
 
 What the text can't express is refused as `not-expressible`, with the reason and the path. Nothing is approximated.
+
+### Reading CQL2-text (`ogc-cql2/parse`)
+
+`fromText(text, options?)` reads the whole grammar (`cql2.bnf`, tag `cql2-1.0.0`), every class, into CQL2-JSON, then
+checks it with `assertValid` and the same options as `validate`. Valid CQL2 outside the profile is therefore refused
+as it is in CQL2-JSON: `invalid-filter`, naming the class. Text that isn't CQL2-text is `invalid-text`, with
+`details.position` (a UTF-16 index) and `details.expected`.
+
+- **The reader:** a tokenizer and a hand-written recursive descent, one function per BNF rule, named as in the BNF
+  (`src/parse/read.ts`, internal; `src/parse/index.ts` adds the profile check). One pass, no backtracking: a `(`
+  opens a group or an array, decided by what follows. The whole text must be one `booleanExpression`; anything left
+  over is refused.
+- **What the grammar settles, read as it says:**
+  - keywords are case-insensitive (ASCII letters only, as ABNF);
+  - a keyword is always the keyword: a property named like one is written in double quotes, and only an identifier
+    can be;
+  - whitespace is the grammar's 25 characters, between any two tokens. U+1680 after a name is part of the name
+    (it is also an identifier character);
+  - Requirement 21's escapes: `''` and `\'` for a quote, `\a \b \t \n \v \f \r` for the control characters; in a LIKE
+    pattern `\%` and `\_` stay as they are (the pattern's own escapes). Any other backslash, and a character outside
+    `character`, is refused;
+  - numbers as the grammar writes them (`1.`, `.5`, `+1`, exponents with `E` or `e`), read with `Number()` (exact to
+    the nearest double: the same as correctly rounded conversion on 200,000 decimal strings);
+  - `x NOT LIKE`, `x NOT BETWEEN`, `x NOT IN` and `x IS NOT NULL` are `{"op": "not", …}`, as the standard's JSON
+    writes them; `BETWEEN` takes the next `AND`; one `NOT` per factor (`NOT (NOT …)` for two);
+  - geometries as GeoJSON, `Z` optional (Requirement 26: the coordinates tell the dimension), `BBOX(…)` as `{bbox}`,
+    `DATE` / `TIMESTAMP` with the grammar's shapes (UTC), `INTERVAL` with its parameters;
+  - the standard's JSON names for its operators (`isNull`, `t_metBy`, `a_containedBy`, …); a custom function keeps the
+    name it is written with.
+- **What the grammar leaves open, refused rather than guessed:** `EMPTY` (`emptySet` is never defined),
+  `MULTIPOINT(1 2, 3 4)` without each point's parentheses, `POINTZ`, `!=`, a timestamp with an offset.
+- **Where the grammar has two readings:** `-1` is the number −1 (`signedNumericLiteral`); a minus before a property or
+  a function is `{"op": "*", "args": [-1, x]}`, as other CQL2 parsers write it (CQL2-JSON has no unary minus).
+- **Nesting:** 375 parentheses deep read (Node 24); deeper text overflows the call stack and is refused as
+  `invalid-text`, not a crash.
 
 ### Evaluation (`ogc-cql2/evaluate`)
 
@@ -320,8 +362,10 @@ canary on the covering can't tell there.
 ### Errors
 
 - **Every refusal throws a `Cql2Error`:** `invalid-filter` (from `assertValid`, and from `text` and `evaluate` for an
-  invalid input), `not-expressible` (from `toText`) or `unknown-property` (from `toSql`, for a property not in
-  `columns`), with a message, the path inside the filter and `details`.
+  invalid input, and from `fromText` for valid CQL2 outside the profile), `not-expressible` (from `toText`),
+  `invalid-text` (from `fromText`: not CQL2-text; `details.position`, `details.expected`), `unknown-property` (from
+  `toSql`, for a property not in `columns`) or `unsupported`, with a message, the path inside the filter and
+  `details`.
 - **Callers test the `code`, not `instanceof`.** That keeps working even when two copies of the package end up in one
   application.
 
@@ -349,7 +393,7 @@ Where the standard leaves a choice, or recommends without requiring, the package
   - accepts CQL2-JSON;
   - validates it;
   - evaluates it against stored features (`ogc-cql2/evaluate`), or builds SQL (`ogc-cql2/sql`);
-  - and, if it must accept CQL2-text, parses it (`ogc-cql2/parse`, 1.x.x).
+  - and, if it must accept CQL2-text, reads it (`ogc-cql2/parse`).
 
 ## The demo server (`demo-server/`, not published)
 
@@ -374,7 +418,9 @@ filter selects). The server never knows which store it talks to.
   deterministically (the position in the file, or after the largest numeric id); a duplicate id drops the later
   feature, which is reported.
 - The server validates each filter (`validate`), checks its properties against the collection's queryables
-  (`filterProperties`), and refuses with HTTP 400 and `application/problem+json`.
+  (`filterProperties`), and refuses with HTTP 400 and `application/problem+json`. A filter sent with
+  `"filter-lang": "cql2-text"` is read with `fromText`, with the same checks; text that isn't CQL2-text is refused as
+  `invalid-text`, with its position.
 - Only the server has dependencies (Express, and `pg` for PostgreSQL; SQLite is Node's built-in `node:sqlite`). The
   package stays free of them: `check:imports` and `check:bundle` (below) prove it on every publish.
 
@@ -389,14 +435,22 @@ filter selects). The server never knows which store it talks to.
     standard's JSON, for all 47. The texts differ only in presentation (spaces, keyword case, parentheses,
     `NOT (x IN …)` for `x NOT IN …`). cql2-rs 0.5.6 misreads one standard text (`example06a`: a BETWEEN followed by
     AND), so that one is checked through our text only;
-  - every other one is refused only as `outside-profile` or `unknown-operator`, naming a conformance class.
-- **The grammar:** identifier, keyword, escaping and number cases taken from the BNF.
+  - every other one is refused only as `outside-profile` or `unknown-operator`, naming a conformance class;
+  - **the 120 standard text examples** (109, and 11 other texts of them) are read by `fromText` exactly as their JSON
+    example (three of them write an instant with `.000000` in the text and without in the JSON, compared without the
+    zero fraction); those in the profile come out of `fromText` and read back through `toText`; the others are
+    refused only as outside the profile.
+- **The grammar:** identifier, keyword, escaping and number cases taken from the BNF, for writing (`test/text.test.ts`)
+  and reading (`test/parse.test.ts`: every reading rule, each refusal with its position).
+- **Round trips:** `fromText(toText(f))` gives `f` exactly, on the DuckDB test's generated filters for property names
+  that are keywords, hold a colon or U+1680 (over 10,000), and on the spatial tests' filters. cql2-rs reads the same
+  texts as the same filters (but for U+1680, which it takes for a space, and refuses quoted).
 - **Truth tables:** every operator against a matching value, a non-matching value, a null and a missing property;
   `AND` / `OR` / `NOT` as the standard's tables; case-folding cases; strict dates and instants.
 - **SQL against real databases (differential tests):**
   - `test/sql.test.ts`: 12,984 generated filters on a SQLite table of awkward values (NULLs, values of an unexpected
     type, NFC and NFD, code points above U+FFFF, LIKE's special characters) select the same rows as `evaluate`;
-  - `test/sql-duckdb.test.ts`: 24,136 generated filters on a DuckDB table (`@duckdb/node-api`, a dev dependency, in
+  - `test/sql-duckdb.test.ts`: 24,661 generated filters on a DuckDB table (`@duckdb/node-api`, a dev dependency, in
     the test process) select the same rows as `evaluate` on the served values, also with `default_collation` set to
     `nocase` and a New York time zone;
   - the same filters in **DuckDB-WASM**, in Chrome: run for 0.2.0 and again for 0.5.0 (24,136 filters, 9,639 of them
@@ -429,7 +483,10 @@ filter selects). The server never knows which store it talks to.
     (63,487) for 0.5.0: no difference;
   - each rule was broken once on purpose, to show the tests catch it.
 - **Independent checks,** not part of the repository or of the package:
-  - two other CQL2 parsers (cql2-rs, pycql2) read the text output back to the same CQL2-JSON;
+  - two other CQL2 parsers (cql2-rs, pycql2) read the text output back to the same CQL2-JSON. For 0.11.0, pycql2
+    0.2.0 read 7,957 of the round trip's texts: every disagreement is pycql2's (it refuses characters above U+FFFF
+    and private-use characters, which the grammar allows, and rewrites timestamps to six fraction digits);
+  - `fromText` in Chrome 156 (headless, a page built with Vite), for 0.11.0: the 120 standard text examples, exact;
   - **cql2-rs's evaluator** (Development Seed; `cql2` on PyPI, about 200,000 downloads a month, and `cql2-wasm` on
     npm, version 0.5.6), 2026-10-31: the DuckDB test's 11,050 filters on its 15 rows, 165,750 answers. 46% agree;
     52% are errors in cql2-rs (a type mismatch, which the standard lets it refuse; a missing property, where the
@@ -472,8 +529,9 @@ checks that they agree.
 | 0.9.0 | **Spatial, phase D:** `s_intersects` in the `sqlite` dialect (GeoPackage, `evaluate`'s engine as a function, GeoPackage's R-tree outside a NOT) and the `duckdb` dialect (the spatial extension's `ST_Intersects`, exact, indexed; GeoParquet's bbox covering outside a NOT; tested on DuckDB 2.0 and 1.4.3); DuckDB's numbers bound as text, for DuckDB-WASM |
 | 0.9.1 | PostGIS `s_intersects` decided by GEOS's matrix (`ST_Relate`), exact on arm64 and PostGIS 3.7; `npm run check:duckdb` |
 | 0.10.0 | **Spatial Functions** (the other seven relations, DE-9IM): an engine hook in `evaluate` (GEOS through geos.js recommended), PostGIS, DuckDB, and **SpatiaLite** as an option of the `sqlite` dialect; the standard's Table 14 on full-precision Natural Earth; one reference, GEOS; the README's Tested versions |
+| 0.11.0 | **`ogc-cql2/parse`:** `fromText`, CQL2-text → CQL2-JSON (the whole grammar, then the profile check), for servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default; its own entry point, so web apps don't load it; tested on the standard's 120 text examples, on reading back `toText`'s output, and against cql2-rs and pycql2. `toText` refuses characters a string can't hold and quotes names holding U+1680. demo-server accepts text filters |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
-| 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below. **`ogc-cql2/parse`:** CQL2-text → CQL2-JSON, for Node servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default for the `filter` parameter; its own entry point, so web apps don't load it; tested on the standard's text examples, on reading back `toText`'s output, and against cql2-rs and pycql2 |
+| 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
 ### 1.x.x: Oracle and SQL Server

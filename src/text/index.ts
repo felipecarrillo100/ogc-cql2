@@ -8,32 +8,10 @@
  */
 import { Cql2Error } from "../core/errors.js";
 import { unwrap, type Fold } from "../core/folds.js";
+import { IDENTIFIER, KEYWORDS, NOT_A_CHARACTER } from "../core/grammar.js";
 import type { Cql2Filter, FoldedString, Geometry, PropertyRef, ScalarLiteral, SpatialLiteral, StringSubject } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
 import { positionsOf, wkt, wktNumber as number } from "../core/wkt.js";
-
-// `identifierStart` (cql2.bnf, cql2-1.0.0), range by range, in the grammar's order.
-const IDENTIFIER_START =
-  ":_A-Za-z" +
-  "\\u{C0}-\\u{D6}\\u{D8}-\\u{F6}\\u{F8}-\\u{2FF}" + // Latin-1 Supplement letters, Latin Extended
-  "\\u{370}-\\u{37D}\\u{37F}-\\u{1FFE}" + // Greek and Coptic (without ";"), notes 1
-  "\\u{200C}-\\u{200D}\\u{2070}-\\u{218F}\\u{2C00}-\\u{2FEF}" + // zero-width (non-)joiner, notes 2 and 3
-  "\\u{3001}-\\u{D7FF}\\u{F900}-\\u{FDCF}\\u{FDF0}-\\u{FFFD}\\u{10000}-\\u{EFFFF}"; // notes 4 to 7
-// `identifierPart` (cql2.bnf, cql2-1.0.0): a start character, ".", a digit, a combining mark, or ‿ / ⁀.
-const IDENTIFIER_PART = `${IDENTIFIER_START}.0-9\\u{300}-\\u{36F}\\u{203F}-\\u{2040}`;
-const IDENTIFIER = new RegExp(`^[${IDENTIFIER_START}][${IDENTIFIER_PART}]*$`, "u");
-
-// The standard's keywords (OGC 21-065r2, the list ahead of Requirement 20), and INTERVAL, the temporal function. A
-// property with such a name is written in double quotes, which the BNF allows only for an identifier:
-// `propertyName = identifier | "\"" identifier "\""`.
-const KEYWORDS = new Set([
-  "A_CONTAINEDBY", "A_CONTAINS", "A_EQUALS", "A_OVERLAPS", "ACCENTI", "AND", "BBOX", "BETWEEN", "CASEI", "DATE", "DIV",
-  "FALSE", "GEOMETRYCOLLECTION", "IN", "INTERVAL", "IS", "LIKE", "LINESTRING", "MULTILINESTRING", "MULTIPOINT",
-  "MULTIPOLYGON", "NOT", "NULL", "OR", "POINT", "POLYGON", "S_CONTAINS", "S_CROSSES", "S_DISJOINT", "S_EQUALS",
-  "S_INTERSECTS", "S_OVERLAPS", "S_TOUCHES", "S_WITHIN", "T_AFTER", "T_BEFORE", "T_CONTAINS", "T_DISJOINT", "T_DURING",
-  "T_EQUALS", "T_FINISHEDBY", "T_FINISHES", "T_INTERSECTS", "T_MEETS", "T_METBY", "T_OVERLAPPEDBY", "T_OVERLAPS",
-  "T_STARTEDBY", "T_STARTS", "TIMESTAMP", "TRUE",
-]);
 
 /** Whether `name` is an `identifier` of the CQL2 grammar: the only names CQL2-text can reference a property by. */
 export function isIdentifier(name: string): boolean {
@@ -61,6 +39,12 @@ export type TextProblemCode =
    */
   | "backslash"
   /**
+   * A character in a string that a character literal can't hold (`character` in the BNF): U+0000–U+0006,
+   * U+000E–U+001F, U+FFFE, U+FFFF, or a lone surrogate. Requirement 21 gives them no escape. (BEL, BS, HT, LF, VT, FF
+   * and CR are written as they are: the BNF allows them.)
+   */
+  | "character"
+  /**
    * A geometry mixing positions with and without a height: WKT's `Z` (`POINT Z(…)`) covers a whole geometry, so
    * CQL2-text can't write one that mixes them.
    */
@@ -79,7 +63,8 @@ export function textProblem(filter: Cql2Filter): TextProblem | undefined {
   const check = (x: unknown, path: string, inPattern = false): TextProblem | undefined => {
     if (typeof x === "string") {
       const rest = inPattern ? x.replace(LIKE_ESCAPES, "") : x;
-      return rest.includes("\\") ? { problem: "backslash", path } : undefined;
+      if (rest.includes("\\")) return { problem: "backslash", path };
+      return NOT_A_CHARACTER.test(x) ? { problem: "character", path } : undefined;
     }
     if (Array.isArray(x)) {
       for (const [i, item] of x.entries()) {
@@ -108,8 +93,14 @@ export function textProblem(filter: Cql2Filter): TextProblem | undefined {
   return check(filter, "");
 }
 
+/**
+ * A property name, in double quotes when it is a keyword, or when it holds U+1680 (Ogham space mark): that one is in
+ * both the grammar's `whitespace` and its `identifierStart`, and a reader taking it for a space would otherwise read
+ * another property.
+ */
 function propertyName(ref: PropertyRef): string {
-  return KEYWORDS.has(ref.property.toUpperCase()) ? `"${ref.property}"` : ref.property;
+  const quoted = KEYWORDS.has(ref.property.toUpperCase()) || ref.property.includes("\u1680");
+  return quoted ? `"${ref.property}"` : ref.property;
 }
 
 /** `inner` wrapped in the folds, innermost first: accenti, casei → `CASEI(ACCENTI(inner))`. */
@@ -172,6 +163,13 @@ function write(filter: Cql2Filter): string {
   }
 }
 
+const WHY: Record<TextProblemCode, string> = {
+  "property-name": "a property name that isn't a CQL2 identifier",
+  backslash: "a backslash, which CQL2-text can't escape",
+  character: "a character a CQL2-text string can't hold (a control character, U+FFFE, U+FFFF or a lone surrogate)",
+  "mixed-dimensions": "a geometry mixing positions with and without a height",
+};
+
 /**
  * Writes a filter as CQL2-text. `true` is `TRUE`: whether to send a filter that keeps everything is the caller's
  * choice.
@@ -183,10 +181,7 @@ export function toText(filter: Cql2Filter): string {
   const valid = assertValid(filter);
   const problem = textProblem(valid);
   if (problem) {
-    const why =
-      problem.problem === "property-name"
-        ? "a property name that isn't a CQL2 identifier"
-        : "a backslash, which CQL2-text can't escape";
+    const why = WHY[problem.problem];
     throw new Cql2Error("not-expressible", `This filter can't be written in CQL2-text: ${why}.`, problem.path, {
       problem: problem.problem,
     });

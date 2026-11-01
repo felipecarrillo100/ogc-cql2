@@ -7,6 +7,7 @@ JavaScript and TypeScript. It works on filters in the standard's JSON encoding, 
 
 - **`ogc-cql2/validate`** checks a filter, with a code, a location and a reason for each problem;
 - **`ogc-cql2/text`** writes it as CQL2-text, for the `filter` parameter of OGC API Features Part 3;
+- **`ogc-cql2/parse`** reads CQL2-text into CQL2-JSON, for a server that receives it;
 - **`ogc-cql2/evaluate`** tests features against it in memory, with CQL2's three-valued logic, so it selects the
   same features a CQL2 server would;
 - **`ogc-cql2/sql`** turns it into a parameterized `WHERE` clause for SQLite / GeoPackage, PostgreSQL / PostGIS or
@@ -24,7 +25,7 @@ npm install ogc-cql2
 
 The package implements these conformance classes:
 
-| Conformance class | Operators | `validate`, `text` | `evaluate` | `sql` |
+| Conformance class | Operators | `validate`, `text`, `parse` | `evaluate` | `sql` |
 |---|---|---|---|---|
 | Basic CQL2 | `=` `<>` `<` `<=` `>` `>=`, `isNull`, `and` `or` `not`, `true` / `false`, `{ "date" }` and `{ "timestamp" }` literals | ✅ | ✅ | ✅ |
 | Advanced Comparison Operators | `like`, `between`, `in` | ✅ | ✅ | ✅ |
@@ -134,8 +135,42 @@ const url = `${collection}/items?filter-lang=cql2-text&filter=${encodeURICompone
 
 The text follows the standard's grammar exactly: keywords used as property names are quoted, quotes in strings are
 doubled, numbers use the grammar's exponent `E`. What the text encoding can't express is refused, never approximated:
-a property name that isn't a CQL2 identifier, or a backslash in a string. `textProblem(filter)` reports it without
-throwing.
+a property name that isn't a CQL2 identifier, a backslash in a string, or a character a string can't hold (U+0000–U+0006,
+U+000E–U+001F, U+FFFE, U+FFFF, a lone surrogate). `textProblem(filter)` reports it without throwing.
+
+## Read CQL2-text
+
+```js
+import { fromText } from "ogc-cql2/parse";
+
+fromText("population > 1000000 AND CASEI(name) LIKE CASEI('s%')");
+// { op: "and", args: [{ op: ">", args: [{ property: "population" }, 1000000] }, { op: "like", … }] }
+
+// A server: the collection's queryables and its conformance classes, checked in the same call.
+const filter = fromText(req.query.filter, { queryables, conformance });
+```
+
+`fromText` reads the standard's grammar exactly, every class, then checks the result as `validate` does (with the
+same options). So:
+
+- text that isn't CQL2-text throws `invalid-text`, with `details.position` (where, as a JavaScript string index) and
+  `details.expected`. Nothing is guessed, and nothing is left unread: `a = 1)` is refused, not read as `a = 1`;
+- valid CQL2 outside the profile (temporal functions, arithmetic, …) throws `invalid-filter`, naming the class it
+  needs, exactly as the same filter in CQL2-JSON would.
+
+How it reads what the grammar allows in more than one way, or leaves open:
+
+- keywords in any case; a property named like a keyword must be in double quotes (`"date" = 1`; `date = 1` is
+  refused, with a hint);
+- strings: `''` or `\'` for a quote, and Requirement 21's `\a \b \t \n \v \f \r`; in a LIKE pattern, `\%` and `\_` stay
+  as they are; any other backslash is refused;
+- `x NOT LIKE …`, `x NOT IN (…)`, `x IS NOT NULL` become `NOT` of the predicate, as in the standard's JSON;
+- `-1` is a number; `<>`, `<=`, `>=` may have a space inside (`!=` isn't CQL2);
+- geometries: `Z` is optional, the coordinates tell the dimension; `EMPTY` and `MULTIPOINT(1 2, 3 4)` (without each
+  point's parentheses) aren't in the grammar and are refused;
+- `TIMESTAMP('…')` in UTC, with `Z`, as the grammar writes it.
+
+It reads back exactly what `toText` writes.
 
 ## Evaluate
 
@@ -511,9 +546,10 @@ them:
 ## Errors
 
 Every refusal throws a `Cql2Error` with a `code`, a `path` and `details`: `invalid-filter` (not a valid filter in the
-profile), `not-expressible` (`toText`: valid, but CQL2-text can't write it), `unknown-property` (`toSql`: a property
-that isn't one of the table's columns) or `unsupported` (`evaluate`, `toSql`: a valid filter of a class there is no
-engine for, Spatial Functions without `spatialEngine` or SpatiaLite; `details.conformance` names it).
+profile), `not-expressible` (`toText`: valid, but CQL2-text can't write it), `invalid-text` (`fromText`: not
+CQL2-text; `details.position` says where), `unknown-property` (`toSql`: a property that isn't one of the table's
+columns) or `unsupported` (`evaluate`, `toSql`: a valid filter of a class there is no engine for, Spatial Functions
+without `spatialEngine` or SpatiaLite; `details.conformance` names it).
 Test `error.code`, not `instanceof`: that keeps working when two copies of the package end up in one application.
 
 ## Playground and demo server
@@ -541,6 +577,7 @@ them into PostgreSQL). Its routes:
 | `GET /collections` | the collections |
 | `GET /collections/{id}/queryables` | the properties and their types (a JSON Schema) |
 | `POST /collections/{id}/query` with `{ "filter": …, "limit": 50, "offset": 0 }` | the matching features, as GeoJSON |
+| … with `"filter-lang": "cql2-text"` and the filter as a CQL2-text string | the same, read with `ogc-cql2/parse` |
 
 An invalid filter, or one naming a property the collection doesn't have, is refused with HTTP 400 and the problems as
 `application/problem+json`. Neither the page nor the server is part of the npm package.
@@ -553,7 +590,7 @@ Older versions may well work, but haven't been tested.
 | Component | Tested | Notes |
 |---|---|---|
 | Node.js | 20.20.2, 22.23.4, 24.15.0 | 20 or later. Node 20 has no `node:sqlite`: use another SQLite driver there |
-| Browsers | Chrome 156 | the DuckDB-WASM checks |
+| Browsers | Chrome 156 | the DuckDB-WASM checks; `fromText` on the standard's text examples |
 | PostgreSQL + PostGIS (GEOS) | 13 / 3.1.4 (3.9.0), 15 / 3.3.4 (3.9.0), 16 / 3.4.3 (3.9.0), 17 / 3.5.2 (3.9.0), 18 / 3.6.4 (3.14.1) on amd64; 17 / 3.5.3 (3.11.1), 17.10 / 3.5.6 (3.13.1), 18 / 3.6.1 (3.13.1), 18 / 3.7.0 (3.15.0) on arm64 | the spatial filters on all of them; every other filter on 17.10 / 3.5.6. A column holding GeometryCollections: GEOS 3.13 or later |
 | `pg` (node-postgres) | 8.23.1 | |
 | SQLite (`node:sqlite`) | 3.51.3 (Node 24.15), 3.53.4 (Node 22.23) | GeoPackage 1.4 |
