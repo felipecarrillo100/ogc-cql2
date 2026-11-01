@@ -39,7 +39,8 @@ export interface SqlColumn extends Queryable {
    * path of a field, `[column, field]`, e.g. `["bbox", "xmin"]`. The filter then compares those fields first, which
    * skips Parquet row groups and most rows; DuckDB doesn't use a covering by itself. Only for a filter that isn't
    * negated: negate the filter (`{ op: "not" }`), never the SQL it gives (`NOT (…)`). Not for a table with an R-tree
-   * index on the geometry, which is faster on its own: DuckDB 2.0 then fails with an internal error.
+   * index on the geometry, which is faster on its own; DuckDB 2.0 then fails with an internal error (1.4 and 1.5
+   * don't).
    */
   readonly covering?: { readonly bbox: { readonly [K in "xmin" | "ymin" | "xmax" | "ymax"]: readonly [string, string] } };
 }

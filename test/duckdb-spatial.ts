@@ -175,14 +175,16 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
         .rejects.toThrow();
     });
 
-    it(line === "core"
+    // DuckDB 2.0's bug alone: 1.4 and 1.5 (DuckDB-WASM's engines) run the query, exactly and with the index.
+    const coveringFails = Number(version.split(".")[0]) >= 2;
+    it(coveringFails
       ? "a covering on a table with an R-tree index still fails (DuckDB 2.0's bug): keep the limitation documented"
       : "a covering on a table with an R-tree index works", async (context) => {
       if (spatial) return context.skip(spatial);
       await duck.run("CREATE OR REPLACE TABLE ixc AS SELECT ST_Point(x, x) AS geom, {'xmin': x::DOUBLE, 'ymin': x::DOUBLE, 'xmax': x::DOUBLE, 'ymax': x::DOUBLE} AS bbox FROM range(0, 5000) t(x); CREATE INDEX ixc_geom ON ixc USING RTREE (geom)");
       const { where, params } = toSql(leaf({ bbox: [10, 10, 20, 20] }) as unknown as Cql2Filter, { dialect: "duckdb", columns: { geometry: { sqlType: "GEOMETRY", column: "geom", covering: COVERING } } });
       const run = rows(`SELECT count(*) FROM ixc WHERE ${where}`, params);
-      if (line === "core") {
+      if (coveringFails) {
         await expect(run, "DuckDB now filters on a covering on an indexed table: lift the limitation (SqlColumn.covering, README, docs/architecture.md)")
           .rejects.toThrow(/Failed to bind column reference/);
       } else {

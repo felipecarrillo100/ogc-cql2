@@ -343,7 +343,7 @@ each), and canaries state what the dialect relies on. Each fails when a DuckDB r
 | Canary | When it fails |
 |---|---|
 | plain `ST_GeomFromWKB` fails the query on bytes that aren't WKB | `TRY(…)` may go |
-| DuckDB 2.0 fails on a covering for a table with an R-tree index | lift the limitation (`SqlColumn.covering`, README) |
+| DuckDB 2.0 and later fail on a covering for a table with an R-tree index (1.4 and 1.5 answer it) | lift the limitation (`SqlColumn.covering`, README) |
 | DuckDB 2.0 skips no row group of a GeoParquet 1.1 file from its covering by itself | the covering's comparisons may become unnecessary |
 | on DuckDB 2.0, `ST_Intersects` alone is more than 3× slower than with `ST_Intersects_Extent`, without an index (a timing: it only reports the ratio, and fails on it only with `CQL2_CANARY_TIMING=1`, so the machine's load can't fail a test run) | the gap closed: no engine option needed. If it persists through releases, it is the evidence for an explicit engine option (none is planned; `toSql` never sees the connection, and the runtime isn't the engine version) |
 
@@ -357,7 +357,9 @@ temporary folder (never package.json or the lock file), holds each to its line's
 with 1 then. An engine without a Node package (a development build) is reported, not tested. On 2026-10-31 it found
 DuckDB-WASM's `latest` (1.33.1-dev57.0) shipping DuckDB 1.5.4, which passes everything except the covering on an
 indexed table: that works there, so the failure is DuckDB 2.0's alone. Its profile doesn't count row groups, so the
-canary on the covering can't tell there.
+canary on the covering can't tell there. Measured on 2026-11-01: with a covering on an R-tree-indexed table, DuckDB
+1.5.4, 1.5.6 and DuckDB-WASM 1.33.1-dev57.0 select what `evaluate` selects for every spatial filter, still through the
+index; 2.0.0 still fails. The canary expects the failure from DuckDB 2.0 on only.
 
 ### Errors
 
