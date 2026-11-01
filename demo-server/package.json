@@ -1,7 +1,7 @@
 {
   "name": "ogc-cql2-demo-server",
   "private": true,
-  "description": "A query backend for the ogc-cql2 playground: CQL2-JSON filters answered from GeoJSON files, through ogc-cql2. Not published.",
+  "description": "A query backend for the ogc-cql2 playground: CQL2-JSON and CQL2-text filters answered from GeoJSON files, GeoPackages and PostgreSQL, through ogc-cql2. Not published.",
   "type": "module",
   "engines": {
     "node": ">=22.18"

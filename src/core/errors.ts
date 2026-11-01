@@ -4,6 +4,11 @@ export type Cql2ErrorCode =
   | "invalid-filter"
   /** `toText`: the filter is valid, but CQL2-text can't express it; `details.problem` says what. */
   | "not-expressible"
+  /**
+   * `fromText`: the text isn't CQL2-text; `details.position` (a UTF-16 index into the text) says where,
+   * `details.expected` what the grammar expected there.
+   */
+  | "invalid-text"
   /** `toSql`: the filter references a property that isn't one of the table's columns; `details.property` names it. */
   | "unknown-property"
   /**

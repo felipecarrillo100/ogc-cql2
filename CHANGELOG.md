@@ -4,6 +4,56 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [0.11.0] - 2026-11-01
+
+Reading CQL2-text: `ogc-cql2/parse`, for servers that receive the `filter` parameter of OGC API Features Part 3 as
+text (`filter-lang=cql2-text`, its default).
+
+### Added
+
+- `ogc-cql2/parse`, a new entry point: `fromText(text, options?)` reads CQL2-text into CQL2-JSON, then checks it
+  against the profile with `validate`'s options (queryables, conformance classes). It reads the standard's whole
+  grammar (`cql2.bnf`, tag `cql2-1.0.0`), every class, so valid CQL2 outside the profile is refused as
+  `invalid-filter`, naming the class, as it is in CQL2-JSON. It reads as the grammar says:
+  - keywords in any case, and property names in double quotes;
+  - Requirement 21's escapes (`''`, `\'`, `\a \b \t \n \v \f \r`), with `\%` and `\_` kept in LIKE patterns;
+  - the NOT forms as the standard's JSON writes them;
+  - geometries with `Z` optional;
+  - the standard's JSON names.
+
+  What the grammar doesn't define is refused, never guessed: `EMPTY`, `!=`, an undefined escape, a keyword as a bare
+  property name, and anything left over after the filter.
+- `Cql2ErrorCode` `invalid-text`: text that isn't CQL2-text, with `details.position` (a UTF-16 index) and
+  `details.expected`.
+
+### Fixed
+
+- `toText`:
+  - It refuses a string holding a character CQL2-text strings can't hold (U+0000–U+0006, U+000E–U+001F, U+FFFE,
+    U+FFFF, a lone surrogate) as `not-expressible`, with the new `textProblem` code `"character"`. Before, it wrote
+    them as they are, which isn't valid CQL2-text. BEL, BS, tab, LF, VT, FF and CR are still written as they are: the
+    grammar allows them.
+  - It writes a property name holding U+1680 (Ogham space mark) in double quotes. The grammar has U+1680 both as
+    whitespace and as an identifier character, so a reader could take it for a space and read another property.
+  - A geometry mixing 2D and 3D positions is refused with its own message, not the backslash one.
+
+### Tests
+
+- The standard's 120 text examples (109, and 11 other texts of them) read exactly as their JSON examples, in Node and
+  in Chrome 156.
+- Every reading rule, with each refusal's position.
+- Round trips: `fromText(toText(f))` gives `f` exactly, on over 10,000 generated filters and on the spatial tests'
+  filters.
+- The same texts read alike by cql2-rs 0.5.6 (its known deviations listed), and once by pycql2 0.2.0 (every
+  disagreement its own).
+- Each new rule broken once on purpose, to show the tests catch it.
+
+### Demo server
+
+- `POST /collections/{id}/query` accepts `"filter-lang": "cql2-text"` with the filter as a CQL2-text string, read
+  with `fromText` and the collection's queryables. Text that isn't CQL2-text is refused as `invalid-text`, with its
+  position. CQL2-JSON stays the default.
+
 ## [0.10.0] - 2026-10-31
 
 The Spatial Functions class: S_EQUALS, S_DISJOINT, S_TOUCHES, S_WITHIN, S_OVERLAPS, S_CROSSES, S_CONTAINS, in every

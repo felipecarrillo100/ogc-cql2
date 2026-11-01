@@ -6,16 +6,18 @@
  * | `GET /collections` | the collections |
  * | `GET /collections/{id}` | one collection |
  * | `GET /collections/{id}/queryables` | its properties and their types, as OGC API Features Part 3 queryables |
- * | `POST /collections/{id}/query` `{ filter, limit?, offset? }` | the matching features, a GeoJSON FeatureCollection |
+ * | `POST /collections/{id}/query` `{ filter, "filter-lang"?, limit?, offset? }` | the matching features, a GeoJSON FeatureCollection |
  *
- * Refusals are `application/problem+json`. Run: `npm start` (builds the package first) or `npm run serve`; port 3100
+ * `filter-lang` takes OGC API Features Part 3's values: `cql2-json` (the default here), the filter as CQL2-JSON, or
+ * `cql2-text`, the filter as a CQL2-text string. Refusals are `application/problem+json`. Run: `npm start` (builds the package first) or `npm run serve`; port 3100
  * unless `PORT` says otherwise.
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
-import type { Cql2Filter } from "ogc-cql2";
-import { validate } from "ogc-cql2/validate";
+import type { Cql2Error, Cql2Filter } from "ogc-cql2";
+import { fromText } from "ogc-cql2/parse";
+import { validate, type ValidateOptions } from "ogc-cql2/validate";
 
 /**
  * A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that
@@ -45,9 +47,9 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
-  const refuse = (req: Request, res: Response, status: number, code: string, title: string, detail?: string, problems?: readonly unknown[]) => {
+  const refuse = (req: Request, res: Response, status: number, code: string, title: string, detail?: string, problems?: readonly unknown[], position?: number) => {
     log(`${req.method} ${req.originalUrl} → ${status} ${code}${problems ? ` (${problems.length} problem(s))` : ""}`);
-    sendProblem(res, { status, code, title, ...(detail ? { detail } : {}), ...(problems ? { problems } : {}) });
+    sendProblem(res, { status, code, title, ...(detail ? { detail } : {}), ...(problems ? { problems } : {}), ...(position === undefined ? {} : { position }) });
   };
   const storeOf = (req: Request, res: Response): Store | undefined => {
     const store = stores.get(req.params.id as string);
@@ -82,7 +84,14 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
     if (!store) return;
     const body = req.body as Record<string, unknown> | undefined;
     if (typeof body !== "object" || body === null || Array.isArray(body) || !("filter" in body)) {
-      return refuse(req, res, 400, "invalid-request", "Invalid request", 'Send a JSON object: { "filter": <CQL2-JSON>, "limit"?, "offset"? }.');
+      return refuse(req, res, 400, "invalid-request", "Invalid request", 'Send a JSON object: { "filter": <CQL2-JSON or CQL2-text>, "filter-lang"?, "limit"?, "offset"? }.');
+    }
+    const lang = body["filter-lang"] ?? "cql2-json";
+    if (lang !== "cql2-json" && lang !== "cql2-text") {
+      return refuse(req, res, 400, "invalid-request", "Invalid request", '"filter-lang" is "cql2-json" (the default) or "cql2-text".');
+    }
+    if (lang === "cql2-text" && typeof body.filter !== "string") {
+      return refuse(req, res, 400, "invalid-request", "Invalid request", 'With "filter-lang": "cql2-text", the filter is a string.');
     }
     const limit = integer(body.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
     const offset = integer(body.offset, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -92,12 +101,28 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 
     // The collection's queryables: an unknown property, or a literal of another type than the property's, is refused
     // here (CQL2 lets a server answer a type mismatch with an error), instead of silently matching nothing.
-    const result = validate(body.filter, { queryables: queryablesOf(store), conformance: store.conformance() });
-    if (!result.valid) {
-      return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile, or doesn't fit this collection's queryables.", result.problems);
+    const options: ValidateOptions = { queryables: queryablesOf(store), conformance: store.conformance() };
+    let filter: Cql2Filter;
+    if (lang === "cql2-text") {
+      try {
+        filter = fromText(body.filter as string, options);
+      } catch (error) {
+        const e = error as Cql2Error;
+        if (e.code === "invalid-text") return refuse(req, res, 400, "invalid-text", "Invalid CQL2-text", e.message, undefined, e.details.position as number);
+        if (e.code === "invalid-filter") {
+          return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2 in the profile, or doesn't fit this collection's queryables.", e.details.problems as unknown[]);
+        }
+        throw error;
+      }
+    } else {
+      const result = validate(body.filter, options);
+      if (!result.valid) {
+        return refuse(req, res, 400, "invalid-filter", "Invalid filter", "The filter isn't valid CQL2-JSON in the profile, or doesn't fit this collection's queryables.", result.problems);
+      }
+      filter = result.filter;
     }
 
-    const { features, numberMatched } = await store.query(result.filter as Cql2Filter, { limit, offset });
+    const { features, numberMatched } = await store.query(filter, { limit, offset });
     res.type("application/geo+json").send(
       JSON.stringify({ type: "FeatureCollection", numberMatched, numberReturned: features.length, features }),
     );

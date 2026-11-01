@@ -10,8 +10,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { initSync, parseText } from "cql2-wasm";
 import { describe, expect, it } from "vitest";
+import { fromText } from "ogc-cql2/parse";
 import { toText } from "ogc-cql2/text";
 import { validate } from "ogc-cql2/validate";
+import { readText } from "../src/parse/read.ts";
 import { schemaAccepts } from "./schema.ts";
 
 const dir = new URL("./fixtures/ogc/examples/json/", import.meta.url);
@@ -107,6 +109,59 @@ describe("the standard's examples", () => {
     for (const problem of result.problems) {
       expect(["outside-profile", "unknown-operator"]).toContain(problem.code);
       if (LITERAL_FIRST.has(name)) expect(problem.message).toMatch(/takes the property first/);
+      else expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
+    }
+  });
+});
+
+// --- Reading the standard's text examples (`ogc-cql2/parse`) ----------------------------------------------------------
+
+const textDir = new URL("./fixtures/ogc/examples/text/", import.meta.url);
+/** Each text example with the JSON example it encodes: `example36-alt01.txt` is another text of `example36.json`. */
+const texts = readdirSync(textDir)
+  .filter((name) => name.endsWith(".txt"))
+  .sort()
+  .map((name): [string, string, unknown] => {
+    const base = name.replace(/(-alt01)?\.txt$/, "");
+    return [name.replace(/\.txt$/, ""), readFileSync(new URL(name, textDir), "utf8"), examples.find(([n]) => n === base)![1]];
+  });
+
+/**
+ * The standard writes these instants differently in its two encodings: `05:30:00.000000Z` in the text,
+ * `05:30:00Z` in the JSON, the same instant. The reading keeps what the text says, so these are compared with a zero
+ * fraction dropped.
+ */
+const ZERO_FRACTIONS = new Set(["example54", "example55", "example82"]);
+const dropZeroFractions = (x: unknown): unknown => JSON.parse(JSON.stringify(x).replace(/(T\d\d:\d\d:\d\d)\.0+Z/g, "$1Z"));
+
+describe("the standard's text examples, read", () => {
+  it("are all there: 109, and 11 other texts of them", () => {
+    expect(texts).toHaveLength(120);
+    expect(texts.filter(([name]) => name.endsWith("-alt01"))).toHaveLength(11);
+  });
+
+  // This also shows that no example uses a keyword unquoted as a property name: each would be refused.
+  it.for(texts)("%s reads exactly as its JSON example", ([name, text, json]) => {
+    const read = readText(text);
+    expect(ZERO_FRACTIONS.has(name) ? dropZeroFractions(read) : read).toEqual(json);
+  });
+
+  it.for(texts.filter(([name]) => IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s comes out of fromText, and reads back through toText", ([, text, json]) => {
+    expect(fromText(text)).toEqual(json);
+    expect(readText(toText(fromText(text)))).toEqual(json);
+  });
+
+  it.for(texts.filter(([name]) => !IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s is refused by fromText only as outside the profile", ([name, text]) => {
+    let error: { code?: string; details?: { problems?: { code: string; conformance?: string; message: string }[] } } = {};
+    try {
+      fromText(text);
+    } catch (e) {
+      error = e as typeof error;
+    }
+    expect(error.code).toBe("invalid-filter");
+    for (const problem of error.details!.problems!) {
+      expect(["outside-profile", "unknown-operator"]).toContain(problem.code);
+      if (LITERAL_FIRST.has(name.replace(/-alt01$/, ""))) expect(problem.message).toMatch(/takes the property first/);
       else expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
     }
   });

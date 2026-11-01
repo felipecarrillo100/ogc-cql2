@@ -116,6 +116,60 @@ describe("query", () => {
   });
 });
 
+describe('CQL2-text filters ("filter-lang": "cql2-text")', () => {
+  const pairs: [string, unknown][] = [
+    ["POP1996 > 10000000", { op: ">", args: [{ property: "POP1996" }, 10000000] }],
+    ["CASEI(STATE_NAME) LIKE CASEI('new%') AND NOT POP1996 < 1000000", {
+      op: "and",
+      args: [
+        { op: "like", args: [{ op: "casei", args: [{ property: "STATE_NAME" }] }, { op: "casei", args: ["new%"] }] },
+        { op: "not", args: [{ op: "<", args: [{ property: "POP1996" }, 1000000] }] },
+      ],
+    }],
+    ["STATE_ABBR IN ('TX', 'CA') OR S_INTERSECTS(geometry, POINT(-74.0 40.7))", {
+      op: "or",
+      args: [
+        { op: "in", args: [{ property: "STATE_ABBR" }, ["TX", "CA"]] },
+        { op: "s_intersects", args: [{ property: "geometry" }, { type: "Point", coordinates: [-74, 40.7] }] },
+      ],
+    }],
+  ];
+
+  it("give the same features as their CQL2-JSON, from the GeoJSON file and the GeoPackage", async () => {
+    for (const collection of ["states", "gpkg-states"]) {
+      for (const [text, json] of pairs) {
+        const fromText = await read(query(collection, { filter: text, "filter-lang": "cql2-text" }));
+        const fromJson = await read(query(collection, { filter: json }));
+        assert.ok(fromJson.numberMatched > 0, `${collection}: ${text} matches something`);
+        assert.deepEqual(ids(fromText), ids(fromJson), `${collection}: ${text}`);
+      }
+    }
+    // "cql2-json" said explicitly is the default.
+    assert.deepEqual(ids(await read(query("states", { filter: pairs[0]![1], "filter-lang": "cql2-json" }))), ids(await read(query("states", { filter: pairs[0]![1] }))));
+  });
+
+  it("text that isn't CQL2-text: invalid-text, with the position", async () => {
+    const res = await query("states", { filter: "POP1996 > ", "filter-lang": "cql2-text" });
+    assert.equal(res.status, 400);
+    assert.match(res.headers.get("content-type")!, /application\/problem\+json/);
+    const answer = await read(res);
+    assert.deepEqual([answer.code, answer.position], ["invalid-text", 10]);
+    assert.match(answer.detail, /position 10/);
+  });
+
+  it("valid CQL2-text that doesn't fit the profile or the queryables: invalid-filter, with the problems", async () => {
+    const unknown = await read(query("states", { filter: "NOPE = 1", "filter-lang": "cql2-text" }));
+    assert.deepEqual([unknown.code, unknown.problems[0].code], ["invalid-filter", "unknown-property"]);
+    const temporal = await read(query("states", { filter: "T_AFTER(STATE_NAME, DATE('2020-01-01'))", "filter-lang": "cql2-text" }));
+    assert.deepEqual([temporal.code, temporal.problems[0].code], ["invalid-filter", "outside-profile"]);
+  });
+
+  it("an unknown filter-lang, or cql2-text with a filter that isn't a string: invalid-request", async () => {
+    assert.equal((await read(query("states", { filter: "POP1996 > 1", "filter-lang": "ecql" }))).code, "invalid-request");
+    assert.equal((await read(query("states", { filter: { op: "=", args: [{ property: "a" }, 1] }, "filter-lang": "cql2-text" }))).code, "invalid-request");
+  });
+});
+
 describe("refusals, as application/problem+json", () => {
   const problem = async (res: Response, status: number, code: string) => {
     assert.equal(res.status, status);

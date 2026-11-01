@@ -127,6 +127,22 @@ describe("the routes on the PostgreSQL collections", () => {
     assert.equal(fromPg.numberMatched, 7);
   });
 
+  it("answer a CQL2-text filter as its CQL2-JSON", async (t) => {
+    if (skip) return t.skip(skip);
+    const text = "CASEI(STATE_NAME) LIKE CASEI('new%') OR S_INTERSECTS(geometry, POINT(-97.7 30.3))";
+    const json = {
+      op: "or",
+      args: [
+        { op: "like", args: [{ op: "casei", args: [{ property: "STATE_NAME" }] }, { op: "casei", args: ["new%"] }] },
+        { op: "s_intersects", args: [{ property: "geometry" }, { type: "Point", coordinates: [-97.7, 30.3] }] },
+      ],
+    };
+    const fromText = await read(query("pg-states", { filter: text, "filter-lang": "cql2-text" }));
+    const fromJson = await read(query("pg-states", { filter: json }));
+    assert.equal(fromJson.numberMatched, 5);
+    assert.deepEqual(fromText.features.map((f: { id: number }) => f.id), fromJson.features.map((f: { id: number }) => f.id));
+  });
+
   it("refuse a property the table doesn't have", async (t) => {
     if (skip) return t.skip(skip);
     const res = await query("pg-sub_regions", { filter: { op: "=", args: [{ property: "STATE_NAME" }, "Texas"] } });

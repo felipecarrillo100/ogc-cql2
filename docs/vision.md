@@ -11,7 +11,7 @@
   - send it to a server as CQL2-text;
   - or apply it in memory to features the client already holds;
 - **in a server** (Node):
-  - accept a CQL2-JSON filter;
+  - accept a CQL2-JSON filter, or read a CQL2-text one;
   - check it;
   - evaluate it against stored features, for example collections kept in files;
   - or translate it to SQL for a database: SQLite / GeoPackage, PostgreSQL / PostGIS, or DuckDB, which also filters

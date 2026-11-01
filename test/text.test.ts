@@ -152,6 +152,14 @@ describe("the standard's keywords are quoted, other names are not (`propertyName
     expect(toText(eq("pointer", 1))).toBe("pointer = 1");
     expect(toText(eq("name", 1))).toBe("name = 1");
   });
+
+  it("a name holding U+1680 (Ogham space mark, in both `whitespace` and `identifierStart`), wherever it appears", () => {
+    expect(toText(eq("a\u1680", 1))).toBe('"a\u1680" = 1');
+    expect(toText(eq("a\u1680b", 1))).toBe('"a\u1680b" = 1');
+    expect(toText({ op: "isNull", args: [p("\u1680x")] } as Cql2Filter)).toBe('"\u1680x" IS NULL');
+    expect(toText({ op: "like", args: [casei(p("a\u1680")), casei("x%")] } as Cql2Filter)).toBe(`CASEI("a\u1680") LIKE CASEI('x%')`);
+    expect(toText(eq("aᚁ", 1))).toBe("aᚁ = 1"); // its neighbour is an ordinary letter
+  });
 });
 
 describe("what CQL2-text can't express is refused, never written loosely", () => {
@@ -191,10 +199,32 @@ describe("what CQL2-text can't express is refused, never written loosely", () =>
     expect(textProblem(eq("p", "100\\%"))).toEqual({ problem: "backslash", path: "/args/1" });
   });
 
-  it("nothing else: quotes, wildcards, control characters typed as data", () => {
+  it("a character a string literal can't hold (BNF `character`): U+0000–U+0006, U+000E–U+001F, U+FFFE, U+FFFF, lone surrogates", () => {
+    for (const c of ["\u0000", "\u0006", "\u000E", "\u001F", "￾", "￿", "\uD83D", "\uDE00"]) {
+      const filter = eq("p", `a${c}b`);
+      expect(textProblem(filter)).toEqual({ problem: "character", path: "/args/1" });
+      expect(() => toText(filter)).toThrow(
+        expect.objectContaining({ code: "not-expressible", path: "/args/1", details: { problem: "character" } }),
+      );
+    }
+    expect(textProblem({ op: "like", args: [p("p"), casei("x\u0001%")] })).toEqual({ problem: "character", path: "/args/1/args/0" });
+    expect(textProblem({ op: "in", args: [p("p"), ["ok", "\u001F"]] })).toEqual({ problem: "character", path: "/args/1/1" });
+  });
+
+  it("each refusal says why", () => {
+    const mixed = { op: "s_intersects", args: [p("g"), { type: "LineString", coordinates: [[0, 0], [1, 1, 5]] }] } as Cql2Filter;
+    expect(() => toText(mixed)).toThrow(/mixing positions with and without a height/);
+    expect(() => toText(eq("p", "a\u0001"))).toThrow(/a character a CQL2-text string can't hold/);
+    expect(() => toText(eq("p", "a\\"))).toThrow(/a backslash/);
+    expect(() => toText(eq("a b", 1))).toThrow(/isn't a CQL2 identifier/);
+  });
+
+  it("nothing else: quotes, wildcards, the control characters the BNF allows, characters beside the refused ones", () => {
     expect(textProblem(eq("p", "O'Brien"))).toBeUndefined();
     expect(textProblem({ op: "like", args: [p("p"), "100%_"] })).toBeUndefined();
     expect(textProblem(eq("p", "tab\there"))).toBeUndefined();
+    // BEL and BS are in `alpha`; HT, LF, VT, FF, CR in `whitespace`; then the neighbours of each refused range.
+    expect(textProblem(eq("p", "\u0007\u0008\t\n\u000B\f\r \u007F�\u{10000}\u{10FFFF}😀"))).toBeUndefined();
   });
 });
 

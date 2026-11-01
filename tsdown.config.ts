@@ -6,6 +6,7 @@ export default defineConfig({
     index: "src/index.ts",
     "validate/index": "src/validate/index.ts",
     "text/index": "src/text/index.ts",
+    "parse/index": "src/parse/index.ts",
     "evaluate/index": "src/evaluate/index.ts",
     "sql/index": "src/sql/index.ts",
   },
