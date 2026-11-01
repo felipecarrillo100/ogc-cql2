@@ -5,7 +5,7 @@
  * trips with `toText` in `parse-roundtrip.test.ts`.
  */
 import { describe, expect, it } from "vitest";
-import { CONFORMANCE, OTHER_CONFORMANCE } from "ogc-cql2";
+import { CONFORMANCE, CQL2_CONFORMANCE } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
 import { readText } from "../src/parse/read.ts";
 
@@ -350,10 +350,10 @@ describe("fromText: the profile check after the reading", () => {
 
   it("refuses valid CQL2 outside the profile as invalid-filter, naming the class", () => {
     expect(() => fromText("T_AFTER(t, DATE('2020-01-01'))")).toThrow(
-      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: OTHER_CONFORMANCE.temporal })] } }),
+      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.temporal })] } }),
     );
     expect(() => fromText("x + 1 > 2")).toThrow(
-      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: OTHER_CONFORMANCE.arithmetic })] } }),
+      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.arithmetic })] } }),
     );
   });
 

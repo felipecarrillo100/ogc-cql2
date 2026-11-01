@@ -3,9 +3,11 @@
  * JSON Schema (everything accepted is schema-valid; everything refused as malformed is schema-invalid).
  */
 import { describe, expect, it } from "vitest";
-import { CONFORMANCE, OTHER_CONFORMANCE } from "ogc-cql2";
+import { CONFORMANCE, CQL2_CONFORMANCE } from "ogc-cql2";
 import { assertValid, filterProperties, requiredConformance, validate, type ProblemCode } from "ogc-cql2/validate";
 import { schemaAccepts } from "./schema.ts";
+import { generateFilters } from "./corpus.ts";
+import { FILTERS, RELATION_FILTERS } from "./spatial-cases.ts";
 
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
@@ -125,9 +127,9 @@ describe("validate refuses, with a code and where", () => {
 
   it("names the class that outside-profile CQL2 needs", () => {
     const result = validate({ op: "t_after", args: [p("built"), { timestamp: "2020-01-01T00:00:00Z" }] });
-    expect(result.valid || result.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.temporal);
+    expect(result.valid || result.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.temporal);
     const pp = validate({ op: "=", args: [p("a"), p("b")] });
-    expect(pp.valid || pp.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.propertyProperty);
+    expect(pp.valid || pp.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.propertyProperty);
   });
 
   it("names the right spatial class: points and boxes are basic; other geometries need the plus class", () => {
@@ -192,6 +194,26 @@ describe("conformance", () => {
       ["needs-conformance", "/args/0", CONFORMANCE.caseInsensitive],
       ["needs-conformance", "/args/1", CONFORMANCE.caseInsensitive],
     ]);
+  });
+
+  it("CQL2_CONFORMANCE: the standard's twelve filter classes (21-065r2, Annex A), not the two encodings", () => {
+    const conf = "http://www.opengis.net/spec/cql2/1.0/conf/";
+    expect(Object.values(CQL2_CONFORMANCE).sort()).toEqual([
+      "basic-cql2", "advanced-comparison-operators", "case-insensitive-comparison", "accent-insensitive-comparison",
+      "basic-spatial-functions", "basic-spatial-functions-plus", "spatial-functions", "temporal-functions",
+      "array-functions", "property-property", "functions", "arithmetic",
+    ].map((name) => conf + name).sort());
+  });
+
+  it("CONFORMANCE: each implemented class is CQL2_CONFORMANCE's under the same key", () => {
+    for (const [key, uri] of Object.entries(CONFORMANCE)) expect(uri, key).toBe(CQL2_CONFORMANCE[key as keyof typeof CQL2_CONFORMANCE]);
+  });
+
+  it("requiredConformance only ever names implemented classes", () => {
+    const implemented = new Set<string>(Object.values(CONFORMANCE));
+    for (const filter of [...generateFilters(["s", "n"]), ...FILTERS, ...RELATION_FILTERS]) {
+      for (const uri of requiredConformance(filter)) expect(implemented.has(uri), uri).toBe(true);
+    }
   });
 });
 
@@ -288,7 +310,7 @@ describe("spatial filters", () => {
     expect(first.valid ? [] : first.problems.map(({ code, path, conformance }) => [code, path, conformance])).toEqual([["outside-profile", "/args/0", undefined]]);
     expect(problems(p("other"))).toEqual(["outside-profile /args/1"]);
     const buffer = validate({ op: "s_within", args: [p("road"), { op: "Buffer", args: [p("geometry"), 10, "m"] }] });
-    expect(buffer.valid || buffer.problems[0]!.conformance).toBe(OTHER_CONFORMANCE.functions);
+    expect(buffer.valid || buffer.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.functions);
     expect(validate({ op: "=", args: [p("a"), point([1, 2])] }).valid).toBe(false); // a geometry in a comparison
   });
 

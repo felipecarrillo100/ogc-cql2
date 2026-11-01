@@ -7,7 +7,7 @@
  * The rules are the standard's (OGC 21-065r2): its JSON Schema (`cql2.json`, tag `cql2-1.0.0`), its requirements,
  * and the permissions that let a server accept only a property on the left and a literal on the right.
  */
-import { CONFORMANCE, OTHER_CONFORMANCE } from "../core/conformance.js";
+import { CONFORMANCE, CQL2_CONFORMANCE } from "../core/conformance.js";
 import { Cql2Error } from "../core/errors.js";
 import type { Cql2Filter, Queryable } from "../core/types.js";
 
@@ -212,12 +212,12 @@ class Checker {
     if (SPATIAL.has(op)) return this.spatial(op, args, path);
     if (TEMPORAL.has(op)) {
       return this.report(
-        "outside-profile", path, `"${op}" is a temporal function, not in the profile yet.`, OTHER_CONFORMANCE.temporal,
+        "outside-profile", path, `"${op}" is a temporal function, not in the profile yet.`, CQL2_CONFORMANCE.temporal,
       );
     }
     if (ARRAY.has(op)) {
       return this.report(
-        "outside-profile", path, `"${op}" is an array function, not in the profile yet.`, OTHER_CONFORMANCE.arrays,
+        "outside-profile", path, `"${op}" is an array function, not in the profile yet.`, CQL2_CONFORMANCE.arrays,
       );
     }
     if (op === "casei" || op === "accenti" || ARITHMETIC.has(op)) {
@@ -229,7 +229,7 @@ class Checker {
       "unknown-operator", path,
       `"${op}" is not a CQL2 operator. CQL2 would read it as a call to a custom function, which needs the ` +
         "Functions class.",
-      OTHER_CONFORMANCE.functions,
+      CQL2_CONFORMANCE.functions,
     );
   }
 
@@ -357,7 +357,7 @@ class Checker {
   /** Reports an operand outside the profile, naming the class it would need, or invalid if it's not CQL2 at all. */
   notInProfile(x: unknown, path: string, where: string): void {
     const op = opOf(x);
-    const { propertyProperty, arithmetic, functions, arrays, temporal } = OTHER_CONFORMANCE;
+    const { propertyProperty, arithmetic, functions, arrays, temporal } = CQL2_CONFORMANCE;
     if (isPropertyRef(x)) {
       this.report(
         "outside-profile", path,

@@ -4,13 +4,32 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.12.0] - 2026-11-01
+
+The last breaking changes before 1.0.0, and what 1.0.0 will keep stable.
+
+### Changed (breaking)
+
+- **Node 22 or later** (`engines`). Node 20 reached its end of life on 2026-04-30; stay on 0.11.x for it.
+- **`OTHER_CONFORMANCE` is removed,** for `CQL2_CONFORMANCE`, under the same keys:
+  `OTHER_CONFORMANCE.temporal` → `CQL2_CONFORMANCE.temporal`. It listed the classes not implemented yet, so it would
+  have lost a key with each class implemented. The classes not implemented are those of `CQL2_CONFORMANCE` that
+  `CONFORMANCE` doesn't hold.
+
+### Added
+
+- `CQL2_CONFORMANCE`: CQL2 1.0's twelve filter classes, fixed as the standard is (not the two encoding classes).
+  `CONFORMANCE`, the implemented ones, takes its values from it.
+- **The stability policy** (README, "Versioning and stability"): what 1.0.0 keeps stable, and what minor versions add
+  as the package grows (filter shapes, codes, classes, dialects), so code keeps a default case. The README's Validate
+  section tells a server to pass the classes it declares.
 
 ### Changed
 
 - `SqlColumn.covering` on a DuckDB table with an R-tree index: the documented failure is DuckDB 2.0's alone. DuckDB
   1.4 and 1.5 (DuckDB-WASM's engines) answer such a query exactly, still through the index; leaving the covering out
   stays the advice, as the index is faster on its own. The canary expects the failure on DuckDB 2.0 and later only.
+  Reported upstream: [duckdb-spatial #906](https://github.com/duckdb/duckdb-spatial/issues/906).
 
 ## [0.11.0] - 2026-11-01
 
@@ -365,6 +384,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[0.12.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.9.0...v0.9.1
