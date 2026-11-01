@@ -1,0 +1,26 @@
+# The duckdb dialect's spatial suite on the newest DuckDB engines (scripts/check-duckdb.mjs), weekly and by hand: what
+# changed against the pinned engines, and what to update. A failed run is GitHub's usual email.
+name: DuckDB, newest engines
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-duckdb:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The timing canary only reports here: its 3x threshold is measured on macOS, Linux shows 1.2-1.9x.
+      - run: npm run check:duckdb
+        env:
+          CQL2_CANARY_TIMING: "0"

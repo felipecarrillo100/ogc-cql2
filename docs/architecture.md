@@ -345,7 +345,7 @@ each), and canaries state what the dialect relies on. Each fails when a DuckDB r
 | plain `ST_GeomFromWKB` fails the query on bytes that aren't WKB | `TRY(…)` may go |
 | DuckDB 2.0 and later fail on a covering for a table with an R-tree index (1.4 and 1.5 answer it) | lift the limitation (`SqlColumn.covering`, README) |
 | DuckDB 2.0 skips no row group of a GeoParquet 1.1 file from its covering by itself | the covering's comparisons may become unnecessary |
-| on DuckDB 2.0, `ST_Intersects` alone is more than 3× slower than with `ST_Intersects_Extent`, without an index (a timing: it only reports the ratio, and fails on it only with `CQL2_CANARY_TIMING=1`, so the machine's load can't fail a test run) | the gap closed: no engine option needed. If it persists through releases, it is the evidence for an explicit engine option (none is planned; `toSql` never sees the connection, and the runtime isn't the engine version) |
+| on DuckDB 2.0, `ST_Intersects` alone is more than 3× slower than with `ST_Intersects_Extent`, without an index (a timing: it only reports the ratio, and fails on it only with `CQL2_CANARY_TIMING=1`, so the machine's load can't fail a test run. The 3× is macOS's: Linux arm64 measured 1.2–1.9× on 2026-11-01, on DuckDB 1.5.4 and 2.0, so the weekly CI run only reports it) | the gap closed: no engine option needed. If it persists through releases, it is the evidence for an explicit engine option (none is planned; `toSql` never sees the connection, and the runtime isn't the engine version) |
 
 When DuckDB-WASM ships a newer engine, the `@duckdb/node-api-1.4` devDependency moves to that engine.
 
@@ -507,6 +507,18 @@ filter selects). The server never knows which store it talks to.
     `STRASSE`), `IN` with dates or timestamps (a bug in cql2-rs: its `=` agrees), normalization (cql2-rs has none),
     and precision below a millisecond. No bug of `ogc-cql2` was found. Both accept the same 47 of the standard's 109
     examples (those in the profile).
+- **CI** (GitHub Actions, checks only: it never publishes, and there is no npm token on GitHub):
+  - **`.github/workflows/ci.yml`,** on every push to `main` and every pull request:
+    - typecheck, the tests (SpatiaLite included), the build (attw, publint), `check:imports`, `check:bundle` and the
+      playground's build, on Node 22 and 24, Linux amd64 and arm64 (`ubuntu-26.04`, `ubuntu-26.04-arm`);
+    - demo-server's tests against PostgreSQL + PostGIS (`imresamu/postgis:18-3.6`, multi-arch: the official
+      `postgis/postgis` image is amd64 only), loaded with `data/load-postgres.sh`.
+    - Ubuntu 26.04, because 24.04's SpatiaLite is built with GEOS 3.12, older than the 3.13 that GeometryCollection
+      literals need.
+  - **`.github/workflows/duckdb.yml`:** `check:duckdb` every Monday, and by hand. A failed run says what to update,
+    e.g. when DuckDB 2.0 no longer fails on a covering on an R-tree-indexed table (duckdb-spatial #906).
+  - **Local, before a release:** the PostGIS version matrix (PostgreSQL 13–18, PostGIS 3.1–3.7, amd64 and arm64), the
+    Chrome checks (DuckDB-WASM, `fromText`) and mutations.
 
 ## Build and tooling
 

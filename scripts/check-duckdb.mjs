@@ -2,7 +2,8 @@
 // changed against the pinned ones and what to update. The engines: the newest `@duckdb/node-api`, and the engine
 // inside the newest DuckDB-WASM (`latest` and `next`), each through the `@duckdb/node-api` of the same engine. All
 // installed in a temporary folder, removed at the end: package.json and the lock file are never touched. Exits with
-// 1 when a tested engine fails a test; the timing canary enforces its threshold here (CQL2_CANARY_TIMING=1).
+// 1 when a tested engine fails a test; the timing canary enforces its threshold here (CQL2_CANARY_TIMING=1), unless
+// CQL2_CANARY_TIMING=0 is set: the threshold is the Mac's, and Linux runners measure a smaller gap.
 //
 // Usage: npm run check:duckdb (needs the network; run it before a release, or monthly)
 import { execFileSync, spawnSync } from "node:child_process";
@@ -69,7 +70,7 @@ function runSuite(engine, pkg) {
   const out = join(root, `results-${engine}.json`);
   spawnSync("npx", ["vitest", "run", "test/sql-spatial-duckdb-check.test.ts", "--reporter=json", `--outputFile=${out}`], {
     stdio: "ignore",
-    env: { ...process.env, CQL2_DUCKDB_ENGINE: join(pkg, "lib", "index.js"), CQL2_DUCKDB_VERSION: engine, CQL2_DUCKDB_LINE: lineOf(engine), CQL2_CANARY_TIMING: "1" },
+    env: { ...process.env, CQL2_DUCKDB_ENGINE: join(pkg, "lib", "index.js"), CQL2_DUCKDB_VERSION: engine, CQL2_DUCKDB_LINE: lineOf(engine), CQL2_CANARY_TIMING: process.env.CQL2_CANARY_TIMING ?? "1" },
   });
   const results = JSON.parse(readFileSync(out, "utf8")).testResults.flatMap((f) => f.assertionResults);
   return results.map((t) => ({
