@@ -4,6 +4,14 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Documented
+
+- SpatiaLite needs GEOS 3.13 or later for a GeometryCollection literal (README, `SqlOptions.spatialite`): with GEOS
+  3.12 (Ubuntu 24.04's build), S_TOUCHES and S_OVERLAPS against a collection of a point and a line select other rows
+  than `evaluate`. Found by CI's first run on Linux; GEOS 3.14 (Ubuntu 26.04) and 3.15 agree.
+
 ## [0.12.0] - 2026-11-01
 
 The last breaking changes before 1.0.0, and what 1.0.0 will keep stable.

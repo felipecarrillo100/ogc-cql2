@@ -61,7 +61,7 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
     } catch (error) {
       spatial = `DuckDB's spatial extension can't load: ${(error as Error).message}`;
     }
-  });
+  }, 120_000); // INSTALL downloads the extension on a fresh machine (CI, a new clone), beside the other test files
   afterAll(() => {
     duck?.closeSync();
     rmSync(dir, { recursive: true, force: true });

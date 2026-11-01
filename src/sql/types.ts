@@ -54,7 +54,7 @@ export interface SqlOptions {
   /**
    * `sqlite`: SpatiaLite is loaded on the connection (`mod_spatialite`), so the Spatial Functions class (S_WITHIN,
    * S_TOUCHES, …) is translated, GEOS deciding. Without it the class is refused (`unsupported`); S_INTERSECTS needs
-   * no SpatiaLite.
+   * no SpatiaLite. A GeometryCollection literal needs SpatiaLite built with GEOS 3.13 or later.
    */
   readonly spatialite?: boolean;
 }

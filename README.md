@@ -256,7 +256,9 @@ const rows = db.prepare(`SELECT * FROM places WHERE ${where}`).all(...params);
 - **The other relations (Spatial Functions) need SpatiaLite:** load `mod_spatialite` on the connection and pass
   `spatialite: true`; GEOS then decides each relation, exactly as `evaluate` with GEOS does. SpatiaLite reads
   GeoPackage blobs itself; anything it can't read (WKB, empty geometries) goes through `cql2_wkt`, the package's own
-  reader. The R-tree applies as for `s_intersects`.
+  reader. The R-tree applies as for `s_intersects`. A GeometryCollection literal needs SpatiaLite built with GEOS 3.13
+  or later: with GEOS 3.12 (Ubuntu 24.04's), S_TOUCHES and S_OVERLAPS against a collection of a point and a line
+  select other rows than `evaluate`.
 
   ```js
   const db = new DatabaseSync("places.gpkg", { allowExtension: true });
@@ -627,7 +629,7 @@ Older versions may well work, but haven't been tested.
 | PostgreSQL + PostGIS (GEOS) | 13 / 3.1.4 (3.9.0), 15 / 3.3.4 (3.9.0), 16 / 3.4.3 (3.9.0), 17 / 3.5.2 (3.9.0), 18 / 3.6.4 (3.14.1) on amd64; 17 / 3.5.3 (3.11.1), 17.10 / 3.5.6 (3.13.1), 18 / 3.6.1 (3.13.1), 18 / 3.7.0 (3.15.0) on arm64 | the spatial filters on all of them; every other filter on 17.10 / 3.5.6. A column holding GeometryCollections: GEOS 3.13 or later |
 | `pg` (node-postgres) | 8.23.1 | |
 | SQLite (`node:sqlite`) | 3.51.3 (Node 24.15), 3.53.4 (Node 22.23) | GeoPackage 1.4 |
-| SpatiaLite | 5.1.0 (GEOS 3.15.0) | for Spatial Functions in `sqlite` |
+| SpatiaLite | 5.1.0 (GEOS 3.15.0, 3.14.1) | for Spatial Functions in `sqlite`; GEOS 3.13 or later for GeometryCollection literals |
 | DuckDB, Node (`@duckdb/node-api`) | 2.0.0, 1.5.4, 1.4.3 | 1.5.4 by `npm run check:duckdb`, which tests the newest releases |
 | DuckDB-WASM (`@duckdb/duckdb-wasm`) | 1.32.0 (DuckDB 1.4.3), 1.33.1-dev57.0 (DuckDB 1.5.4) | with the spatial extension |
 | geos.js (as `spatialEngine`) | 0.1.5 (GEOS 3.14.0) | |
