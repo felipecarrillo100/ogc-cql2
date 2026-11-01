@@ -2,15 +2,26 @@
 
 All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
+"Versioning and stability"); before it, a minor version could change the API.
 
-## [Unreleased]
+## [1.0.0] - 2026-11-01
+
+The API freeze: 0.12.0's API, now kept stable under the policy in the README's "Versioning and stability". From here
+on, a breaking change needs a major version; minor versions add (filter shapes, codes, classes, dialects). No change to
+any function, option or type since 0.12.0, and none to what any filter selects.
 
 ### Documented
 
 - SpatiaLite needs GEOS 3.13 or later for a GeometryCollection literal (README, `SqlOptions.spatialite`): with GEOS
   3.12 (Ubuntu 24.04's build), S_TOUCHES and S_OVERLAPS against a collection of a point and a line select other rows
-  than `evaluate`. Found by CI's first run on Linux; GEOS 3.14 (Ubuntu 26.04) and 3.15 agree.
+  than `evaluate`. Found while setting up CI on Linux; GEOS 3.14 (Ubuntu 26.04) and 3.15 agree.
+
+### Tested
+
+- Continuous integration on GitHub Actions (checks only: nothing is published from it): the typecheck, the tests, the
+  build and its checks on Node 22 and 24, Linux amd64 and arm64, and demo-server's tests against PostgreSQL + PostGIS,
+  on every push; the newest DuckDB engines weekly.
 
 ## [0.12.0] - 2026-11-01
 
@@ -392,6 +403,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[1.0.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.12.0...v1.0.0
 [0.12.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.9.1...v0.10.0

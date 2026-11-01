@@ -590,9 +590,8 @@ An invalid filter, or one naming a property the collection doesn't have, is refu
 
 ## Versioning and stability
 
-From 1.0.0 the package follows [semantic versioning](https://semver.org/): a breaking change comes only in a major
-version, and something is removed only after a minor version has deprecated it. Until then, a minor version may still
-change the API; the CHANGELOG says how.
+Since 1.0.0 the package follows [semantic versioning](https://semver.org/): a breaking change comes only in a major
+version, and something is removed only after a minor version has deprecated it.
 
 **Stable:**
 - the entry points and the signatures of their functions;

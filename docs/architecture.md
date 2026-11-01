@@ -1,6 +1,6 @@
 # Architecture
 
-The design as of 0.12.0. For the reasons behind it, see [vision.md](vision.md).
+The design as of 1.0.0. For the reasons behind it, see [vision.md](vision.md).
 
 ## One format inside: CQL2-JSON
 
@@ -373,7 +373,7 @@ index; 2.0.0 still fails. The canary expects the failure from DuckDB 2.0 on only
 
 ### Stability
 
-What 1.0.0 will keep stable, and what minor versions add as the package grows, is the README's "Versioning and
+What 1.0.0 keeps stable, and what minor versions add as the package grows, is the README's "Versioning and
 stability". The design follows from it:
 - **A new class widens; it never moves or removes anything.** `Cql2Filter`, its arguments, the problem and error
   codes and `CONFORMANCE` gain members; `CQL2_CONFORMANCE` is fixed from the start, which is why there is no list of
@@ -555,7 +555,7 @@ checks that they agree.
 | 0.10.0 | **Spatial Functions** (the other seven relations, DE-9IM): an engine hook in `evaluate` (GEOS through geos.js recommended), PostGIS, DuckDB, and **SpatiaLite** as an option of the `sqlite` dialect; the standard's Table 14 on full-precision Natural Earth; one reference, GEOS; the README's Tested versions |
 | 0.11.0 | **`ogc-cql2/parse`:** `fromText`, CQL2-text → CQL2-JSON (the whole grammar, then the profile check), for servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default; its own entry point, so web apps don't load it; tested on the standard's 120 text examples, on reading back `toText`'s output, and against cql2-rs and pycql2. `toText` refuses characters a string can't hold and quotes names holding U+1680. demo-server accepts text filters |
 | 0.12.0 | **Before the freeze:** Node 22 or later (Node 20's end of life); `CQL2_CONFORMANCE` (all twelve filter classes, fixed) in place of `OTHER_CONFORMANCE`; the stability policy (README, "Versioning and stability") |
-| 1.0.0 | **The API freeze:** the same code as 0.12.x, once CI runs the proof routine and the API has seen real use |
+| 1.0.0 | **The API freeze:** 0.12.0's API, kept stable under the README's "Versioning and stability"; CI (GitHub Actions) runs the proof routine on every push, and the newest DuckDB engines weekly |
 | next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
 | 1.x.x | **Property-Property Comparisons** (a property on both sides); **more SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
