@@ -431,8 +431,9 @@ open().then(({ db, connection }) => {
   ```
 
   The comparisons are used only where the filter isn't negated: negate the filter (`{ op: "not" }`), never the SQL it
-  gives (`NOT (…)`). Leave `covering` out for a table with an R-tree index on the geometry, which is faster on its own:
-  DuckDB 2.0 fails on such a query with an internal error.
+  gives (`NOT (…)`). Leave `covering` out for a table with an R-tree index on the geometry: the index is faster on its
+  own. DuckDB 1.4 and 1.5 (also in DuckDB-WASM) answer such a query exactly; DuckDB 2.0 fails on it with an internal
+  error.
 - **The other relations (Spatial Functions):** `ST_Equals`, `ST_Touches`, `ST_Within`, `ST_Overlaps`, `ST_Crosses`,
   `ST_Contains` (exact in DuckDB 1.4, 1.5 and 2.0, each using an R-tree index), with the covering's comparisons first
   as for `s_intersects`; `s_disjoint` as the negation of `s_intersects`.

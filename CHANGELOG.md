@@ -4,6 +4,14 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0.0, a minor version may change the API.
 
+## [Unreleased]
+
+### Changed
+
+- `SqlColumn.covering` on a DuckDB table with an R-tree index: the documented failure is DuckDB 2.0's alone. DuckDB
+  1.4 and 1.5 (DuckDB-WASM's engines) answer such a query exactly, still through the index; leaving the covering out
+  stays the advice, as the index is faster on its own. The canary expects the failure on DuckDB 2.0 and later only.
+
 ## [0.11.0] - 2026-11-01
 
 Reading CQL2-text: `ogc-cql2/parse`, for servers that receive the `filter` parameter of OGC API Features Part 3 as
