@@ -14,7 +14,7 @@ JavaScript and TypeScript. It works on filters in the standard's JSON encoding, 
   DuckDB (GeoParquet and other files, in Node and in the browser) that selects exactly what `evaluate` selects. It
   builds the SQL; your own driver runs it.
 
-It runs in browsers and in Node 20 or later and has no dependencies. Each part is its own entry point, so an
+It runs in browsers and in Node 22 or later and has no dependencies. Each part is its own entry point, so an
 application loads only what it uses.
 
 ```sh
@@ -90,6 +90,9 @@ import { requiredConformance, validate } from "ogc-cql2/validate";
 validate(filter, { conformance: [CONFORMANCE.basic] });
 requiredConformance(filter); // the classes the filter uses
 ```
+
+Without `conformance`, every class the package implements is allowed, and that set grows with new versions. A server
+passes the classes it declares, so an upgrade never accepts a filter the server doesn't serve.
 
 To check a filter against a collection, pass its **queryables** (OGC API Features Part 3): the `properties` of a
 queryables response, as it comes. A property that isn't one of them is `unknown-property`; a literal of another type
@@ -583,6 +586,35 @@ them into PostgreSQL). Its routes:
 An invalid filter, or one naming a property the collection doesn't have, is refused with HTTP 400 and the problems as
 `application/problem+json`. Neither the page nor the server is part of the npm package.
 
+## Versioning and stability
+
+From 1.0.0 the package follows [semantic versioning](https://semver.org/): a breaking change comes only in a major
+version, and something is removed only after a minor version has deprecated it. Until then, a minor version may still
+change the API; the CHANGELOG says how.
+
+**Stable:**
+- the entry points and the signatures of their functions;
+- the options objects, which only gain optional keys;
+- `Cql2Error` (`name`, `code`, `path`, `details`), the meaning of each code, `details.problems` and
+  `details.position`;
+- `toSql`'s result (`where`, `params`) and each dialect's placeholders;
+- the `SpatialEngine` interface;
+- `CQL2_CONFORMANCE` (all of CQL2 1.0's filter classes, fixed as the standard is) and each key of `CONFORMANCE`.
+
+**Added in minor versions, as the package grows:**
+- filter shapes the standard allows, as a class is implemented: new members of `Cql2Filter`, wider arguments (a
+  property on both sides of a comparison, for example);
+- new codes in `Cql2ErrorCode`, `ProblemCode` and `TextProblemCode`;
+- new keys in `CONFORMANCE`;
+- new SQL dialects (`SqlDialect`), keys in `SqlColumn` and the options, and helpers such as `sqliteFunctions`.
+
+So code that reads filters, codes or dialects keeps a default case for what it doesn't know. And `validate`'s default
+`conformance` (every implemented class) accepts a newly implemented class after an upgrade: a server passes the
+classes it declares (see [Validate](#validate)).
+
+**Not covered:** messages (test the codes), the SQL text itself (what it selects is covered), and anything the entry
+points don't export.
+
 ## Tested versions
 
 "Tested" means the differential tests (the same answers as `evaluate`, filter by filter) ran on that exact version.
@@ -590,7 +622,7 @@ Older versions may well work, but haven't been tested.
 
 | Component | Tested | Notes |
 |---|---|---|
-| Node.js | 20.20.2, 22.23.4, 24.15.0 | 20 or later. Node 20 has no `node:sqlite`: use another SQLite driver there |
+| Node.js | 22.23.4, 24.15.0 | 22 or later. `node:sqlite` needs no flag from Node 22.13 |
 | Browsers | Chrome 156 | the DuckDB-WASM checks; `fromText` on the standard's text examples |
 | PostgreSQL + PostGIS (GEOS) | 13 / 3.1.4 (3.9.0), 15 / 3.3.4 (3.9.0), 16 / 3.4.3 (3.9.0), 17 / 3.5.2 (3.9.0), 18 / 3.6.4 (3.14.1) on amd64; 17 / 3.5.3 (3.11.1), 17.10 / 3.5.6 (3.13.1), 18 / 3.6.1 (3.13.1), 18 / 3.7.0 (3.15.0) on arm64 | the spatial filters on all of them; every other filter on 17.10 / 3.5.6. A column holding GeometryCollections: GEOS 3.13 or later |
 | `pg` (node-postgres) | 8.23.1 | |

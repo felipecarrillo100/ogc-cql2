@@ -1,4 +1,4 @@
-import { CONFORMANCE, CQL2_VERSION, OTHER_CONFORMANCE, type Queryable } from "ogc-cql2";
+import { CONFORMANCE, CQL2_CONFORMANCE, CQL2_VERSION, type Queryable } from "ogc-cql2";
 import { toEvaluator, type Truth } from "ogc-cql2/evaluate";
 import { textProblem, toText } from "ogc-cql2/text";
 import { requiredConformance, validate, type Problem } from "ogc-cql2/validate";
@@ -15,18 +15,18 @@ function el(tag: string, text?: string, className?: string): HTMLElement {
 }
 
 const CLASS_NAMES: Record<string, string> = {
-  [CONFORMANCE.basic]: "Basic CQL2",
-  [CONFORMANCE.advancedComparison]: "Advanced Comparison Operators",
-  [CONFORMANCE.caseInsensitive]: "Case-insensitive Comparison",
-  [CONFORMANCE.accentInsensitive]: "Accent-insensitive Comparison",
-  [CONFORMANCE.basicSpatial]: "Basic Spatial Functions",
-  [CONFORMANCE.basicSpatialPlus]: "Basic Spatial Functions with additional Spatial Literals",
-  [CONFORMANCE.spatial]: "Spatial Functions",
-  [OTHER_CONFORMANCE.temporal]: "Temporal Functions",
-  [OTHER_CONFORMANCE.arrays]: "Array Functions",
-  [OTHER_CONFORMANCE.propertyProperty]: "Property-Property Comparisons",
-  [OTHER_CONFORMANCE.functions]: "Custom Functions",
-  [OTHER_CONFORMANCE.arithmetic]: "Arithmetic Expressions",
+  [CQL2_CONFORMANCE.basic]: "Basic CQL2",
+  [CQL2_CONFORMANCE.advancedComparison]: "Advanced Comparison Operators",
+  [CQL2_CONFORMANCE.caseInsensitive]: "Case-insensitive Comparison",
+  [CQL2_CONFORMANCE.accentInsensitive]: "Accent-insensitive Comparison",
+  [CQL2_CONFORMANCE.basicSpatial]: "Basic Spatial Functions",
+  [CQL2_CONFORMANCE.basicSpatialPlus]: "Basic Spatial Functions with additional Spatial Literals",
+  [CQL2_CONFORMANCE.spatial]: "Spatial Functions",
+  [CQL2_CONFORMANCE.temporal]: "Temporal Functions",
+  [CQL2_CONFORMANCE.arrays]: "Array Functions",
+  [CQL2_CONFORMANCE.propertyProperty]: "Property-Property Comparisons",
+  [CQL2_CONFORMANCE.functions]: "Custom Functions",
+  [CQL2_CONFORMANCE.arithmetic]: "Arithmetic Expressions",
 };
 const nameOf = (uri: string): string => CLASS_NAMES[uri] ?? uri.split("/").pop() ?? uri;
 
