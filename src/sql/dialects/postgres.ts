@@ -123,6 +123,9 @@ export function likePattern(pattern: string): string {
  * - `cql2_day(text)`: a `YYYY-MM-DD` text that exists, else NULL;
  * - `cql2_instant(text)`: an ISO 8601 date-time with `Z` or an offset that exists, as a timestamptz truncated to
  *   milliseconds, else NULL. The same strict rules as `evaluate`: hours 00–23, minutes and seconds 00–59.
+ * - `cql2_arithmetic(op, a, b)` (since 1.2.0): `a op b` of two doubles, exactly as `evaluate` computes it, never an
+ *   error: PostgreSQL's own errors (division by zero, a power outside its domain, overflow) are NULL, as `evaluate`'s
+ *   non-finite results are, and underflow is the 0 it rounds to.
  */
 export function postgresFunctions(schema: string): string {
   const s = quote(schema);
@@ -165,6 +168,36 @@ BEGIN
   PERFORM make_date(substr(t, 1, 4)::int, substr(t, 6, 2)::int, substr(t, 9, 2)::int);
   RETURN t;
 EXCEPTION WHEN others THEN RETURN NULL;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION ${s}.cql2_arithmetic(op text, a double precision, b double precision) RETURNS double precision
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+DECLARE
+  r double precision;
+BEGIN
+  r := CASE op
+    WHEN '+' THEN a + b
+    WHEN '-' THEN a - b
+    WHEN '*' THEN a * b
+    WHEN '/' THEN a / b
+    WHEN 'div' THEN trunc(a / b)
+    WHEN '%' THEN a - b * trunc(a / b)
+    WHEN '^' THEN CASE WHEN a = 1 OR (a = -1 AND abs(b) = 'Infinity') THEN 1 ELSE power(a, b) END
+  END;
+  RETURN CASE WHEN r IN ('Infinity', '-Infinity', 'NaN') THEN NULL ELSE r END;
+EXCEPTION
+  WHEN division_by_zero OR invalid_argument_for_power_function THEN
+    RETURN NULL;
+  WHEN numeric_value_out_of_range THEN
+    -- Told apart by the operands, not the message (which lc_messages translates): an overflow is infinite (NULL);
+    -- an underflow is 0, and for % the dividend (a / b rounded to 0).
+    RETURN CASE
+      WHEN op = '*' AND abs(a) < 1 AND abs(b) < 1 THEN 0
+      WHEN op IN ('/', 'div') AND abs(a) < abs(b) THEN 0
+      WHEN op = '%' AND abs(a) < abs(b) THEN a
+      WHEN op = '^' AND (abs(a) < 1) = (b > 0) THEN 0
+    END;
 END
 $f$;
 
@@ -301,6 +334,8 @@ function postgresPair(relation: "s_intersects" | MatrixRelation, a: PairSide, b:
 
 export const postgres: Dialect = {
   placeholder: (n) => `$${n}`,
+  number: (value, param) => `${param(value)}::double precision`,
+  arithmetic: (op, a, b, fn) => `${fn("cql2_arithmetic")}('${op}', ${a}, ${b})`,
   true: "TRUE",
   false: "FALSE",
   never: "NULL::boolean",

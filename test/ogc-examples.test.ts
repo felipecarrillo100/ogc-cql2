@@ -36,6 +36,9 @@ const IN_PROFILE = new Set([
   "example47", "example48", "example50", "example51", "example52",
   // Property-Property Comparisons, since 1.1.0: the geometry literal first, which Permission 6 let a server refuse.
   "clause7_16", "example46", "example49", "example83", "example84",
+  // Arithmetic Expressions, since 1.2.0.
+  "clause6_02c", "clause7_19", "example72", "example73", "example74", "example75", "example76", "example77", "example78",
+  "example85",
 ]);
 
 /**
@@ -47,9 +50,21 @@ const isSpatial = (filter: unknown) => JSON.stringify(filter).includes('"op":"s_
 initSync({ module: readFileSync(new URL("../node_modules/cql2-wasm/cql2_wasm_bg.wasm", import.meta.url)) });
 
 /** A CQL2-text read with cql2-rs, in canonical form. */
+/**
+ * cql2-rs 0.5.6 reads a signed number, `-1`, as `-1 * 1` (`{"op": "*", "args": [-1, 1]}`), in the standard's texts
+ * too (measured): its multiplications by −1 of a number are folded back into the number, which is what the text means.
+ */
+const signedNumbers = (x: unknown): unknown => {
+  if (Array.isArray(x)) return x.map(signedNumbers);
+  if (typeof x !== "object" || x === null) return x;
+  const { op, args } = x as { op?: unknown; args?: unknown[] };
+  if (op === "*" && args?.length === 2 && args[0] === -1 && typeof args[1] === "number") return -args[1];
+  return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, signedNumbers(v)]));
+};
+
 function readWithCql2rs(text: string): string {
   const json: unknown = parseText(text).to_json();
-  return canonical(typeof json === "string" ? JSON.parse(json) : json);
+  return canonical(signedNumbers(typeof json === "string" ? JSON.parse(json) : json));
 }
 
 /**

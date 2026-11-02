@@ -1,7 +1,7 @@
 /**
- * The standard's Conformance Test 49 for Property-Property Comparisons (OGC 21-065r2, Annex A.12, Table 16): its
- * predicates and expected counts, and its test data. Run by `evaluate` (property-property.test.ts), SQLite and
- * both DuckDB engines.
+ * The standard's tests on its test data (OGC 21-065r2): Conformance Test 49 for Property-Property Comparisons (Annex
+ * A.12, Table 16) and Conformance Test 53 for Arithmetic Expressions (Annex A.14, Table 17), their predicates and
+ * expected counts, and the data. Run by `evaluate`, SQLite and both DuckDB engines.
  */
 import { readFileSync } from "node:fs";
 
@@ -33,3 +33,20 @@ export const TABLE_16: [string, number][] = [
 /** A SQL literal of a place's value: text quoted, numbers as they are, NULL. */
 export const sqlLiteral = (value: unknown): string =>
   value === null || value === undefined ? "NULL" : typeof value === "string" ? `'${value.replaceAll("'", "''")}'` : String(value);
+
+/** Table 17 of the standard, as it writes the predicates in CQL2-text, with their expected counts. */
+export const TABLE_17: [string, number][] = [
+  ["pop_other=1038280+8", 1],
+  ["pop_other>=1038290-2*2^0", 123],
+  ["pop_other>1038290-20/10", 122],
+  ["pop_other>1038290-21 div 10", 122],
+  ["pop_other>1038290-5%2", 122],
+  ["pop_other<=1038200+8*11", 121],
+  ["pop_other<1038280+2^3", 120],
+  ["pop_other<>1038290-2^1", 242],
+  ["pop_other between 4000000/4 and (3*(900000+100000))", 75],
+  ["pop_other not between 4000000/4 and (3*(900000+100000))", 168],
+  ["pop_other in (1000000+38288,1000000+600000+11692,3*1000000+13258,3*1000000+13257,30*100000+13259)", 3],
+  ["pop_other not in (1000000+38288,1000000+600000+11692,3*1000000+13258,3*1000000+13257,30*100000+13259)", 240],
+  ["1038280+8=pop_other", 1],
+];

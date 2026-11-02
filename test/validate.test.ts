@@ -64,7 +64,6 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["= of three", { op: "=", args: [p("a"), 1, 2] }, "wrong-arguments", "/args"],
   ["property not a string", { op: "=", args: [{ property: 1 }, 1] }, "wrong-arguments", "/args/0/property"],
   ["function on the left", { op: "=", args: [{ op: "upper", args: [p("a")] }, "X"] }, "outside-profile", "/args/0"],
-  ["arithmetic on the right", { op: ">", args: [p("a"), { op: "+", args: [1, 2] }] }, "outside-profile", "/args/1"],
   ["accenti inside accenti", { op: "=", args: [{ op: "accenti", args: [{ op: "accenti", args: [p("a")] }] }, "é"] }, "outside-profile", "/args/0/args/0"],
   ["accenti of a number", { op: "=", args: [p("a"), { op: "accenti", args: [5] }] }, "type-mismatch", "/args/1/args/0"],
   ["nested casei", { op: "=", args: [casei(casei(p("a"))), "x"] }, "outside-profile", "/args/0/args/0"],

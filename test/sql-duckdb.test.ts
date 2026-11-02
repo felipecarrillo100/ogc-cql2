@@ -12,7 +12,7 @@ import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import { duckdbFunctions, duckdbValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { validate } from "ogc-cql2/validate";
-import { casei, generateFilters, generatePropertyFilters, p } from "./corpus.ts";
+import { casei, generateArithmeticFilters, generateFilters, generatePropertyFilters, p } from "./corpus.ts";
 
 // --- The table -------------------------------------------------------------------------------------------------------
 
@@ -196,6 +196,37 @@ describe("Property-Property Comparisons: DuckDB selects exactly what evaluate se
     const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
     expect(results.size).toBeGreaterThan(150);
   });
+});
+
+describe("Arithmetic Expressions: DuckDB selects exactly what evaluate selects", () => {
+  const filters = generateArithmeticFilters(Object.keys(COLUMNS));
+
+  // A measurement, not a gate: a power whose exact result isn't a double is the engine's pow, which may differ from
+  // V8's in the last bit (README, "Arithmetic"); a comparison exactly on that value may then differ.
+  it("non-exact powers: how many comparisons differ from evaluate (reported)", async (context) => {
+    const powers = Object.keys(COLUMNS).flatMap((name) => [0.5, 1.5, -0.5, 1 / 3].flatMap((e) =>
+      [">", "<", "="].map((op) => ({ op, args: [{ op: "^", args: [p(name), e] }, { op: "^", args: [p(name), e] }] }) as unknown as Cql2Filter)));
+    let differ = 0;
+    for (const filter of powers) if (JSON.stringify(await fromSql(plain, filter)) !== JSON.stringify(fromMemory(filter))) differ++;
+    context.annotate(`${differ} of ${powers.length} comparisons of non-exact powers differ from evaluate`);
+  });
+  const fromMemory = (filter: Cql2Filter): number[] =>
+    served.filter(toPredicate(filter, { getProperty: (row, name) => row[name] })).map((r) => r.id as number);
+
+  for (const [label, connection] of [["plain settings", () => plain], ["nocase collation, New York time zone", () => hostile]] as const) {
+    it(`${filters.length} filters on ${ROWS.length} rows (${label})`, async () => {
+      expect(filters.length).toBeGreaterThan(3000);
+      const differences: string[] = [];
+      for (const filter of filters) {
+        const sql = await fromSql(connection(), filter);
+        const memory = fromMemory(filter);
+        if (JSON.stringify(sql) !== JSON.stringify(memory)) {
+          differences.push(`${JSON.stringify(filter)}\n    duckdb ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
+        }
+      }
+      expect(differences.slice(0, 20).join("\n")).toBe("");
+    }, 120_000);
+  }
 });
 
 // --- validate with queryables against evaluate -------------------------------------------------------------------

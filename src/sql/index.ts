@@ -18,12 +18,13 @@ import { unwrap } from "../core/folds.js";
 import { heldKind, type HeldKind } from "../core/queryables.js";
 import { CONVERSE } from "../core/relate.js";
 import type {
-  Cql2Filter, FoldedString, Operand, PropertyRef, ScalarLiteral, SpatialLiteral, SpatialOperator, StringSubject,
+  ArithmeticOperand, Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, SpatialLiteral, SpatialOperator, StringSubject,
 } from "../core/types.js";
 import { toEvaluator } from "../evaluate/index.js";
 import { intersects, literalParts } from "../evaluate/spatial.js";
 import { foldKey, instantOf } from "../evaluate/strings.js";
 import { NOT_IN_SQL, refuseUnsupported } from "../core/unsupported.js";
+import { compute, isArithmetic, readsProperty } from "../core/arithmetic.js";
 import { CONFORMANCE } from "../core/conformance.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
 import { duckdb } from "./dialects/duckdb.js";
@@ -46,9 +47,12 @@ const MIRROR: Readonly<Record<string, string>> = { "=": "=", "<>": "<>", "<": ">
 /** What two properties compared with each other can hold, when their queryables say. */
 const COMPARABLE: ReadonlySet<HeldKind> = new Set(["text", "number", "boolean", "date", "instant"]);
 
+/** A side that reads the table, an arithmetic expression with a property in it included. */
+const readsAny = (x: ArithmeticOperand): boolean => (isArithmetic(x) ? readsProperty(x) : reads(x));
+
 /** A side that reads the table: a property, or CASEI / ACCENTI of one (not of a string). */
-const reads = (x: Operand): x is StringSubject =>
-  typeof x === "object" && ("property" in x || ("op" in x && typeof unwrap(x as FoldedString).inner !== "string"));
+const reads = (x: ArithmeticOperand): x is StringSubject =>
+  typeof x === "object" && !isArithmetic(x) && ("property" in x || ("op" in x && typeof unwrap(x as FoldedString).inner !== "string"));
 
 /**
  * Builds the `WHERE` condition and its values.
@@ -115,10 +119,39 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const constant = (f: Cql2Filter): string => (toEvaluator(f)(undefined) === true ? dialect.true : dialect.false);
 
   /**
-   * `a op b`, each side a property (or CASEI / ACCENTI of one) or a literal. A literal on the left is the property on
-   * the left with the operator mirrored, so a property against a literal is always written one way.
+   * A number for arithmetic (Arithmetic Expressions): a constant (an expression of literals, computed here as
+   * `evaluate` computes it; `null` for NULL), or SQL built when `emit` is called, so that its parameters are added in
+   * the order they stand in the SQL, and only once the whole expression is known not to be NULL.
    */
-  const comparison = (a: Operand, op: string, b: Operand, pathA: string, pathB: string): string => {
+  type Num = { readonly value: number | null } | { readonly emit: () => string };
+  const emit = (n: Num): string => ("emit" in n ? n.emit() : dialect.number(n.value!, param));
+  /** A number operand; `undefined` for a column that can hold no number (NULL). */
+  const numeric = (x: ArithmeticOperand, path: string): Num | undefined => {
+    if (typeof x === "number") return { value: x };
+    if (isArithmetic(x)) {
+      if (!readsProperty(x)) return { value: compute(x, () => null) };
+      const [a, b] = [numeric(x.args[0], `${path}/args/0`), numeric(x.args[1], `${path}/args/1`)];
+      if (!a || !b || ("value" in a && a.value === null) || ("value" in b && b.value === null)) return undefined;
+      return { emit: () => dialect.arithmetic(x.op, emit(a), emit(b), fn) };
+    }
+    const v = subject(x as StringSubject, "number", path); // validate allows no CASEI / ACCENTI here
+    return v && { emit: () => v.sql };
+  };
+  /** `a op b` with an arithmetic expression on either side. */
+  const arithmeticComparison = (a: ArithmeticOperand, op: string, b: ArithmeticOperand, pathA: string, pathB: string): string => {
+    const [na, nb] = [numeric(a, pathA), numeric(b, pathB)];
+    if (!na || !nb || ("value" in na && na.value === null) || ("value" in nb && nb.value === null)) return dialect.never;
+    if ("value" in na && "value" in nb) return constant({ op, args: [na.value, nb.value] } as Cql2Filter);
+    return `${emit(na)} ${op} ${emit(nb)}`;
+  };
+
+  /**
+   * `a op b`, each side a property (or CASEI / ACCENTI of one), a literal, or an arithmetic expression. A literal on
+   * the left is the property on the left with the operator mirrored, so a property against a literal is always written
+   * one way.
+   */
+  const comparison = (a: ArithmeticOperand, op: string, b: ArithmeticOperand, pathA: string, pathB: string): string => {
+    if (isArithmetic(a) || isArithmetic(b)) return arithmeticComparison(a, op, b, pathA, pathB);
     if (!reads(a) && !reads(b)) return constant({ op, args: [a, b] } as Cql2Filter);
     if (!reads(a)) return comparison(b, MIRROR[op]!, a, pathB, pathA);
     if (!reads(b)) {
@@ -214,13 +247,13 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         return v.like ? v.like(text, param) : dialect.like(v, text, param);
       }
       case "between": {
-        const [s, low, high] = f.args;
+        const [s, low, high] = f.args as readonly [ArithmeticOperand, ArithmeticOperand, ArithmeticOperand];
         if (reads(s) && typeof low === "number" && typeof high === "number") {
           const v = subject(s, "number", `${path}/args/0`);
           return v === undefined ? dialect.never : `${v.sql} BETWEEN ${valueParam(v, low)} AND ${valueParam(v, high)}`;
         }
         // With a property bound or a literal first: x >= low AND x <= high, in SQL's three-valued logic as in evaluate's.
-        if (!reads(s) && !reads(low) && !reads(high)) return constant(f);
+        if (![s, low, high].some(readsAny)) return constant(f);
         const [p0, p1, p2] = [0, 1, 2].map((i) => `${path}/args/${i}`) as [string, string, string];
         return `(${comparison(s, ">=", low, p0, p1)}) AND (${comparison(s, "<=", high, p0, p2)})`;
       }
@@ -234,8 +267,8 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       case "s_contains":
         return spatial(f.op, f.args, path, positive);
       case "in": {
-        const [s, list] = f.args;
-        if (!reads(s) || list.some(reads)) {
+        const [s, list] = f.args as readonly [ArithmeticOperand, readonly ArithmeticOperand[]];
+        if (!reads(s) || list.some((item) => reads(item) || isArithmetic(item))) {
           // With a literal on the left or a property among the items: the OR of the equalities.
           const parts = list.map((item, i) => `(${comparison(s, "=", item, `${path}/args/0`, `${path}/args/1/${i}`)})`);
           return `(${parts.join(" OR ")})`;
@@ -246,8 +279,10 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         const ps = items.map((item) => valueParam(v, item.value));
         return v.compare ? `(${ps.map((p) => compare(v, "=", p)).join(" OR ")})` : `${v.sql} IN (${ps.join(", ")})`;
       }
-      default:
-        return comparison(f.args[0], f.op, f.args[1], `${path}/args/0`, `${path}/args/1`);
+      default: {
+        const [a, b] = f.args as readonly [ArithmeticOperand, ArithmeticOperand];
+        return comparison(a, f.op, b, `${path}/args/0`, `${path}/args/1`);
+      }
     }
   };
 

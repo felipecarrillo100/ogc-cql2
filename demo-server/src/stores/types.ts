@@ -45,7 +45,7 @@ export interface QueryResult {
 /** The classes every store evaluates: GeoJSON with ogc-cql2/evaluate, the others in their database. */
 export const BASE_CLASSES: readonly string[] = [
   CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive,
-  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.propertyProperty,
+  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.propertyProperty, CONFORMANCE.arithmetic,
 ];
 
 export interface Store {

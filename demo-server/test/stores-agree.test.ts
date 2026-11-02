@@ -122,6 +122,32 @@ function generatePairs(): Cql2Filter[] {
 }
 const PAIRS = generatePairs();
 
+/**
+ * Arithmetic Expressions on the number columns: each operator with literals (zero divisors, signs, fractions, 1e308
+ * and 1e-320 for overflow and underflow) and with another column, nested, scaled, in BETWEEN and IN, under NOT and OR.
+ * Powers only with whole exponents, whose results are exact.
+ */
+function generateArithmetic(): Cql2Filter[] {
+  const numbers = ["small", "count", "big", "ratio", "amount"];
+  const ops = ["+", "-", "*", "/", "%", "div"];
+  const values = [0, 1, -1, 2, 0.5, 7.5, 1e308, 1e-320];
+  const e = (op: string, a: unknown, b: unknown) => ({ op, args: [a, b] });
+  const leaves: unknown[] = [];
+  for (const a of numbers) {
+    for (const op of ops) {
+      for (const v of values) leaves.push({ op: ">", args: [e(op, p(a), v), 1] }, { op: "=", args: [e(op, v, p(a)), 0] });
+      for (const b of numbers) leaves.push({ op: "<", args: [e(op, p(a), p(b)), 2] });
+    }
+    for (const x of [0, 1, 2, 3]) leaves.push({ op: "<=", args: [e("^", p(a), x), 100] });
+    for (const b of numbers) leaves.push({ op: ">", args: [p(a), e("*", p(b), 0.001)] });
+    leaves.push({ op: "between", args: [e("/", p(a), 2), -1, e("+", 1, 2)] }, { op: "in", args: [e("%", p(a), 3), [0, 1]] });
+  }
+  const queryables = fromFile.queryables();
+  const valid = leaves.filter((f) => validate(f, { queryables }).valid) as Cql2Filter[];
+  return [...valid, ...valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter), ...valid.filter((_, i) => i % 9 === 0).map((f, i) => ({ op: "or", args: [f, valid[i * 3 + 1] ?? f] }) as Cql2Filter)];
+}
+const ARITHMETIC = generateArithmetic();
+
 async function differences(a: Store, b: Store, label: string): Promise<string[]> {
   const out: string[] = [];
   for (const filter of FILTERS) {
@@ -226,6 +252,19 @@ describe("the kitchen sink, four stores", () => {
       assert.ok(PAIRS.length > 1000, `${PAIRS.length} filters`);
       const out: string[] = [];
       for (const filter of PAIRS) {
+        const [x, y] = await Promise.all([fromFile.query(filter, PAGE), store()!.query(filter, PAGE)]);
+        if (!isDeepStrictEqual(x.features.map((f) => f.id), y.features.map((f) => f.id))) {
+          out.push(`${JSON.stringify(filter)}\n    geojson ${x.features.map((f) => f.id)} / ${label} ${y.features.map((f) => f.id)}`);
+        }
+      }
+      assert.equal(out.slice(0, 10).join("\n"), "");
+    });
+
+    it(`Arithmetic Expressions, ${ARITHMETIC.length} filters: GeoJSON and ${label} give the same features`, async (t) => {
+      if (label === "PostgreSQL" && pgSkip) return t.skip(pgSkip);
+      assert.ok(ARITHMETIC.length > 500, `${ARITHMETIC.length} filters`);
+      const out: string[] = [];
+      for (const filter of ARITHMETIC) {
         const [x, y] = await Promise.all([fromFile.query(filter, PAGE), store()!.query(filter, PAGE)]);
         if (!isDeepStrictEqual(x.features.map((f) => f.id), y.features.map((f) => f.id))) {
           out.push(`${JSON.stringify(filter)}\n    geojson ${x.features.map((f) => f.id)} / ${label} ${y.features.map((f) => f.id)}`);

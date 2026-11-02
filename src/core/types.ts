@@ -5,7 +5,8 @@
  * The shapes are the portable ones every server of those classes must accept: a property on the left and a literal
  * on the right (`/per/basic-cql2/cql2filter` and `/per/advanced-comparison-operators/*` let a server refuse
  * anything else). With the Property-Property Comparisons class, either side may be a property or a literal (the
- * `Operand…` shapes). `validate` checks a value against them; these types describe what it lets through.
+ * `Operand…` shapes), and with Arithmetic Expressions a number may be computed (the `Arithmetic…` shapes). `validate`
+ * checks a value against them; these types describe what it lets through.
  */
 
 /**
@@ -231,6 +232,44 @@ export interface SpatialPredicate {
   readonly args: readonly [PropertyRef, SpatialLiteral];
 }
 
+// --- Arithmetic Expressions: a number computed from numbers and properties ---------------------------------------
+
+export type ArithmeticOperator = "+" | "-" | "*" | "/" | "%" | "div" | "^";
+
+/**
+ * An arithmetic expression (the Arithmetic Expressions class): `{ "op": "*", "args": [{ "property": "pop" }, 0.001] }`.
+ * Computed with doubles; `div` is the quotient rounded toward zero, `%` its remainder; a result that isn't a finite
+ * number (division by zero, overflow) is NULL.
+ */
+export interface ArithmeticExpression {
+  readonly op: ArithmeticOperator;
+  readonly args: readonly [NumericOperand, NumericOperand];
+}
+
+/** What an arithmetic expression computes from: a number, a property, or another expression. */
+export type NumericOperand = number | PropertyRef | ArithmeticExpression;
+
+/** A side of a comparison that may be an arithmetic expression. */
+export type ArithmeticOperand = Operand | ArithmeticExpression;
+
+/** A comparison with an arithmetic expression on either side (`area > population * 0.001`). */
+export interface ArithmeticComparison {
+  readonly op: ComparisonOperator;
+  readonly args: readonly [ArithmeticOperand, ArithmeticOperand];
+}
+
+/** `BETWEEN` with arithmetic expressions in its places. */
+export interface ArithmeticBetween {
+  readonly op: "between";
+  readonly args: readonly [NumericOperand, NumericOperand, NumericOperand];
+}
+
+/** `IN` with arithmetic expressions on the left or among the items. */
+export interface ArithmeticIn {
+  readonly op: "in";
+  readonly args: readonly [ArithmeticOperand, readonly ArithmeticOperand[]];
+}
+
 /**
  * A spatial relation with the Property-Property Comparisons class: a geometry property or a literal in either place
  * (`S_WITHIN(BBOX(7,50,8,51), geom)`, two geometry properties, two literals).
@@ -255,4 +294,7 @@ export type Cql2Filter =
   | OperandLike
   | OperandBetween
   | OperandIn
-  | OperandSpatialPredicate;
+  | OperandSpatialPredicate
+  | ArithmeticComparison
+  | ArithmeticBetween
+  | ArithmeticIn;
