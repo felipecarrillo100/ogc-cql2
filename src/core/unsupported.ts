@@ -9,6 +9,7 @@ const NAMES: ReadonlyMap<string, string> = new Map([
   [CONFORMANCE.basicSpatial, "Basic Spatial Functions"],
   [CONFORMANCE.basicSpatialPlus, "Basic Spatial Functions with additional Spatial Literals"],
   [CONFORMANCE.spatial, "Spatial Functions"],
+  [CONFORMANCE.temporal, "Temporal Functions"],
 ]);
 
 /** The spatial classes `evaluate` evaluates only with an engine plugged in (`spatialEngine`): Spatial Functions. */

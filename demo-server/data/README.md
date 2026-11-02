@@ -15,9 +15,9 @@ To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if 
   To regenerate them: `sh make-parquet.sh`.
 - `kitchen_sink.geojson`: every type and edge case the profile can compare (Unicode in NFC and NFD, `ß`, Greek,
   `İ`, `ﬁ`, emoji, U+E000, LIKE's `%` `_` `\`, integers up to 2⁵³ − 1, decimals, booleans, dates, UTC instants with
-  milliseconds, local times without an offset, text that looks like dates and numbers, every geometry type, NULLs in
-  every column). The same rows go into `usa.gpkg`, `kitchen_sink.parquet` and PostgreSQL, so every store must answer
-  alike.
+  milliseconds, periods from `at` to `until` (equal ends, NULL ends, one ending before it begins), local times without
+  an offset, text that looks like dates and numbers, every geometry type, NULLs in every column). The
+  same rows go into `usa.gpkg`, `kitchen_sink.parquet` and PostgreSQL, so every store must answer alike.
 
 ## PostgreSQL
 

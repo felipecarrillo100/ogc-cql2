@@ -13,9 +13,9 @@ They are used by the tests only and are not part of the published package.
 ## Modified
 
 - `data/ne_110m_populated_places_simple.geojson`: the columns of `ne_110m_populated_places_simple` that the
-  Property-Property Comparisons test (Annex A.12, Table 16) uses, from the standard's test data,
-  `cql2/standard/data/ne110m4cql2.gpkg` at the same tag: the `fid` as the id, `name`, `nameascii`, `pop_min`,
-  `pop_max`, `pop_other`, `start` and `end`, without geometry. **This file includes modifications that have not been
+  Property-Property Comparisons test (Annex A.12, Table 16) and the Temporal Functions test use, from the standard's
+  test data, `cql2/standard/data/ne110m4cql2.gpkg` at the same tag: the `fid` as the id, `name`, `nameascii`,
+  `pop_min`, `pop_max`, `pop_other`, `start`, `end` and `date`, without geometry. **This file includes modifications that have not been
   approved or adopted by OGC:** the columns were extracted to GeoJSON, and a `Z` was added to the three `start` and
   three `end` values, which the GeoPackage stores as DATETIME without one (GeoPackage's DATETIME is UTC, written with
   a `Z`).

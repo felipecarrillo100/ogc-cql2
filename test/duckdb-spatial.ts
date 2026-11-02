@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
 import { toSql, type SqlColumn } from "ogc-cql2/sql";
-import { PLACES_QUERYABLES, places, sqlLiteral, TABLE_16, TABLE_17 } from "./table16.ts";
+import { PLACES_QUERYABLES, places, sqlLiteral, TABLE_16, TABLE_16_TEMPORAL, TABLE_17, TABLE_TEMPORAL } from "./table16.ts";
 import {
   ALL, asGeoJson, differences, FILTERS, leaf, LITERAL_FIRST, LITERAL_PAIRS, pairDifferences, PAIR_FILTERS, pairsOf, RELATION_FILTERS,
   RELATIONS, STORAGES, stored, VALUES, wkb, type G,
@@ -283,7 +283,7 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
 
   describe(`${name}: the standard's Table 16 (Property-Property Comparisons), on its test data`, () => {
     const columns = Object.fromEntries(Object.entries(PLACES_QUERYABLES).map(([n, q]) => [
-      n, { ...q, sqlType: "format" in q ? "TIMESTAMP WITH TIME ZONE" : q.type === "integer" ? "INTEGER" : "VARCHAR" },
+      n, { ...q, sqlType: "format" in q ? (q.format === "date" ? "DATE" : "TIMESTAMP WITH TIME ZONE") : q.type === "integer" ? "INTEGER" : "VARCHAR" },
     ])) as Record<string, SqlColumn>;
     beforeAll(async () => {
       const names = Object.keys(columns);
@@ -297,6 +297,11 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
     });
 
     it.for(TABLE_17)("Table 17 (Arithmetic Expressions), %s: %i", async ([text, expected]) => {
+      const { where, params } = toSql(fromText(text), { dialect: "duckdb", columns });
+      expect(Number((await rows(`SELECT count(*) FROM places WHERE ${where}`, params))[0]![0])).toBe(expected);
+    });
+
+    it.for([...TABLE_TEMPORAL, ...TABLE_16_TEMPORAL])("Temporal Functions, %s: %i", async ([text, expected]) => {
       const { where, params } = toSql(fromText(text), { dialect: "duckdb", columns });
       expect(Number((await rows(`SELECT count(*) FROM places WHERE ${where}`, params))[0]![0])).toBe(expected);
     });

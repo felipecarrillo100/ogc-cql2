@@ -61,7 +61,7 @@ after(async () => {
 const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
 const accenti = (arg: unknown) => ({ op: "accenti", args: [arg] });
-const PROPERTIES = ["name", "code", "small", "count", "big", "ratio", "amount", "active", "day", "at", "local_at", "note"];
+const PROPERTIES = ["name", "code", "small", "count", "big", "ratio", "amount", "active", "day", "at", "local_at", "until", "note"];
 const LITERALS: unknown[] = [
   "Straße", "STRASSE", "straße", "café", "café", "", "😀", "", "Riv", "river", "a_b", "Ελλάδα", "ΣΊΣΥΦΟΣ", "100%",
   "5", "2020-07-26", "2023-01-01T00:00:00.000Z", "2023-01-01T10:00:00.000", "end\\", "Å", "O'Brien",
@@ -147,6 +147,40 @@ function generateArithmetic(): Cql2Filter[] {
   return [...valid, ...valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter), ...valid.filter((_, i) => i % 9 === 0).map((f, i) => ({ op: "or", args: [f, valid[i * 3 + 1] ?? f] }) as Cql2Filter)];
 }
 const ARITHMETIC = generateArithmetic();
+
+/**
+ * Temporal Functions: each function on the day and instant columns, against dates, timestamps and intervals (with
+ * `'..'`, of zero length, on the data's own values) and against an interval of two columns (`at`, `until`: NULL ends,
+ * equal ends, a start after its end), in either order, under NOT and OR.
+ */
+function generateTemporal(): Cql2Filter[] {
+  const ops = [
+    "t_after", "t_before", "t_disjoint", "t_equals", "t_intersects", "t_contains", "t_during", "t_finishedBy",
+    "t_finishes", "t_meets", "t_metBy", "t_overlappedBy", "t_overlaps", "t_startedBy", "t_starts",
+  ];
+  const days = ["2020-07-26", "2023-01-01", "1970-01-01", "2021-01-01"];
+  const instants = ["2023-01-01T00:00:00Z", "2023-01-01T00:00:00.001Z", "2023-12-31T23:59:59.999Z", "1970-01-01T00:00:00Z", "2023-06-15T12:00:00Z"];
+  const intervals = [
+    ...days.flatMap((a, i) => [[a, days[(i + 1) % days.length]!], [a, a], [a, ".."], ["..", a]]),
+    ...instants.flatMap((a, i) => [[a, instants[(i + 2) % instants.length]!], [a, a], [a, ".."], ["..", a]]),
+  ].map((interval) => ({ interval }));
+  const literals = [...days.map((date) => ({ date })), ...instants.map((timestamp) => ({ timestamp })), ...intervals];
+  const span = { interval: [p("at"), p("until")] };
+  const leaves: unknown[] = [];
+  for (const op of ops) {
+    for (const l of literals) {
+      for (const a of ["day", "at", "until"]) leaves.push({ op, args: [p(a), l] });
+      leaves.push({ op, args: [span, l] }, { op, args: [l, span] });
+    }
+    leaves.push({ op, args: [span, p("at")] }, { op, args: [p("until"), span] }, { op, args: [span, { interval: [p("until"), ".."] }] });
+  }
+  const queryables = fromFile.queryables();
+  const valid = leaves.filter((f) => validate(f, { queryables }).valid) as Cql2Filter[];
+  const set = [...valid, ...valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter)];
+  for (let i = 0; i + 1 < valid.length; i += 7) set.push({ op: "or", args: [valid[i]!, { op: "not", args: [valid[i + 1]!] }] });
+  return set;
+}
+const TEMPORAL = generateTemporal();
 
 async function differences(a: Store, b: Store, label: string): Promise<string[]> {
   const out: string[] = [];
@@ -273,6 +307,19 @@ describe("the kitchen sink, four stores", () => {
       assert.equal(out.slice(0, 10).join("\n"), "");
     });
 
+    it(`Temporal Functions, ${TEMPORAL.length} filters: GeoJSON and ${label} give the same features`, async (t) => {
+      if (label === "PostgreSQL" && pgSkip) return t.skip(pgSkip);
+      assert.ok(TEMPORAL.length > 1000, `${TEMPORAL.length} filters`);
+      const out: string[] = [];
+      for (const filter of TEMPORAL) {
+        const [x, y] = await Promise.all([fromFile.query(filter, PAGE), store()!.query(filter, PAGE)]);
+        if (!isDeepStrictEqual(x.features.map((f) => f.id), y.features.map((f) => f.id))) {
+          out.push(`${JSON.stringify(filter)}\n    geojson ${x.features.map((f) => f.id)} / ${label} ${y.features.map((f) => f.id)}`);
+        }
+      }
+      assert.equal(out.slice(0, 10).join("\n"), "");
+    });
+
     it(`the literal first, every spatial filter: GeoJSON and ${label} give the same features`, async (t) => {
       if (label === "PostgreSQL" && pgSkip) return t.skip(pgSkip);
       const relations = label !== "GeoPackage" || store().conformance().includes(CONFORMANCE.spatial);
@@ -285,6 +332,9 @@ describe("the kitchen sink, four stores", () => {
     const sets = new Set<string>();
     for (const filter of FILTERS) sets.add(JSON.stringify((await fromFile.query(filter, PAGE)).features.map((f) => f.id)));
     assert.ok(sets.size > 150, `${sets.size} different results`);
+    const temporal = new Set<string>();
+    for (const filter of TEMPORAL) temporal.add(JSON.stringify((await fromFile.query(filter, PAGE)).features.map((f) => f.id)));
+    assert.ok(temporal.size > 90, `Temporal Functions: ${temporal.size} different results`); // 102 measured
   });
 
   it(`spatial filters: GeoJSON and GeoPackage give the same features, also exactly on vertices`, async () => {

@@ -36,6 +36,7 @@ The package implements these conformance classes:
 | Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB; SQLite with SpatiaLite |
 | Property-Property Comparisons | a property or a literal on either side: comparisons, `like` (a string on the left), `between`, `in`, the spatial functions | ✅ | ✅ | ✅ |
 | Arithmetic Expressions | `+` `-` `*` `/` `%` `div` `^` wherever a number goes | ✅ | ✅ | ✅ |
+| Temporal Functions | `t_after` `t_before` `t_disjoint` `t_equals` `t_intersects` `t_contains` `t_during` `t_finishedBy` `t_finishes` `t_meets` `t_metBy` `t_overlappedBy` `t_overlaps` `t_startedBy` `t_starts`, `{ "interval" }` literals | ✅ | ✅ | ✅ |
 
 Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
 `s_intersects` and `s_disjoint` in memory, and the other relations with a geometry engine you plug in (GEOS in
@@ -47,9 +48,10 @@ Every server of those classes must support a property on the left and a literal 
 Comparisons, either side may be a property or a literal (`name = nameascii`, `'København' < name`,
 `S_WITHIN(BBOX(7,50,8,51), geom)`): a server that doesn't declare that class gets `needs-conformance` for them (see
 [Comparing two properties](#comparing-two-properties)). With Arithmetic Expressions, a number can be computed
-(`area > population * 0.001`, see [Arithmetic](#arithmetic)). Anything else that is valid CQL2 (temporal and array
-functions, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
-will follow.
+(`area > population * 0.001`, see [Arithmetic](#arithmetic)). With Temporal Functions, instants and intervals relate
+(`T_DURING(INTERVAL(start, end), INTERVAL('2023-01-01', '2023-12-31'))`, see [Temporal](#temporal)). Anything else
+that is valid CQL2 (array functions, custom functions) is refused as `outside-profile`, with the conformance class it
+would need. More classes will follow.
 
 ## A filter
 
@@ -163,7 +165,7 @@ same options). So:
 
 - text that isn't CQL2-text throws `invalid-text`, with `details.position` (where, as a JavaScript string index) and
   `details.expected`. Nothing is guessed, and nothing is left unread: `a = 1)` is refused, not read as `a = 1`;
-- valid CQL2 outside the profile (temporal functions, arithmetic, …) throws `invalid-filter`, naming the class it
+- valid CQL2 outside the profile (array functions, custom functions) throws `invalid-filter`, naming the class it
   needs, exactly as the same filter in CQL2-JSON would.
 
 How it reads what the grammar allows in more than one way, or leaves open:
@@ -424,6 +426,8 @@ open().then(({ db, connection }) => {
 - **Numbers are parameters as text** (`"0.9653517007827759"`, cast to DOUBLE in the SQL): DuckDB-WASM (1.32.0) binds
   about one number in ten that needs all 17 digits one unit off (`0.965351700782776`), and reads text exactly. It
   reads a SQL literal of 17 digits one unit off too, so insert such values as text (`'0.9653517007827759'::DOUBLE`).
+  Instants (epoch milliseconds) are parameters as text too, since 1.3.0: `@duckdb/node-api` 1.4 binds a JavaScript
+  number as a 32-bit integer, which wrapped them.
 - **Spatial filters need the spatial extension** (`INSTALL spatial; LOAD spatial`, in Node and in DuckDB-WASM): give
   the geometry column as `{ sqlType: "GEOMETRY", column: "geom" }`, or a column of WKB as `{ sqlType: "BLOB" }`.
   `s_intersects` becomes `ST_Intersects(geom, literal)`, as DuckDB documents it: exact (the same answers as `evaluate`
@@ -596,6 +600,42 @@ rest open, and engines differ on it, so the package decides, the same in `evalua
 - **Tested** with the standard's Table 17 (Annex A.14) on its test data, in `evaluate`, SQLite and DuckDB, and with
   generated expressions, zero divisors, signs, fractions, NaN, ±Infinity, overflow and underflow included, against
   `evaluate` in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
+
+## Temporal
+
+With the Temporal Functions class, instants and intervals relate as W3C OWL-Time defines it: `t_after`, `t_before`,
+`t_disjoint`, `t_equals` and `t_intersects` relate instants and intervals, the other ten intervals only.
+
+```js
+{ op: "t_during", args: [{ interval: [{ property: "start" }, { property: "end" }] }, { interval: ["2023-01-01", "2023-12-31"] }] }
+{ op: "t_intersects", args: [{ property: "updated" }, { interval: ["2026-01-01T00:00:00Z", ".."] }] }   // from 2026 on
+```
+
+The package reads the standard plainly, the same in `evaluate` and every SQL dialect:
+- **Intervals are closed at both ends, and an instant is an interval of zero length.** Each relation compares the
+  ends: before is `end₁ < start₂`, meets `end₁ = start₂`, during `start₁ > start₂ and end₁ < end₂`, and so on;
+  `t_disjoint` is before or after, `t_intersects` its negation. `".."` is an open end.
+- **The relations of intervals only refuse an instant** (`wrong-arguments`), as the standard says: a date, a timestamp
+  or a property on its own (queryables have no interval type). `INTERVAL(x, x)` is an interval.
+- **Dates and timestamps are never converted:** an interval with a date at one end and a timestamp at the other is
+  refused (`type-mismatch`), as is a date property against a timestamp when the queryables say so; without them, it is
+  NULL, as for comparisons. So the standard's examples 60 and 63, which write such intervals, don't validate.
+- **NULL** when an operand is NULL, so also when an interval has a NULL end, or begins after it ends: neither is an
+  interval. Only `".."` is open.
+- **Precision:** days for dates, milliseconds for timestamps, as in comparisons.
+- **The classes:** a literal first, or a property second (in an interval too), also needs Property-Property
+  Comparisons. A function of literals only is decided once, before the query.
+- **The standard's links** for T_STARTEDBY and T_STARTS are swapped; its tests follow the names, and so does the
+  package.
+- **In SQL:** each relation is its comparisons of the ends, written as comparisons already are, and a `CASE` gives NULL
+  where an interval reads the table. One property against literals (`t_intersects(datetime, INTERVAL(…))`, the usual
+  query) needs no `CASE`, so a DATE column keeps its index.
+- **Infinite dates and timestamps** (PostgreSQL, and DuckDB's DATE, can store `infinity`) are NULL in comparisons, as
+  `evaluate` reads them: they are served as the text `infinity`, which is no date, and so aren't NULL for `isNull`.
+  Since 1.3.0, in every comparison, not only temporal ones; on a DATE column, the check keeps the index.
+- **Tested** with the standard's own 72 temporal rows (Annex A, and Table 16's) on its test data, in `evaluate`,
+  SQLite and DuckDB 2.0 and 1.4.3; and with generated filters (NULL ends, equal ends, a start after its end, `".."`,
+  sub-millisecond values, ±infinity) against `evaluate` in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
 
 ## LIKE patterns
 

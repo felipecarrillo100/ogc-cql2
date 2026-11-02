@@ -20,7 +20,7 @@
 import type { Fold } from "../../core/folds.js";
 import type { MatrixRelation } from "../../core/relate.js";
 import { literalParts } from "../../evaluate/spatial.js";
-import { caseiKey, compareCodePoints, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
+import { caseiKey, compareCodePoints, dayNumber, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
 import type { ArithmeticOperator, SpatialLiteral } from "../../core/types.js";
 import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 import { bareType, likePattern, queryableClass } from "./postgres.js";
@@ -60,7 +60,8 @@ function servedText(sql: string, cls: DuckClass): string | undefined {
     case "date":
       return `strftime(${sql}, '%Y-%m-%d')`;
     case "timestamptz":
-      return `strftime(make_timestamp(CAST(${millisecondsOf(sql)} AS BIGINT) * 1000), '%Y-%m-%dT%H:%M:%S.%gZ')`;
+      // Infinity as `infinity` / `-infinity`, as DATE and TIMESTAMP serve it: no date, but no NULL either.
+      return `COALESCE(strftime(make_timestamp(CAST(${millisecondsOf(sql)} AS BIGINT) * 1000), '%Y-%m-%dT%H:%M:%S.%gZ'), CAST(${sql} AS VARCHAR))`;
     case "timestamp":
       return `strftime(CAST(${sql} AS TIMESTAMP), '%Y-%m-%dT%H:%M:%S.%g')`; // %g: milliseconds, truncated
     default:
@@ -83,9 +84,6 @@ export function duckdbValue(sqlColumn: string, column: SqlColumn): string | unde
 }
 
 const DAY_MS = 86_400_000;
-
-/** A `YYYY-MM-DD` day as days since 1970-01-01. */
-const dayNumber = (day: string): number => instantOf(`${day}T00:00:00Z`)! / DAY_MS;
 
 /** A fold chain as the `folds` argument of `cql2_fold_cmp` / `cql2_fold_like`: `"accenti,casei"`, innermost first. */
 const foldsText = (folds: readonly Fold[]): string => `'${folds.join(",")}'`;
@@ -130,8 +128,11 @@ function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
     case "boolean":
       return cls === "boolean" ? { sql, cast: "::BOOLEAN" } : undefined;
     case "day":
-      // Against another column, a date compares as days since 1970-01-01, the form cql2_day gives dates held as text.
-      if (cls === "date") return { sql, cast: "::DATE", pair: `(${sql} - DATE '1970-01-01')` };
+      // Against another column, a date compares as days since 1970-01-01, the form cql2_day gives dates held as text
+      // (infinity, served as no date, is NULL there; epoch_us already gives NULL for an infinite instant).
+      if (cls === "date") {
+        return { sql, cast: "::DATE", finite: `isfinite(${sql})`, pair: `(CASE WHEN isfinite(${sql}) THEN ${sql} - DATE '1970-01-01' END)` };
+      }
       return cls === "text" ? { sql: `cql2_day(${sql})`, cast: "::INTEGER", value: (day) => dayNumber(day as string) } : undefined;
     case "instant":
       if (cls === "timestamptz") return { sql: millisecondsOf(sql), cast: "::DOUBLE" };
@@ -355,7 +356,8 @@ export const duckdb: Dialect = {
   false: "FALSE",
   never: "NULL::BOOLEAN",
   boolean: (value) => value,
-  instant: (ms) => ms,
+  // As text: @duckdb/node-api 1.4 binds a number as a 32-bit INTEGER, which epoch milliseconds overflow.
+  instant: (ms) => String(ms),
   view: duckdbView,
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))} ESCAPE '\\'`,
   // Two columns under CASEI / ACCENTI: compared in a function, since DuckDB-WASM's functions return no text.

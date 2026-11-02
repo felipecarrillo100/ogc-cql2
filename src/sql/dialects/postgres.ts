@@ -49,11 +49,9 @@ function pgClass(column: SqlColumn): PgClass {
   return "other";
 }
 
-/** The text a PostgreSQL column's value is served as, for the classes that are served as strings. */
-function pgText(sql: string, cls: PgClass): string | undefined {
+/** A date or timestamp as ISO 8601 text; NULL for infinity. */
+function isoText(sql: string, cls: PgClass): string | undefined {
   switch (cls) {
-    case "text":
-      return `normalize(${sql}::text, NFC)`;
     case "date":
       return `to_char(${sql}, 'YYYY-MM-DD')`;
     case "timestamptz":
@@ -63,6 +61,16 @@ function pgText(sql: string, cls: PgClass): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * The text a PostgreSQL column's value is served as, for the classes that are served as strings: an infinite date or
+ * timestamp as `infinity` / `-infinity`, which is no date (NULL in `evaluate`'s comparisons, not NULL itself).
+ */
+function pgText(sql: string, cls: PgClass): string | undefined {
+  if (cls === "text") return `normalize(${sql}::text, NFC)`;
+  const iso = isoText(sql, cls);
+  return iso && `COALESCE(${iso}, ${sql}::text)`;
 }
 
 /**
@@ -94,11 +102,13 @@ function postgresView(sql: string, kind: Kind, column: SqlColumn, fn: (name: str
     case "boolean":
       return cls === "boolean" ? { sql, cast: "::boolean" } : undefined;
     case "day":
-      // Against another column, a date compares as its YYYY-MM-DD text, the form cql2_day gives dates held as text.
-      if (cls === "date") return { sql, cast: "::date", pair: `${pgText(sql, cls)} COLLATE "C"` };
+      // Against another column, a date compares as its YYYY-MM-DD text, the form cql2_day gives dates held as text
+      // (NULL for infinity: to_char gives none).
+      if (cls === "date") return { sql, cast: "::date", finite: `isfinite(${sql})`, pair: `${isoText(sql, cls)} COLLATE "C"` };
       return cls === "text" ? { sql: `${fn("cql2_day")}(${sql}::text) COLLATE "C"`, cast: "" } : undefined;
     case "instant":
-      if (cls === "timestamptz") return { sql: `date_trunc('milliseconds', ${sql})`, cast: "::timestamptz" };
+      // Infinity is NULL, as evaluate reads its served text; date_trunc is no indexable expression anyway (only STABLE).
+      if (cls === "timestamptz") return { sql: `(CASE WHEN isfinite(${sql}) THEN date_trunc('milliseconds', ${sql}) END)`, cast: "::timestamptz" };
       return cls === "text" ? { sql: `${fn("cql2_instant")}(${sql}::text)`, cast: "::timestamptz" } : undefined;
   }
 }

@@ -20,7 +20,7 @@ export PGOPTIONS="-c client_min_messages=warning" # no NOTICEs for objects that 
 "$OGR2OGR" -append -f PostgreSQL "$PG" kitchen_sink.geojson -oo DATE_AS_STRING=YES -nln cql2demo.kitchen_sink -preserve_fid
 "$PSQL" -X -q -v ON_ERROR_STOP=1 -c "
   CREATE TABLE cql2demo.kitchen_sink_3857 AS
-    SELECT id, name, code, small, count, big, ratio, amount, active, day, at, local_at, note,
+    SELECT id, name, code, small, count, big, ratio, amount, active, day, at, local_at, until, note,
            ST_Transform(geom, 3857)::geometry(Geometry, 3857) AS geom
     FROM cql2demo.kitchen_sink;
   ALTER TABLE cql2demo.kitchen_sink_3857 ADD PRIMARY KEY (id);
