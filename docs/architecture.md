@@ -37,6 +37,9 @@ only a property on the left and a literal on the right (`/per/basic-cql2/cql2fil
 - `isNull(property)`;
 - `and` / `or` of two or more filters, `not` of one; `true`, `false`.
 
+Since 1.2.0, Arithmetic Expressions: `+ - * / % div ^` wherever a number goes, computed with doubles (`div` toward
+zero, `%` its remainder), a result that isn't a finite number NULL, expressions of literals computed once.
+
 Since 1.1.0, Property-Property Comparisons too: a property or a literal on either side of a comparison, as the bounds
 of `between`, among the items of `in`, on the left of `like` (whose pattern stays a literal), and in either place of a
 spatial function. A literal on the left is the property on the left, the operator mirrored, and a literal first in a
@@ -572,8 +575,10 @@ checks that they agree.
 | 1.0.0 | **The API freeze:** 0.12.0's API, kept stable under the README's "Versioning and stability"; CI (GitHub Actions) runs the proof routine on every push, and the newest DuckDB engines weekly |
 | after 1.0.0 (demo only, not published) | GeoParquet files (made by GDAL) and a DuckDB store in `demo-server`, the kitchen sink giving the same features from four stores; the same files filtered in the playground by DuckDB-WASM, with the store's own SQL, on desktop and on phones |
 | 1.1.0 | **Property-Property Comparisons:** a property or a literal on either side, in every part and engine, spatial included; `evaluate`'s `queryables` option; `duckdbFunctions.cql2_compare`, `sqliteFunctions.cql2_intersects_pair`; the standard's Table 16 on its test data; NaN ordered as PostgreSQL and DuckDB order it |
+| 1.2.0 | **Arithmetic Expressions:** `+ - * / % div ^` wherever a number goes, in every part and engine; doubles, `div` toward zero and `%` its remainder, a non-finite result NULL; `sqliteFunctions.cql2_arithmetic`, PostgreSQL's `cql2_arithmetic` (in `postgresFunctions`); the standard's Table 17 on its test data |
+| 1.3.0 | **Temporal Functions** (planned): the fifteen relations of instants and intervals |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
-| later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
+| later | more conformance classes (arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
 ### 1.x.x: Oracle and SQL Server
 

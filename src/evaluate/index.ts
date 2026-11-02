@@ -27,9 +27,11 @@
  */
 import { unwrap, type Fold } from "../core/folds.js";
 import { CONVERSE, dimension, literalGeometry, relates, transpose, type MatrixRelation } from "../core/relate.js";
+import { isArithmetic, operate } from "../core/arithmetic.js";
 import { heldKind } from "../core/queryables.js";
 import type {
-  Cql2Filter, FoldedString, Geometry, Operand, PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator,
+  ArithmeticOperand, Cql2Filter, FoldedString, Geometry, NumericOperand, Operand,
+  PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator,
 } from "../core/types.js";
 import { NOT_IN_EVALUATE, refuseUnsupported } from "../core/unsupported.js";
 import { geometryParts, intersects, literalParts } from "./spatial.js";
@@ -117,7 +119,25 @@ type ReadKind = "string" | "number" | "boolean" | "date" | "instant";
 /** A side of a comparison, compiled once: a literal's key, or a property to read from each feature. */
 type Side =
   | { readonly key: Key; readonly kind: ReadKind }
-  | { readonly name: string; readonly folds: readonly Fold[]; readonly held: ReadKind | undefined };
+  | { readonly name: string; readonly folds: readonly Fold[]; readonly held: ReadKind | undefined }
+  | { readonly arithmetic: (feature: unknown) => number | null; readonly folds: readonly Fold[] };
+
+// --- Arithmetic Expressions ---------------------------------------------------------------------------------------
+
+/**
+ * An arithmetic expression, compiled once: NULL when an operand is NULL or not a number (values are never
+ * converted), or when the result isn't a finite number (division by zero, overflow, `0 ^ −1`, `(−8) ^ 0.5`).
+ * `constant`: no property in it, so the result is the same for every feature.
+ */
+function compileArithmetic(x: NumericOperand, get: Getter<unknown>): { readonly value: (f: unknown) => number | null; readonly constant: boolean } {
+  if (typeof x === "number") return { value: () => x, constant: true };
+  if (!isArithmetic(x)) {
+    const name = (x as PropertyRef).property;
+    return { value: (f) => { const v = get(f, name); return typeof v === "number" ? v : null; }, constant: false };
+  }
+  const [a, b] = [compileArithmetic(x.args[0], get), compileArithmetic(x.args[1], get)];
+  return { value: (f) => operate(x.op, a.value(f), b.value(f)), constant: a.constant && b.constant };
+}
 
 /** A value read as `kind`, under the side's folds; `undefined` when it isn't one (a type mismatch). */
 function read(value: unknown, kind: ReadKind, folds: readonly Fold[]): Key | undefined {
@@ -156,7 +176,13 @@ function literalSide(x: ScalarLiteral | FoldedString): Side {
 type Queryables = EvaluateOptions["queryables"];
 
 /** A side: a literal, or a property (or CASEI / ACCENTI of one) with what its queryable says it holds. */
-function sideOf(x: Operand, queryables: Queryables): Side {
+function sideOf(x: ArithmeticOperand, queryables: Queryables, get: Getter<unknown>): Side {
+  if (isArithmetic(x)) {
+    const { value, constant } = compileArithmetic(x, get);
+    if (!constant) return { arithmetic: value, folds: [] };
+    const result = value(undefined); // no property in it: computed once
+    return result === null ? { arithmetic: () => null, folds: [] } : { key: result, kind: "number" };
+  }
   if (typeof x !== "object" || !("property" in x || ("op" in x && !isFoldedString(x)))) return literalSide(x as unknown as ScalarLiteral | FoldedString);
   const { inner, folds } = unwrap(x as Exclude<Operand, ScalarLiteral | FoldedString>);
   const q = queryables && Object.hasOwn(queryables, inner.property) ? heldKind(queryables[inner.property] as Queryable) : undefined;
@@ -174,8 +200,8 @@ const isFoldedString = (x: object): boolean => typeof unwrap(x as FoldedString).
 function comparer<F>(a: Side, b: Side, test: (order: number) => boolean, get: Getter<F>): (feature: F) => Truth {
   // CASEI and ACCENTI give strings, so two properties under them compare as strings.
   const folded = ("folds" in a && a.folds.length > 0) || ("folds" in b && b.folds.length > 0);
-  const fixed = "kind" in a ? a.kind : "kind" in b ? b.kind : folded ? "string"
-    : "held" in a && a.held ? a.held : "held" in b ? b.held : undefined;
+  const fixed = "kind" in a ? a.kind : "kind" in b ? b.kind : "arithmetic" in a || "arithmetic" in b ? "number"
+    : folded ? "string" : "held" in a && a.held ? a.held : "held" in b ? b.held : undefined;
   const conflict = "held" in a && "held" in b && a.held !== undefined && b.held !== undefined && a.held !== b.held;
   const keyOf = (side: Side, kind: ReadKind | undefined, value: unknown): Key | null | undefined => {
     if ("key" in side) return side.key;
@@ -186,10 +212,12 @@ function comparer<F>(a: Side, b: Side, test: (order: number) => boolean, get: Ge
     const result = test(order(a.key, b.key)); // two literals: decided once
     return () => result;
   }
+  const valueOf = (side: Side, f: F): unknown =>
+    "name" in side ? get(f, side.name) : "arithmetic" in side ? side.arithmetic(f) : undefined;
   return (f) => {
-    const va = "name" in a ? get(f, a.name) : undefined;
-    const vb = "name" in b ? get(f, b.name) : undefined;
-    if (("name" in a && isNullish(va)) || ("name" in b && isNullish(vb))) return null;
+    const va = valueOf(a, f);
+    const vb = valueOf(b, f);
+    if (("key" in a ? false : isNullish(va)) || ("key" in b ? false : isNullish(vb))) return null;
     if (conflict) return null;
     // Two properties without a queryable: both values must be of one kind.
     const kind = fixed ?? kindOf(va);
@@ -282,8 +310,9 @@ function compile<F>(
       // CASEI and ACCENTI fold what they wrap; `%`, `_` and `\` fold to themselves, so the pattern's meaning survives.
       const p = unwrap(pattern);
       const re = likeRegExp(foldKey(p.inner, p.folds));
-      const side = sideOf(left, queryables);
-      if ("key" in side) {
+      const side = sideOf(left, queryables, get as Getter<unknown>);
+      if (!("name" in side)) {
+        if (!("key" in side)) return () => null; // not reached: validate allows no arithmetic in LIKE
         const result = re.test(side.key as string); // a string literal on the left: decided once
         return () => result;
       }
@@ -295,7 +324,7 @@ function compile<F>(
     }
     case "between": {
       // x BETWEEN low AND high is x >= low AND x <= high (the standard's BETWEEN is inclusive), in three-valued logic.
-      const [x, low, high] = filter.args.map((arg) => sideOf(arg, queryables)) as [Side, Side, Side];
+      const [x, low, high] = filter.args.map((arg) => sideOf(arg, queryables, get as Getter<unknown>)) as [Side, Side, Side];
       const atLeast = comparer(x, low, COMPARE[">="]!, get);
       const atMost = comparer(x, high, COMPARE["<="]!, get);
       return (f) => and(atLeast(f), atMost(f));
@@ -346,13 +375,13 @@ function compile<F>(
     case "in": {
       // x IN (a, b, …) is x = a OR x = b OR …, in three-valued logic.
       const [left, list] = filter.args;
-      const x = sideOf(left, queryables);
-      const equals = list.map((item) => comparer(x, sideOf(item, queryables), COMPARE["="]!, get));
+      const x = sideOf(left, queryables, get as Getter<unknown>);
+      const equals = list.map((item) => comparer(x, sideOf(item, queryables, get as Getter<unknown>), COMPARE["="]!, get));
       return (f) => equals.reduce<Truth>((acc, eq) => (acc === true ? true : or(acc, eq(f))), false);
     }
     default: {
       const [a, b] = filter.args;
-      return comparer(sideOf(a, queryables), sideOf(b, queryables), COMPARE[filter.op]!, get);
+      return comparer(sideOf(a, queryables, get as Getter<unknown>), sideOf(b, queryables, get as Getter<unknown>), COMPARE[filter.op]!, get);
     }
   }
 }

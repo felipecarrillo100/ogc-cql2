@@ -35,6 +35,7 @@ The package implements these conformance classes:
 | Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | ✅ |
 | Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB; SQLite with SpatiaLite |
 | Property-Property Comparisons | a property or a literal on either side: comparisons, `like` (a string on the left), `between`, `in`, the spatial functions | ✅ | ✅ | ✅ |
+| Arithmetic Expressions | `+` `-` `*` `/` `%` `div` `^` wherever a number goes | ✅ | ✅ | ✅ |
 
 Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
 `s_intersects` and `s_disjoint` in memory, and the other relations with a geometry engine you plug in (GEOS in
@@ -45,8 +46,9 @@ missing, a filter is refused with the code `unsupported`.
 Every server of those classes must support a property on the left and a literal on the right. With Property-Property
 Comparisons, either side may be a property or a literal (`name = nameascii`, `'København' < name`,
 `S_WITHIN(BBOX(7,50,8,51), geom)`): a server that doesn't declare that class gets `needs-conformance` for them (see
-[Comparing two properties](#comparing-two-properties)). Anything else that is valid CQL2 (temporal and array functions,
-arithmetic, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
+[Comparing two properties](#comparing-two-properties)). With Arithmetic Expressions, a number can be computed
+(`area > population * 0.001`, see [Arithmetic](#arithmetic)). Anything else that is valid CQL2 (temporal and array
+functions, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
 will follow.
 
 ## A filter
@@ -297,8 +299,9 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
   language rules, which CQL2 doesn't.
 - **`postgresFunctions(schema)`** returns the SQL to run once: Unicode full case folding for CASEI (PostgreSQL's
   `lower()` isn't), accent removal for ACCENTI (PostgreSQL's `unaccent` extension follows a dictionary instead: it
-  turns `ø` into `o`), and strict readers of dates and instants in text columns. It needs no extension, only the right to
-  create objects in that schema.
+  turns `ø` into `o`), strict readers of dates and instants in text columns, and (since 1.2.0) `cql2_arithmetic` for
+  arithmetic expressions. It needs no extension, only the right to create objects in that schema. Run it again after
+  an upgrade that adds a function.
 - **Spatial filters (PostGIS):** give the geometry column as `{ sqlType: "geometry", column: "geom" }` (or
   `geometry(MultiPolygon, 4326)`, `geography`). `s_intersects` becomes `geom && literal AND NOT ST_Relate(geom,
   literal, 'FF*FF****')`: the box test uses the GiST index, and GEOS's DE-9IM matrix decides exactly, as `evaluate`
@@ -563,6 +566,36 @@ of `like` (its pattern is always a literal), and the spatial functions.
 - **Tested** with the standard's own Table 16 (Annex A.12) on its test data, in `evaluate`, SQLite, DuckDB (2.0 and
   1.4.3) and, for its spatial rows, on Natural Earth with GEOS; and with generated filters on every pair of columns,
   against `evaluate`, in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
+
+## Arithmetic
+
+With the Arithmetic Expressions class, a number can be computed from numbers and number properties, wherever a number
+goes: comparisons, `between`, `in`.
+
+```js
+{ op: ">", args: [{ property: "area" }, { op: "*", args: [{ property: "population" }, 0.001] }] }   // area > population * 0.001
+```
+
+CQL2 defines the operators (`+ - * / % div ^`), their precedence, and that a NULL operand gives NULL. It leaves the
+rest open, and engines differ on it, so the package decides, the same in `evaluate` and every SQL dialect:
+- **Numbers are doubles:** `5 / 2` is `2.5`, for integer columns too (SQLite and PostgreSQL would divide integers as
+  integers).
+- **`div`** is the quotient rounded toward zero, **`%`** its remainder, `x − y × trunc(x / y)`: `-7 div 2` is −3,
+  `-7 % 2` is −1, `7.5 % 2` is 1.5.
+- **A result that isn't a finite number is NULL,** never an error: division by zero, `0 ^ -1`, `(-8) ^ 0.5`, overflow.
+  So is an operand that isn't a number: values are never converted.
+- **An expression of literals** (`1038290 - 21 div 10`) is computed once, before the query.
+- **`^`** is exact when the power is (`area ^ 2`). Otherwise it is each engine's own `pow`, and those differ in the
+  last bit (measured: one case in five hundred, between V8, glibc and WebAssembly), so a comparison exactly on such a
+  value may differ by engine.
+- **The classes:** literals only on the right need Arithmetic Expressions. An expression on the left, or a property in
+  one on the right (`area > population * 0.001`), also needs Property-Property Comparisons.
+- **In SQL:** SQLite through `cql2_arithmetic` (one more of `sqliteFunctions`); PostgreSQL through `cql2_arithmetic`
+  (run `postgresFunctions` again after upgrading), which turns PostgreSQL's own errors into these results; DuckDB in
+  its own SQL.
+- **Tested** with the standard's Table 17 (Annex A.14) on its test data, in `evaluate`, SQLite and DuckDB, and with
+  generated expressions, zero divisors, signs, fractions, NaN, ±Infinity, overflow and underflow included, against
+  `evaluate` in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
 
 ## LIKE patterns
 
