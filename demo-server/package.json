@@ -1,7 +1,7 @@
 {
   "name": "ogc-cql2-demo-server",
   "private": true,
-  "description": "A query backend for the ogc-cql2 playground: CQL2-JSON and CQL2-text filters answered from GeoJSON files, GeoPackages and PostgreSQL, through ogc-cql2. Not published.",
+  "description": "A query backend for the ogc-cql2 playground: CQL2-JSON and CQL2-text filters answered from GeoJSON files, GeoParquet files (DuckDB), GeoPackages and PostgreSQL, through ogc-cql2. Not published.",
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -13,6 +13,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@duckdb/node-api": "^2.0.0-r.1",
     "express": "^5.3.0",
     "geos.js": "0.1.5",
     "ogc-cql2": "file:..",

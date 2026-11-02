@@ -9,10 +9,15 @@
 - `sub_regions.csv` and `sub_regions.csvt`: the divisions, and the CSV's column types for `ogr2ogr`.
 
 To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if `ogr2ogr` isn't on the path).
+- `kitchen_sink.parquet` and `states.parquet`: the kitchen sink and the states as GeoParquet 1.1 files, with GDAL's
+  bbox covering, made by `make-parquet.sh` with GDAL's `ogr2ogr` (3.13): the ids, every value and every geometry
+  (rings in their order) as in their sources, `kitchen_sink.geojson` and `usa.gpkg`. Served by DuckDB.
+  To regenerate them: `sh make-parquet.sh`.
 - `kitchen_sink.geojson`: every type and edge case the profile can compare (Unicode in NFC and NFD, `ß`, Greek,
   `İ`, `ﬁ`, emoji, U+E000, LIKE's `%` `_` `\`, integers up to 2⁵³ − 1, decimals, booleans, dates, UTC instants with
   milliseconds, local times without an offset, text that looks like dates and numbers, every geometry type, NULLs in
-  every column). The same rows go into `usa.gpkg` and into PostgreSQL, so every store must answer alike.
+  every column). The same rows go into `usa.gpkg`, `kitchen_sink.parquet` and PostgreSQL, so every store must answer
+  alike.
 
 ## PostgreSQL
 

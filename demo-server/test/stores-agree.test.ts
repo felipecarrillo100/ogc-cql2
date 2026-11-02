@@ -1,7 +1,7 @@
 /**
- * Three stores, one answer: the kitchen sink from its GeoJSON file (`evaluate`), from the GeoPackage (SQLite) and from
- * PostgreSQL must give exactly the same features (ids, properties, geometry) for every generated filter. The
- * PostgreSQL part runs when the database named by `.env` has the loaded `cql2demo` schema (load-postgres.sh);
+ * Four stores, one answer: the kitchen sink from its GeoJSON file (`evaluate`), from the GeoPackage (SQLite), from its
+ * GeoParquet file (DuckDB, with GDAL's float32 bbox covering) and from PostgreSQL must give exactly the same features
+ * (ids, properties, geometry) for every generated filter. The PostgreSQL part runs when the database named by `.env` has the loaded `cql2demo` schema (load-postgres.sh);
  * otherwise it is skipped, with the reason.
  */
 import assert from "node:assert/strict";
@@ -10,6 +10,7 @@ import { after, before, describe, it } from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import type { Cql2Filter } from "ogc-cql2";
 import { validate } from "ogc-cql2/validate";
+import { openDuckDB, openGeoParquet, type DuckDB } from "../src/stores/duckdb.ts";
 import { createGeoJsonStore } from "../src/stores/geojson.ts";
 import { openGeoPackage } from "../src/stores/geopackage.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
@@ -21,11 +22,17 @@ const fromFile = createGeoJsonStore({ id: "kitchen_sink", title: "Kitchen sink" 
 const gpkgPath = new URL("../data/usa.gpkg", import.meta.url).pathname;
 const fromGpkg = openGeoPackage({ file: gpkgPath, tables: ["kitchen_sink"] }).stores[0]!.store;
 
+let duck: DuckDB | undefined;
+let fromParquet: Store;
 let pool: ReturnType<typeof createPool> | undefined;
 let fromPg: Store | undefined;
 let fromPg3857: Store | undefined;
 let pgSkip = "";
 
+before(async () => {
+  duck = await openDuckDB();
+  fromParquet = await openGeoParquet(duck, { id: "kitchen_sink", title: "Kitchen sink", file: new URL("../data/kitchen_sink.parquet", import.meta.url).pathname });
+}, { timeout: 120_000 }); // INSTALL downloads DuckDB's spatial extension on a fresh machine
 before(async () => {
   if (!process.env.PGDATABASE) {
     pgSkip = "no PGDATABASE: run the tests with demo-server's .env (npm test does)";
@@ -44,7 +51,10 @@ before(async () => {
     pgSkip = `PostgreSQL isn't reachable: ${(error as Error).message}`;
   }
 });
-after(() => pool?.end());
+after(async () => {
+  await pool?.end();
+  duck?.close();
+});
 
 // --- The filters -------------------------------------------------------------------------------------------------
 
@@ -155,9 +165,10 @@ async function spatialDifferences(store: Store, filters: unknown[], label: strin
   return out;
 }
 
-describe("the kitchen sink, three stores", () => {
+describe("the kitchen sink, four stores", () => {
   it("the same queryables", (t) => {
     assert.deepEqual(fromGpkg.queryables(), fromFile.queryables());
+    assert.deepEqual(fromParquet.queryables(), fromFile.queryables());
     if (pgSkip) return t.skip(pgSkip);
     assert.deepEqual(fromPg!.queryables(), fromFile.queryables());
   });
@@ -165,6 +176,10 @@ describe("the kitchen sink, three stores", () => {
   it(`${FILTERS.length} filters: GeoJSON and GeoPackage give the same features`, async () => {
     assert.ok(FILTERS.length > 3000);
     assert.equal((await differences(fromFile, fromGpkg, "geopackage")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`${FILTERS.length} filters: GeoJSON and GeoParquet (DuckDB) give the same features`, async () => {
+    assert.equal((await differences(fromFile, fromParquet, "geoparquet")).slice(0, 10).join("\n"), "");
   });
 
   it(`${FILTERS.length} filters: GeoJSON and PostgreSQL give the same features`, async (t) => {
@@ -180,6 +195,14 @@ describe("the kitchen sink, three stores", () => {
 
   it(`spatial filters: GeoJSON and GeoPackage give the same features, also exactly on vertices`, async () => {
     assert.equal((await spatialDifferences(fromGpkg, [...SPATIAL_MARGIN, ...SPATIAL_EXACT], "geopackage")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`spatial filters: GeoJSON and GeoParquet (DuckDB, with the covering) give the same features, also exactly on vertices`, async () => {
+    assert.equal((await spatialDifferences(fromParquet, [...SPATIAL_MARGIN, ...SPATIAL_EXACT], "geoparquet")).slice(0, 10).join("\n"), "");
+  });
+
+  it(`the other relations: GeoJSON (evaluate with GEOS) and GeoParquet (DuckDB, with the covering) give the same features, also exactly on vertices`, async () => {
+    assert.equal((await spatialDifferences(fromParquet, [...RELATIONS_MARGIN, ...RELATIONS_EXACT], "geoparquet")).slice(0, 10).join("\n"), "");
   });
 
   it(`spatial filters: GeoJSON and PostgreSQL (4326) give the same features, also exactly on vertices`, async (t) => {

@@ -2,6 +2,8 @@
   "collections": [
     { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" },
     { "id": "kitchen_sink", "title": "Kitchen sink", "source": "geojson", "file": "data/kitchen_sink.geojson" },
+    { "id": "parquet-states", "title": "US states", "source": "geoparquet", "file": "data/states.parquet" },
+    { "id": "parquet-kitchen_sink", "title": "Kitchen sink", "source": "geoparquet", "file": "data/kitchen_sink.parquet" },
     { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-" },
     {
       "source": "postgres",
