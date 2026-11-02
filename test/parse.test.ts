@@ -349,9 +349,6 @@ describe("fromText: the profile check after the reading", () => {
   });
 
   it("refuses valid CQL2 outside the profile as invalid-filter, naming the class", () => {
-    expect(() => fromText("T_AFTER(t, DATE('2020-01-01'))")).toThrow(
-      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.temporal })] } }),
-    );
     expect(() => fromText("A_CONTAINS(tags, ('a', 'b'))")).toThrow(
       expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.arrays })] } }),
     );

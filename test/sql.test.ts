@@ -12,7 +12,7 @@ import { toPredicate } from "ogc-cql2/evaluate";
 import { sqliteFunctions, toSql } from "ogc-cql2/sql";
 import { validate } from "ogc-cql2/validate";
 import { COLUMNS, readRow, ROWS } from "./awkward.ts";
-import { generateArithmeticFilters, generatePropertyFilters } from "./corpus.ts";
+import { generateArithmeticFilters, generatePropertyFilters, generateTemporalFilters } from "./corpus.ts";
 
 // --- The table -------------------------------------------------------------------------------------------------------
 
@@ -176,6 +176,32 @@ describe("Arithmetic Expressions: SQLite selects exactly what evaluate selects",
   it("the test is not trivial: filters select different, non-empty sets", () => {
     const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
     expect(results.size).toBeGreaterThan(100); // 139 measured on these 21 rows
+  });
+});
+
+describe("Temporal Functions: SQLite selects exactly what evaluate selects, given the columns as queryables", () => {
+  // Literals among the table's values, sub-millisecond ones included.
+  const filters = generateTemporalFilters(["day", "ts", "x", "s"], ["2020-07-26", "2021-01-01", "2023-01-02", "1999-12-31"],
+    ["2023-01-01T00:00:00Z", "2022-12-31T23:00:00Z", "2023-01-01T00:00:00.5Z", "2023-01-02T00:00:00Z", "2022-12-31T22:59:59.9995Z"]);
+  const fromMemory = (filter: Cql2Filter): number[] =>
+    stored.filter(toPredicate(filter, { getProperty, queryables: COLUMNS })).map((r) => r.id as number);
+
+  it(`${filters.length} filters on ${ROWS.length} rows`, () => {
+    expect(filters.length).toBeGreaterThan(3000);
+    const differences: string[] = [];
+    for (const filter of filters) {
+      const sql = fromSql(filter);
+      const memory = fromMemory(filter);
+      if (JSON.stringify(sql) !== JSON.stringify(memory)) {
+        differences.push(`${JSON.stringify(filter)}\n    sqlite ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
+      }
+    }
+    expect(differences.slice(0, 20).join("\n")).toBe("");
+  });
+
+  it("the test is not trivial: filters select different, non-empty sets", () => {
+    const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
+    expect(results.size).toBeGreaterThan(50); // 58 measured: the table repeats its dates
   });
 });
 

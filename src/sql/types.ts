@@ -94,6 +94,12 @@ export interface View {
    * isn't `sql`: a form both columns share (a day as a number, for a DATE column against dates held as text).
    */
   readonly pair?: string;
+  /**
+   * A day or an instant view of a column that can hold `infinity` and keeps its index (a PostgreSQL or DuckDB DATE): the
+   * condition that the value is finite. Such a value is NULL in `evaluate` (it is served as no date), so the view's
+   * comparisons with a literal take it as NULL (see `toSql`). Its `pair` is NULL there already.
+   */
+  readonly finite?: string;
   /** `duckdb`: the text and the folds behind a text or folded view, for comparing two of them in a function. */
   readonly folded?: { readonly text: string; readonly folds: readonly Fold[] };
 }

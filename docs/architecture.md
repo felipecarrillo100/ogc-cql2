@@ -40,6 +40,12 @@ only a property on the left and a literal on the right (`/per/basic-cql2/cql2fil
 Since 1.2.0, Arithmetic Expressions: `+ - * / % div ^` wherever a number goes, computed with doubles (`div` toward
 zero, `%` its remainder), a result that isn't a finite number NULL, expressions of literals computed once.
 
+Since 1.3.0, Temporal Functions: the fifteen relations of instants and intervals, as OWL-Time defines them on the ends
+(`src/core/temporal.ts`, one table for `evaluate` and every dialect). Intervals are closed, an instant is an interval
+of zero length, `'..'` is the only open end; an instant in a relation of intervals only is refused, as the standard
+says; dates and timestamps are never converted (an interval mixing them is refused); NULL for a NULL end or an
+interval beginning after it ends. A literal first, or a property second, also needs Property-Property Comparisons.
+
 Since 1.1.0, Property-Property Comparisons too: a property or a literal on either side of a comparison, as the bounds
 of `between`, among the items of `in`, on the left of `like` (whose pattern stays a literal), and in either place of a
 spatial function. A literal on the left is the property on the left, the operator mirrored, and a literal first in a
@@ -399,6 +405,7 @@ Where the standard leaves a choice, or recommends without requiring, the package
 | Unicode normalization form | strings SHOULD be normalized before comparing, and NFD is the recommended form (Recommendation 1, `/rec/core/string-normalization` B) | normalizes, to **NFC** | the same answers for `=`, `<>`, `IN` and CASEI (canonically equivalent forms); NFD would reorder 0.8% of string pairs in the tests' data (`<`, `>`…) and break LIKE's `_` on accented letters (`'caf_'` would no longer match `café`, as `é` is two code points in NFD); NFC is the W3C's form for string matching on the web and how data is stored; DuckDB has no NFD |
 | Instants' precision | left to the server ("how this is implemented is a decision of the server") | milliseconds, a finer fraction truncated | JavaScript's precision; every engine (SQLite, PostgreSQL, DuckDB) is made to truncate the same way, so the results agree |
 | Numbers that aren't finite (NaN, ±Infinity) in the data | no literal for them (`validate` refuses one as `invalid-number`); nothing about values | ordered as SQL orders them, the same in every engine: NaN above every number, ±Infinity at the ends | measured 2026-10-31 with NaN and ±Infinity rows in the SQLite and DuckDB tests and a check in PostgreSQL: 0 of 27,487 filters differ, so nothing is converted. A server that sends them as JSON sends `null` (JSON has no NaN), which a client re-filtering what it received reads as NULL |
+| Infinite dates and timestamps in the data (PostgreSQL, DuckDB's DATE) | no such instant (`'..'` is only a literal) | NULL in comparisons, the same in every engine (since 1.3.0); served as the text `infinity`, so not NULL for `isNull` | `evaluate` reads the served text as no date, so SQL must too; on a DATE column the check is `(d op $1 AND isfinite(d))` (`OR NOT isfinite(d)` under a NOT), which keeps PostgreSQL's B-tree index where a `CASE` lost it (10M rows: about 20 ms against 400 ms, measured on PostgreSQL 14 and 18) |
 | A type mismatch in the data | — | NULL | a value of an unexpected type in the data (which GeoPackage permits) is a problem of the data, not of the filter; a mismatch in the filter itself is refused by `validate` with the queryables |
 
 ## How it is used
@@ -490,6 +497,10 @@ filter selects). The server never knows which store it talks to.
     (when the database is set up; skipped otherwise), and so do the spatial literals and the seven other relations;
   - `test/naturalearth.test.ts`: the standard's own acceptance test for Basic Spatial Functions (Table 12, conformance
     test 26) on Natural Earth 1:110m (public domain, `test/fixtures/naturalearth/`): all eight counts;
+  - `test/temporal.test.ts` (1.3.0): the standard's 72 temporal rows (Annex A's, and Table 16's) on its test data, in
+    `evaluate` and SQLite, and in `test/duckdb-spatial.ts` on DuckDB 2.0 and 1.4.3; 17,394 generated temporal filters
+    against `evaluate` in `test/sql.test.ts` and `test/sql-duckdb.test.ts` (rows of ±infinity in DuckDB), and on the
+    kitchen sink's `at` and `until` in the four stores;
   - `demo-server/test/spatial.test.ts`: S_INTERSECTS on the US states against GEOS (PostGIS's `NOT ST_Disjoint`), 5,705
     generated literals, many exactly on the states' vertices and edges: the same states. PostGIS's own
     `ST_Intersects` isn't the reference: its shortcut for a point in a polygon isn't exact for a point exactly on an
@@ -576,7 +587,7 @@ checks that they agree.
 | after 1.0.0 (demo only, not published) | GeoParquet files (made by GDAL) and a DuckDB store in `demo-server`, the kitchen sink giving the same features from four stores; the same files filtered in the playground by DuckDB-WASM, with the store's own SQL, on desktop and on phones |
 | 1.1.0 | **Property-Property Comparisons:** a property or a literal on either side, in every part and engine, spatial included; `evaluate`'s `queryables` option; `duckdbFunctions.cql2_compare`, `sqliteFunctions.cql2_intersects_pair`; the standard's Table 16 on its test data; NaN ordered as PostgreSQL and DuckDB order it |
 | 1.2.0 | **Arithmetic Expressions:** `+ - * / % div ^` wherever a number goes, in every part and engine; doubles, `div` toward zero and `%` its remainder, a non-finite result NULL; `sqliteFunctions.cql2_arithmetic`, PostgreSQL's `cql2_arithmetic` (in `postgresFunctions`); the standard's Table 17 on its test data |
-| 1.3.0 | **Temporal Functions** (planned): the fifteen relations of instants and intervals |
+| 1.3.0 | **Temporal Functions:** the fifteen relations of instants and intervals (OWL-Time, closed intervals, `'..'` open), in every part and engine; an instant refused where intervals only go; dates and timestamps never converted; the standard's 72 temporal rows on its test data. Fixed: infinite dates and timestamps NULL in every engine; DuckDB instants bound as text (node-api 1.4) |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes (arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 

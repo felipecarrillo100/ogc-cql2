@@ -73,6 +73,7 @@ describe("the PostgreSQL store", () => {
       day: { type: "string", format: "date" },
       at: { type: "string", format: "date-time" }, // timestamptz
       local_at: { type: "string" }, // timestamp without time zone: no offset, not an instant
+      until: { type: "string", format: "date-time" }, // timestamptz
       note: { type: "string" },
     });
   });
@@ -86,7 +87,8 @@ describe("the PostgreSQL store", () => {
       geometry: { type: "Point", coordinates: [4.35, 50.85] },
       properties: {
         name: "Straße", code: "100%", small: 1, count: 5, big: 9007199254740991, ratio: 2.5, amount: 12.34, active: true,
-        day: "2020-07-26", at: "2023-01-01T00:00:00.000Z", local_at: "2023-01-01T10:00:00.000", note: "2020-07-26",
+        day: "2020-07-26", at: "2023-01-01T00:00:00.000Z", local_at: "2023-01-01T10:00:00.000", until: "2023-12-31T23:59:59.999Z",
+        note: "2020-07-26",
       },
     }]);
   });

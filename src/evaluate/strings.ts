@@ -153,6 +153,9 @@ export function instantOf(value: unknown): number | undefined {
   return date.getTime() - offset;
 }
 
+/** A `YYYY-MM-DD` day as days since 1970-01-01. */
+export const dayNumber = (day: string): number => instantOf(`${day}T00:00:00Z`)! / 86_400_000;
+
 // --- LIKE ----------------------------------------------------------------------------------------------------------
 
 const escapeRegExp = (c: string): string => c.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");

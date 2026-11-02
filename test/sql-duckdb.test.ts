@@ -12,7 +12,7 @@ import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import { duckdbFunctions, duckdbValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { validate } from "ogc-cql2/validate";
-import { casei, generateArithmeticFilters, generateFilters, generatePropertyFilters, p } from "./corpus.ts";
+import { casei, generateArithmeticFilters, generateFilters, generatePropertyFilters, generateTemporalFilters, p } from "./corpus.ts";
 
 // --- The table -------------------------------------------------------------------------------------------------------
 
@@ -64,6 +64,9 @@ const ROWS: string[][] = [
   ["FALSE", "21", "21", "'0.9653517007827759'::DOUBLE", "21", "'x'", "DATE '2023-01-04'", "TIMESTAMPTZ '2023-01-04 00:00:00+00'", "TIMESTAMP '2023-01-04 00:00:00'", "'2023-01-04'", "'2023-01-04T00:00:00Z'", "'x'"],
   ["TRUE", "22", "22", "'-174.71493244171143'::DOUBLE", "22", "'y'", "DATE '2023-01-04'", "TIMESTAMPTZ '2023-01-04 00:00:00+00'", "TIMESTAMP '2023-01-04 00:00:00'", "'2023-01-04'", "'2023-01-04T00:00:00Z'", "'y'"],
   ["FALSE", "23", "23", "'206289291381835.94'::DOUBLE", "23", "'z'", "DATE '2023-01-04'", "TIMESTAMPTZ '2023-01-04 00:00:00+00'", "TIMESTAMP '2023-01-04 00:00:00'", "'2023-01-04'", "'2023-01-04T00:00:00Z'", "'z'"],
+  // Infinite dates and timestamps: DuckDB stores them (CQL2 has none), served as `infinity`, which is no date.
+  ["TRUE", "24", "24", "24", "24", "'∞'", "DATE 'infinity'", "TIMESTAMPTZ 'infinity'", "TIMESTAMP 'infinity'", "'2023-01-04'", "'infinity'", "'∞'"],
+  ["FALSE", "25", "25", "25", "25", "'-∞'", "DATE '-infinity'", "TIMESTAMPTZ '-infinity'", "TIMESTAMP '-infinity'", "'-infinity'", "'2023-01-04T00:00:00Z'", "'-∞'"],
 ];
 
 /** Registers `duckdbFunctions` on a connection, as the README shows. */
@@ -154,6 +157,9 @@ describe("DuckDB selects exactly what evaluate selects", () => {
       label: "river",
     });
     expect(served[3]!.at).toBe("1969-12-31T23:59:59.999Z");
+    // Infinity is served as its text: no date (NULL in comparisons), not NULL itself.
+    const [up, down] = ["∞", "-∞"].map((label) => served.find((r) => r.label === label)!);
+    expect([up!.day, up!.at, up!.local_at, down!.day, down!.at, down!.local_at]).toEqual(["infinity", "infinity", "infinity", "-infinity", "-infinity", "-infinity"]);
   });
 });
 
@@ -229,6 +235,34 @@ describe("Arithmetic Expressions: DuckDB selects exactly what evaluate selects",
   }
 });
 
+describe("Temporal Functions: DuckDB selects exactly what evaluate selects, given the columns as queryables", () => {
+  // Literals among the table's values, sub-millisecond ones included.
+  const filters = generateTemporalFilters(["day", "at", "sday", "sat"], ["2020-07-26", "2021-01-01", "2023-01-01", "1999-12-31"],
+    ["2023-01-01T00:00:00Z", "2023-01-01T00:00:00.001Z", "1969-12-31T23:59:59.999Z", "2022-12-31T23:00:00Z", "2023-01-01T00:00:00.0005Z"]);
+  const fromMemory = (filter: Cql2Filter): number[] =>
+    served.filter(toPredicate(filter, { getProperty: (row, name) => row[name], queryables: COLUMNS })).map((r) => r.id as number);
+
+  for (const [label, connection] of [["plain settings", () => plain], ["nocase collation, New York time zone", () => hostile]] as const) {
+    it(`${filters.length} filters on ${ROWS.length} rows (${label})`, async () => {
+      expect(filters.length).toBeGreaterThan(3000);
+      const differences: string[] = [];
+      for (const filter of filters) {
+        const sql = await fromSql(connection(), filter);
+        const memory = fromMemory(filter);
+        if (JSON.stringify(sql) !== JSON.stringify(memory)) {
+          differences.push(`${JSON.stringify(filter)}\n    duckdb ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
+        }
+      }
+      expect(differences.slice(0, 20).join("\n")).toBe("");
+    }, 240_000);
+  }
+
+  it("the test is not trivial: filters select different, non-empty sets", () => {
+    const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
+    expect(results.size).toBeGreaterThan(120); // 139 measured
+  });
+});
+
 // --- validate with queryables against evaluate -------------------------------------------------------------------
 
 describe("validate with the table's queryables refuses only filters evaluate can't match", () => {
@@ -299,16 +333,18 @@ describe("the SQL it builds", () => {
     });
   });
 
-  it("instants as epoch milliseconds; dates natively, or as day numbers from text", () => {
+  it("instants as epoch milliseconds; dates natively (infinity as NULL), or as day numbers from text", () => {
     expect(sql({ op: "<", args: [p("at"), { timestamp: "2023-01-01T00:00:00Z" }] })).toEqual({
       where: `floor(epoch_us("at") / 1000) < $1::DOUBLE`,
-      params: [1672531200000],
+      params: ["1672531200000"], // as text: @duckdb/node-api 1.4 binds a number as a 32-bit INTEGER
     });
-    expect(sql({ op: "=", args: [p("day"), { date: "2020-07-26" }] })).toEqual({ where: `"day" = $1::DATE`, params: ["2020-07-26"] });
+    // An infinite date is NULL: FALSE selects the same rows outside a NOT, TRUE inside one; the column keeps its index.
+    expect(sql({ op: "=", args: [p("day"), { date: "2020-07-26" }] })).toEqual({ where: `("day" = $1::DATE AND isfinite("day"))`, params: ["2020-07-26"] });
+    expect(sql({ op: "not", args: [{ op: "=", args: [p("day"), { date: "2020-07-26" }] }] }).where).toBe(`NOT (("day" = $1::DATE OR NOT isfinite("day")))`);
     expect(sql({ op: "=", args: [p("sday"), { date: "1970-01-02" }] })).toEqual({ where: `cql2_day("sday") = $1::INTEGER`, params: [1] });
     expect(sql({ op: ">", args: [p("sat"), { timestamp: "1970-01-02T00:00:00.001Z" }] })).toEqual({
       where: `(CAST(cql2_instant_day("sat") AS BIGINT) * 86400000 + cql2_instant_ms("sat")) > $1::BIGINT`,
-      params: [86400001],
+      params: ["86400001"],
     });
   });
 

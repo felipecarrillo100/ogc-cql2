@@ -161,8 +161,8 @@ describe('CQL2-text filters ("filter-lang": "cql2-text")', () => {
   it("valid CQL2-text that doesn't fit the profile or the queryables: invalid-filter, with the problems", async () => {
     const unknown = await read(query("states", { filter: "NOPE = 1", "filter-lang": "cql2-text" }));
     assert.deepEqual([unknown.code, unknown.problems[0].code], ["invalid-filter", "unknown-property"]);
-    const temporal = await read(query("states", { filter: "T_AFTER(STATE_NAME, DATE('2020-01-01'))", "filter-lang": "cql2-text" }));
-    assert.deepEqual([temporal.code, temporal.problems[0].code], ["invalid-filter", "outside-profile"]);
+    const arrays = await read(query("states", { filter: "A_CONTAINS(STATE_NAME, ('a'))", "filter-lang": "cql2-text" }));
+    assert.deepEqual([arrays.code, arrays.problems[0].code], ["invalid-filter", "outside-profile"]);
   });
 
   it("an unknown filter-lang, or cql2-text with a filter that isn't a string: invalid-request", async () => {

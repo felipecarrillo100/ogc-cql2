@@ -5,6 +5,59 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.3.0] - 2026-11-02
+
+The Temporal Functions class: how instants and intervals relate, in every part and every engine, for the queries a
+time slider or a `datetime` parameter sends (`T_INTERSECTS(updated, INTERVAL('2026-01-01T00:00:00Z', '..'))`). A minor
+version: every filter valid in 1.2.0 gives the same text and the same answers, except on rows holding an infinite date
+or timestamp (Fixed, below).
+
+### Added
+
+- **Temporal Functions** (OGC 21-065r2 §7.11), in `validate`, `toText`, `fromText`, `evaluate` and every `toSql`
+  dialect: the fifteen functions `t_after` … `t_starts`, and interval literals, `{ "interval": [start, end] }`, each
+  end a date, a timestamp, a property or `".."`.
+  - New `Cql2Filter` member: `TemporalPredicate`, with `TemporalOperator`, `TemporalOperand`, `IntervalLiteral` and
+    `IntervalEnd`; `CONFORMANCE.temporal`.
+  - The relations are OWL-Time's on the interval ends: intervals closed at both ends, an instant an interval of zero
+    length, `".."` unbounded. NULL when an operand is NULL, so also for an interval with a NULL end or beginning after
+    it ends.
+  - The ten relations of intervals only refuse an instant (`wrong-arguments`), as the standard says. An interval with
+    a date at one end and a timestamp at the other is refused (`type-mismatch`): values are never converted.
+  - A literal first, or a property second, also needs Property-Property Comparisons.
+
+### Changed
+
+- The standard's temporal examples (`clause7_12`, `clause7_13`, `clause7_17`, `example20`–`example22`,
+  `example53`–`example59`, `example61`, `example62`, `example64`–`example67`) are now valid by default, where 1.2
+  refused them as `outside-profile`. `example60` and `example63`, which mix a date and a timestamp in one interval
+  against the standard's own rule, are refused as `type-mismatch`.
+- `duckdb`: an instant literal is a parameter as text (`"1672531200000"`), as numbers already were, so `params` holds
+  a string where it held a number. The SQL casts it, so it selects the same rows (see Fixed).
+- `postgres` and `duckdb`: an infinite date or timestamp is served (`postgresValue`, `duckdbValue`) as its text,
+  `infinity` or `-infinity`, where PostgreSQL's served value, and DuckDB's for `TIMESTAMP WITH TIME ZONE`, was NULL.
+
+### Fixed
+
+- **Infinite dates and timestamps** (PostgreSQL, and DuckDB's DATE): a comparison now gives NULL, as `evaluate` gives
+  on the served value, where it compared them as later or earlier than every value, and `isNull` agrees with
+  `evaluate`. On a DATE column the check keeps PostgreSQL's index.
+- **DuckDB 1.4 in Node:** `@duckdb/node-api` 1.4 binds a JavaScript number parameter as a 32-bit integer, so every
+  comparison with a timestamp literal compared a wrapped number. DuckDB 2.0 and DuckDB-WASM were right.
+
+### Documented
+
+- The standard's links for T_STARTEDBY and T_STARTS are swapped; its tests follow the names, and so does the package.
+
+### Tested
+
+- The standard's own temporal tests on its test data: all 72 rows (Annex A's 36, and Table 16's 36 with the operands
+  swapped) in `evaluate`, SQLite and DuckDB 2.0 and 1.4.3.
+- Generated temporal filters against `evaluate` (NULL ends, equal ends, a start after its end, `".."`, sub-millisecond
+  values, dates and timestamps held as text, and ±infinity): SQLite, DuckDB (also with a `nocase` collation and
+  another time zone), DuckDB 1.4.3, DuckDB-WASM, PostgreSQL 17 and 18 agree; the kitchen sink, with a second instant
+  `until`, gives the same features from all four of demo-server's stores.
+
 ## [1.2.0] - 2026-11-02
 
 The Arithmetic Expressions class: numbers computed from numbers and number properties, in every part and every

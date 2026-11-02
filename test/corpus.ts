@@ -138,3 +138,52 @@ export function generateArithmeticFilters(properties: readonly string[]): Cql2Fi
   }
   return [...valid, ...nots, ...pairs];
 }
+
+/**
+ * Temporal filters on the given properties: every function, with instants and intervals of dates and of timestamps,
+ * `'..'` at either end, a literal first, two properties, an interval of one property, and literals only; with NOT,
+ * AND and OR. The literals sit on and around the awkward values' ends, so that equal ends occur.
+ */
+export function generateTemporalFilters(
+  properties: readonly string[],
+  days = ["2022-04-16", "2021-04-16", "2023-04-16", "1970-01-01"],
+  instants = ["2022-04-16T10:13:19Z", "2022-04-16T10:15:10Z", "2022-04-16T00:00:00Z", "1969-12-31T23:59:59.999Z", "2022-04-16T10:15:10.0004Z"],
+): Cql2Filter[] {
+  const ops = [
+    "t_after", "t_before", "t_disjoint", "t_equals", "t_intersects", "t_contains", "t_during", "t_finishedBy",
+    "t_finishes", "t_meets", "t_metBy", "t_overlappedBy", "t_overlaps", "t_startedBy", "t_starts",
+  ];
+  const intervals = [
+    ...days.flatMap((a, i) => [[a, days[(i + 1) % days.length]!], [a, a], [a, ".."], ["..", a]]),
+    ...instants.flatMap((a, i) => [[a, instants[(i + 2) % instants.length]!], [a, a], [a, ".."], ["..", a]]),
+    ["..", ".."],
+  ].map((interval) => ({ interval }));
+  const literals = [...days.map((date) => ({ date })), ...instants.map((timestamp) => ({ timestamp })), ...intervals];
+  const leaves: unknown[] = [];
+  ops.forEach((op, k) => {
+    for (const a of properties) {
+      for (const [i, l] of literals.entries()) {
+        if ((i + k) % 3 === 0) leaves.push({ op, args: [p(a), l] });
+        if ((i + k) % 5 === 0) leaves.push({ op, args: [l, p(a)] });
+      }
+      for (const b of properties) {
+        leaves.push({ op, args: [p(a), p(b)] });
+        for (const [i, l] of intervals.entries()) {
+          if ((i + k) % 2 === 0) leaves.push({ op, args: [{ interval: [p(a), p(b)] }, l] });
+          if ((i + k) % 4 === 1) leaves.push({ op, args: [l, { interval: [p(a), p(b)] }] });
+        }
+        leaves.push({ op, args: [{ interval: [p(a), ".."] }, { interval: ["..", p(b)] }] });
+        leaves.push({ op, args: [{ interval: [p(a), p(a)] }, { interval: [p(b), p(b)] }] });
+        leaves.push({ op, args: [{ interval: [p(a), p(b)] }, { interval: [p(b), p(a)] }] });
+      }
+    }
+    leaves.push({ op, args: [intervals[k % intervals.length], intervals[(k * 7 + 3) % intervals.length]] });
+  });
+  const valid = leaves.filter((f) => validate(f).valid) as Cql2Filter[];
+  const nots = valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter);
+  const pairs: Cql2Filter[] = [];
+  for (let i = 0; i + 1 < valid.length; i += 11) {
+    pairs.push({ op: "and", args: [valid[i]!, valid[i + 1]!] }, { op: "or", args: [valid[i]!, { op: "not", args: [valid[i + 1]!] }] });
+  }
+  return [...valid, ...nots, ...pairs];
+}

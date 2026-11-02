@@ -29,14 +29,15 @@ import { unwrap, type Fold } from "../core/folds.js";
 import { CONVERSE, dimension, literalGeometry, relates, transpose, type MatrixRelation } from "../core/relate.js";
 import { isArithmetic, operate } from "../core/arithmetic.js";
 import { heldKind } from "../core/queryables.js";
+import { OPEN, holds, isTemporal, type End } from "../core/temporal.js";
 import type {
-  ArithmeticOperand, Cql2Filter, FoldedString, Geometry, NumericOperand, Operand,
-  PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator,
+  ArithmeticOperand, Cql2Filter, FoldedString, Geometry, IntervalEnd, NumericOperand, Operand,
+  PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator, TemporalOperand, TemporalOperator,
 } from "../core/types.js";
 import { NOT_IN_EVALUATE, refuseUnsupported } from "../core/unsupported.js";
 import { geometryParts, intersects, literalParts } from "./spatial.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
-import { compareCodePoints, dayOf, foldKey, instantOf, likeRegExp } from "./strings.js";
+import { compareCodePoints, dayNumber, dayOf, foldKey, instantOf, likeRegExp } from "./strings.js";
 
 /** TRUE, FALSE, or NULL (unknown). */
 export type Truth = boolean | null;
@@ -228,6 +229,77 @@ function comparer<F>(a: Side, b: Side, test: (order: number) => boolean, get: Ge
   };
 }
 
+// --- Temporal Functions --------------------------------------------------------------------------------------------
+
+type TemporalKind = "date" | "instant";
+
+/** An end, compiled once: a value (a literal's, or ±Infinity for ".."), or a property to read from each feature. */
+type TemporalEnd = { readonly value: number; readonly kind: TemporalKind | undefined } | { readonly name: string };
+
+const endOf = (x: IntervalEnd, open: number): TemporalEnd =>
+  typeof x !== "string" ? { name: x.property }
+    : x === OPEN ? { value: open, kind: undefined }
+    : x.includes("T") ? { value: instantOf(x)!, kind: "instant" } // validate has checked both
+    : { value: dayNumber(x), kind: "date" };
+
+/** An operand's begin and end: an instant is the interval from it to itself. */
+function endsOf(x: TemporalOperand): readonly [TemporalEnd, TemporalEnd] {
+  if ("interval" in x) return [endOf(x.interval[0], -Infinity), endOf(x.interval[1], Infinity)];
+  if ("property" in x) return [{ name: x.property }, { name: x.property }];
+  const end: TemporalEnd = "date" in x ? { value: dayNumber(x.date), kind: "date" } : { value: instantOf(x.timestamp)!, kind: "instant" };
+  return [end, end];
+}
+
+/** A value as an end of `kind`, or of its own kind when nothing says (a `Date` is an instant); `undefined` if it isn't one. */
+function moment(value: unknown, kind: TemporalKind | undefined): { readonly value: number; readonly kind: TemporalKind } | undefined {
+  const k = kind ?? (value instanceof Date || dayOf(value) === undefined ? "instant" : "date");
+  const day = k === "date" ? dayOf(value) : undefined;
+  const ms = k === "instant" ? instantOf(value) : undefined;
+  return day !== undefined ? { value: dayNumber(day), kind: k } : ms !== undefined ? { value: ms, kind: k } : undefined;
+}
+
+const INDEX: Readonly<Record<End, number>> = { b1: 0, e1: 1, b2: 2, e2: 3 };
+
+/**
+ * A temporal function, compiled once. All the ends are of one kind: a literal's, else what the properties'
+ * queryables say, else the values' own (each must be of the same). NULL when a property is NULL or not of the kind,
+ * or when an interval begins after it ends (it is no interval).
+ */
+function temporal<F>(op: TemporalOperator, args: readonly [TemporalOperand, TemporalOperand], get: Getter<F>, queryables: Queryables): (feature: F) => Truth {
+  const ends = [...endsOf(args[0]), ...endsOf(args[1])];
+  const held = (name: string): TemporalKind | undefined => {
+    const q = queryables && Object.hasOwn(queryables, name) ? heldKind(queryables[name] as Queryable) : undefined;
+    return q === "date" ? "date" : q === "instant" ? "instant" : undefined;
+  };
+  const literals = new Set(ends.flatMap((e) => ("kind" in e && e.kind ? [e.kind] : [])));
+  const kinds = literals.size > 0 ? literals : new Set(ends.flatMap((e) => ("name" in e && held(e.name) ? [held(e.name)!] : [])));
+  if (kinds.size > 1) return () => null; // queryables of both kinds: never one kind
+  const kind = kinds.values().next().value;
+  const decide = (v: readonly number[]): Truth =>
+    order(v[0]!, v[1]!) > 0 || order(v[2]!, v[3]!) > 0 ? null : holds(op, ([l, o, r]) => COMPARE[o]!(order(v[INDEX[l]]!, v[INDEX[r]]!)));
+  if (ends.every((e) => "value" in e)) {
+    const result = decide(ends.map((e) => (e as { value: number }).value)); // literals only: decided once
+    return () => result;
+  }
+  return (f) => {
+    const values: number[] = [];
+    let seen = kind;
+    for (const e of ends) {
+      if ("value" in e) {
+        values.push(e.value);
+        continue;
+      }
+      const v = get(f, e.name);
+      if (isNullish(v)) return null;
+      const m = moment(v, kind);
+      if (m === undefined || (seen !== undefined && m.kind !== seen)) return null; // not of the kind: a type mismatch
+      seen = m.kind;
+      values.push(m.value);
+    }
+    return decide(values);
+  };
+}
+
 // --- Spatial relations with a literal first, or two properties (Property-Property Comparisons) ---------------------
 
 const isRef = (x: PropertyRef | SpatialLiteral): x is PropertyRef => "property" in x;
@@ -267,6 +339,7 @@ function compile<F>(
 ): (feature: F) => Truth {
   if (typeof filter === "boolean") return () => filter;
   const sub = (x: Cql2Filter) => compile(x, get, geometry, engine, queryables);
+  if (isTemporal(filter.op)) return temporal(filter.op, filter.args as readonly [TemporalOperand, TemporalOperand], get, queryables);
   if (filter.op in CONVERSE) {
     const op = filter.op as SpatialOperator;
     const [a, b] = filter.args as readonly [PropertyRef | SpatialLiteral, PropertyRef | SpatialLiteral];
@@ -380,7 +453,7 @@ function compile<F>(
       return (f) => equals.reduce<Truth>((acc, eq) => (acc === true ? true : or(acc, eq(f))), false);
     }
     default: {
-      const [a, b] = filter.args;
+      const [a, b] = filter.args as readonly [ArithmeticOperand, ArithmeticOperand];
       return comparer(sideOf(a, queryables, get as Getter<unknown>), sideOf(b, queryables, get as Getter<unknown>), COMPARE[filter.op]!, get);
     }
   }

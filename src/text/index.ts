@@ -9,9 +9,10 @@
 import { Cql2Error } from "../core/errors.js";
 import { unwrap, type Fold } from "../core/folds.js";
 import { IDENTIFIER, KEYWORDS, NOT_A_CHARACTER } from "../core/grammar.js";
+import { isTemporal } from "../core/temporal.js";
 import type {
   ArithmeticExpression, ArithmeticOperand, Cql2Filter, FoldedString, Geometry, NumericOperand, PropertyRef, ScalarLiteral,
-  SpatialLiteral,
+  SpatialLiteral, TemporalOperand,
 } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
 import { positionsOf, wkt, wktNumber as number } from "../core/wkt.js";
@@ -150,6 +151,15 @@ function literal(x: ScalarLiteral | FoldedString): string {
   return wrapped(quoteString(inner), folds);
 }
 
+/**
+ * An operand of a temporal function: a property, an instant, or `INTERVAL(start, end)`, whose ends are the grammar's
+ * `instantParameter`: a date or timestamp string, `'..'` or a property.
+ */
+const temporalOperand = (x: TemporalOperand): string =>
+  "interval" in x
+    ? `INTERVAL(${x.interval.map((end) => (typeof end === "string" ? quoteString(end) : propertyName(end))).join(", ")})`
+    : operand(x);
+
 // --- Geometries, as WKT per the grammar (`spatialInstance`) ------------------------------------------------------
 
 /** `scientificNumericLiteral = mantissa "E" exponent`: JavaScript writes 1e+21 and 1.5e-7 with a lowercase e. */
@@ -187,7 +197,8 @@ function write(filter: Cql2Filter): string {
     case "s_contains":
       return `${filter.op.toUpperCase()}(${filter.args.map((g) => ("property" in g ? propertyName(g as PropertyRef) : spatialLiteral(g))).join(", ")})`;
     default:
-      return `${operand(filter.args[0])} ${filter.op} ${operand(filter.args[1])}`;
+      if (isTemporal(filter.op)) return `${filter.op.toUpperCase()}(${(filter.args as readonly TemporalOperand[]).map(temporalOperand).join(", ")})`;
+      return `${operand(filter.args[0] as ArithmeticOperand)} ${filter.op} ${operand(filter.args[1] as ArithmeticOperand)}`;
   }
 }
 
