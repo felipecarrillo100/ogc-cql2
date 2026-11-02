@@ -21,7 +21,7 @@ import type { Fold } from "../../core/folds.js";
 import type { MatrixRelation } from "../../core/relate.js";
 import { literalParts } from "../../evaluate/spatial.js";
 import { caseiKey, compareCodePoints, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
-import type { SpatialLiteral } from "../../core/types.js";
+import type { ArithmeticOperator, SpatialLiteral } from "../../core/types.js";
 import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 import { bareType, likePattern, queryableClass } from "./postgres.js";
 import { cachedLike } from "./sqlite.js";
@@ -336,8 +336,21 @@ function spatial(sql: string, column: SqlColumn, literal: SpatialLiteral, param:
   return `((${overlaps.length === 1 ? overlaps[0] : overlaps.map((o) => `(${o})`).join(" OR ")}) AND ${test})`;
 }
 
+/**
+ * `a op b` of two doubles, as `evaluate` computes it: DuckDB's own operations (IEEE, never an error for doubles),
+ * `div` as `trunc(a / b)`, `%` as `a − b × trunc(a / b)`, then a result that isn't finite is NULL (DuckDB finds NaN
+ * equal to NaN, so NULLIF takes it too).
+ */
+function duckdbArithmetic(op: ArithmeticOperator, a: string, b: string): string {
+  const e = op === "div" ? `trunc(${a} / ${b})` : op === "%" ? `(${a} - ${b} * trunc(${a} / ${b}))` : op === "^" ? `pow(${a}, ${b})` : `(${a} ${op} ${b})`;
+  return `NULLIF(NULLIF(NULLIF(${e}, 'inf'::DOUBLE), '-inf'::DOUBLE), 'nan'::DOUBLE)`;
+}
+
 export const duckdb: Dialect = {
   placeholder: (n) => `$${n}`,
+  // As text, as the number views bind them (DuckDB-WASM binds a 17-digit number one unit off).
+  number: (value, param) => `${param(String(value))}::DOUBLE`,
+  arithmetic: duckdbArithmetic,
   true: "TRUE",
   false: "FALSE",
   never: "NULL::BOOLEAN",

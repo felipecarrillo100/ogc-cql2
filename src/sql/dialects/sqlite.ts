@@ -19,8 +19,9 @@ import { literalGeometry, type MatrixRelation } from "../../core/relate.js";
 import { wkt } from "../../core/wkt.js";
 import { geometryParts, literalParts } from "../../evaluate/spatial.js";
 import { intersectsStored, intersectsStoredPair } from "../intersects.js";
+import { OPERATORS, operate } from "../../core/arithmetic.js";
 import { gpkgEnvelope, readStoredGeometry } from "../wkb.js";
-import type { SpatialLiteral } from "../../core/types.js";
+import type { ArithmeticOperator, SpatialLiteral } from "../../core/types.js";
 import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 const likeCache = new Map<string, RegExp>();
@@ -50,6 +51,7 @@ export const sqliteFunctions: {
   readonly cql2_like: (value: unknown, pattern: unknown) => number | null;
   readonly cql2_intersects: (geometry: unknown, literal: unknown) => number | null;
   readonly cql2_intersects_pair: (a: unknown, b: unknown) => number | null;
+  readonly cql2_arithmetic: (op: unknown, a: unknown, b: unknown) => number | null;
   readonly cql2_wkt: (geometry: unknown) => string | null;
 } = {
   /** A text value, NFC-normalized. */
@@ -77,6 +79,14 @@ export const sqliteFunctions: {
    * is NULL or isn't a geometry. `evaluate`'s own engine decides.
    */
   cql2_intersects_pair: intersectsStoredPair,
+  /**
+   * `a op b` (Arithmetic Expressions: `+ - * / % div ^`), exactly as `evaluate` computes it: NULL for a NULL or a value
+   * that isn't a number, and for a result that isn't a finite number.
+   */
+  cql2_arithmetic: (op, a, b) => {
+    const number = (v: unknown): number | null => (typeof v === "number" ? v : typeof v === "bigint" ? Number(v) : null);
+    return typeof op === "string" && Object.hasOwn(OPERATORS, op) ? operate(op as ArithmeticOperator, number(a), number(b)) : null;
+  },
   /**
    * A stored geometry (a GeoPackage blob, or WKB, extended WKB included) as WKT, for SpatiaLite (`spatialite: true`)
    * where its own readers can't take it; `""` for an empty geometry, which SpatiaLite can't represent; NULL for a NULL
@@ -209,6 +219,8 @@ function sqlitePair(relation: "s_intersects" | MatrixRelation, a: PairSide, b: P
 
 export const sqlite: Dialect = {
   placeholder: () => "?",
+  number: (value, param) => param(value),
+  arithmetic: (op, a, b) => `cql2_arithmetic('${op}', ${a}, ${b})`,
   true: "1",
   false: "0",
   never: "NULL",

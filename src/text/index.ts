@@ -10,7 +10,8 @@ import { Cql2Error } from "../core/errors.js";
 import { unwrap, type Fold } from "../core/folds.js";
 import { IDENTIFIER, KEYWORDS, NOT_A_CHARACTER } from "../core/grammar.js";
 import type {
-  Cql2Filter, FoldedString, Geometry, Operand, PropertyRef, ScalarLiteral, SpatialLiteral,
+  ArithmeticExpression, ArithmeticOperand, Cql2Filter, FoldedString, Geometry, NumericOperand, PropertyRef, ScalarLiteral,
+  SpatialLiteral,
 } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
 import { positionsOf, wkt, wktNumber as number } from "../core/wkt.js";
@@ -109,8 +110,28 @@ function propertyName(ref: PropertyRef): string {
 const wrapped = (inner: string, folds: readonly Fold[]): string =>
   folds.reduce((text, fold) => `${fold.toUpperCase()}(${text})`, inner);
 
-/** Either side of a comparison: a property or a string under its folds, or a literal. */
-function operand(x: Operand): string {
+/** The grammar's precedence: `+ -` (arithmeticExpression), `* / % div` (arithmeticTerm), `^` (powerTerm). */
+const PRECEDENCE: Readonly<Record<string, number>> = { "+": 1, "-": 1, "*": 2, "/": 2, "%": 2, div: 2, "^": 3 };
+
+/**
+ * An arithmetic expression, in parentheses only where the grammar needs them: the operators group left to right, so
+ * a child of lower precedence, or of the same on the right, is a group; either side of `^` (one `arithmeticFactor`
+ * each) too.
+ */
+function arithmetic(x: ArithmeticExpression): string {
+  const p = PRECEDENCE[x.op]!;
+  const side = (y: NumericOperand, right: boolean): string => {
+    if (typeof y === "number") return number(y);
+    if ("property" in y) return propertyName(y);
+    const q = PRECEDENCE[y.op]!;
+    return q < p || (q === p && (right || p === 3)) ? `(${arithmetic(y)})` : arithmetic(y);
+  };
+  return `${side(x.args[0], false)} ${x.op} ${side(x.args[1], true)}`;
+}
+
+/** Either side of a comparison: a property or a string under its folds, a literal, or an arithmetic expression. */
+function operand(x: ArithmeticOperand): string {
+  if (typeof x === "object" && "op" in x && x.op in PRECEDENCE) return arithmetic(x as ArithmeticExpression);
   if (typeof x === "object" && "property" in x) return propertyName(x);
   if (typeof x === "object" && "op" in x) {
     const { inner, folds } = unwrap(x as FoldedString) as { readonly inner: PropertyRef | string; readonly folds: readonly Fold[] };

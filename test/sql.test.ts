@@ -12,7 +12,7 @@ import { toPredicate } from "ogc-cql2/evaluate";
 import { sqliteFunctions, toSql } from "ogc-cql2/sql";
 import { validate } from "ogc-cql2/validate";
 import { COLUMNS, readRow, ROWS } from "./awkward.ts";
-import { generatePropertyFilters } from "./corpus.ts";
+import { generateArithmeticFilters, generatePropertyFilters } from "./corpus.ts";
 
 // --- The table -------------------------------------------------------------------------------------------------------
 
@@ -153,6 +153,29 @@ describe("Property-Property Comparisons: SQLite selects exactly what evaluate se
   it("the test is not trivial: filters select different, non-empty sets", () => {
     const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
     expect(results.size).toBeGreaterThan(150);
+  });
+});
+
+describe("Arithmetic Expressions: SQLite selects exactly what evaluate selects", () => {
+  const filters = generateArithmeticFilters(PROPERTIES);
+  const fromMemory = (filter: Cql2Filter): number[] => stored.filter(toPredicate(filter, { getProperty })).map((r) => r.id as number);
+
+  it(`${filters.length} filters on ${ROWS.length} rows`, () => {
+    expect(filters.length).toBeGreaterThan(3000);
+    const differences: string[] = [];
+    for (const filter of filters) {
+      const sql = fromSql(filter);
+      const memory = fromMemory(filter);
+      if (JSON.stringify(sql) !== JSON.stringify(memory)) {
+        differences.push(`${JSON.stringify(filter)}\n    sqlite ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
+      }
+    }
+    expect(differences.slice(0, 20).join("\n")).toBe("");
+  });
+
+  it("the test is not trivial: filters select different, non-empty sets", () => {
+    const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
+    expect(results.size).toBeGreaterThan(100); // 139 measured on these 21 rows
   });
 });
 

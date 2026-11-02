@@ -99,3 +99,42 @@ export function generatePropertyFilters(properties: readonly string[]): Cql2Filt
   }
   return [...valid, ...nots, ...pairs];
 }
+
+/**
+ * Arithmetic Expressions for the same differential tests: each operator on a property and a literal, on two
+ * properties, nested, and of literals alone, under every comparison, in BETWEEN and IN, and under NOT, AND and OR.
+ * The literals reach zero divisors, fractions, signs, overflow (1e308) and underflow (1e-320). Powers only with whole
+ * exponents 0–3, whose results are exact: a power that isn't exact may differ in the last bit between engines.
+ */
+export function generateArithmeticFilters(properties: readonly string[]): Cql2Filter[] {
+  const ops = ["+", "-", "*", "/", "%", "div"];
+  const values = [0, 1, -1, 2, 0.5, 3, 7.5, -2.5, 1e308, -1e308, 1e-320];
+  const targets = [0, 1, 5, -1, 2.5, 10];
+  const arith = (op: string, a: unknown, b: unknown) => ({ op, args: [a, b] });
+  const leaves: unknown[] = [];
+  for (const a of properties) {
+    for (const op of ops) {
+      for (const v of values) {
+        leaves.push({ op: ">", args: [arith(op, p(a), v), targets[(values.indexOf(v) + ops.indexOf(op)) % targets.length]] });
+        leaves.push({ op: "=", args: [arith(op, v, p(a)), targets[values.indexOf(v) % targets.length]] });
+      }
+    }
+    for (const e of [0, 1, 2, 3]) leaves.push({ op: "<=", args: [arith("^", p(a), e), 25] }, { op: "=", args: [arith("^", p(a), e), 4] });
+    for (const b of properties) {
+      for (const op of ops) leaves.push({ op: "<", args: [arith(op, p(a), p(b)), 3] }, { op: ">=", args: [p(a), arith(op, p(b), 2)] });
+      leaves.push({ op: ">", args: [p(a), arith("*", p(b), 0.001)] }); // scaling
+      leaves.push({ op: "=", args: [arith("-", arith("*", p(a), 2), arith("div", p(b), 2)), 1] });
+    }
+    leaves.push({ op: "between", args: [arith("/", p(a), 2), -1, arith("+", 1, 2)] });
+    leaves.push({ op: "in", args: [arith("%", p(a), 3), [0, 1, arith("-", 0, 1)]] });
+    leaves.push({ op: "<", args: [p(a), arith("^", 2, 3)] }, { op: "=", args: [p(a), arith("/", 1, 0)] });
+  }
+  leaves.push({ op: "=", args: [arith("+", 1, 2), 3] }, { op: "<", args: [arith("/", 1, 0), 1] });
+  const valid = leaves.filter((f) => validate(f).valid) as Cql2Filter[];
+  const nots = valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter);
+  const pairs: Cql2Filter[] = [];
+  for (let i = 0; i + 1 < valid.length; i += 13) {
+    pairs.push({ op: "and", args: [valid[i]!, valid[i + 1]!] }, { op: "or", args: [valid[i]!, { op: "not", args: [valid[i + 1]!] }] });
+  }
+  return [...valid, ...nots, ...pairs];
+}

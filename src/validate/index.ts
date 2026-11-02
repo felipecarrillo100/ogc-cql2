@@ -105,6 +105,8 @@ const isFiniteNumber = (x: unknown): x is number => typeof x === "number" && Num
 const isSpatialLiteral = (x: unknown): x is Json =>
   isObject(x) && (typeof x.type === "string" || ("bbox" in x && !("op" in x) && !("property" in x)));
 const opOf = (x: unknown): string | undefined => (isObject(x) && typeof x.op === "string" ? x.op : undefined);
+/** `{ "op": "+" … }` and the other arithmetic operators. */
+const isArithmetic = (x: unknown): boolean => ARITHMETIC.has(opOf(x) ?? "");
 const argsOf = (x: Json): unknown[] | undefined => (Array.isArray(x.args) ? x.args : undefined);
 
 /** The type of a literal on the right, for the type checks. */
@@ -142,8 +144,8 @@ interface Subject {
 
 /** A side of a comparison that passed the checks: a property (a subject) or a literal (its kind). */
 type Side =
-  | { readonly subject: Subject; readonly path: string; readonly fold?: string }
-  | { readonly literal: LiteralKind; readonly path: string };
+  | { readonly subject: Subject; readonly path: string; readonly fold?: string; readonly arithmetic?: true }
+  | { readonly literal: LiteralKind; readonly path: string; readonly arithmetic?: true };
 
 /** A kind of literal, or of property, in the messages. */
 const NAME: Readonly<Record<Exclude<LiteralKind, "folded-string"> | Exclude<HeldKind, "any">, string>> = {
@@ -408,6 +410,7 @@ class Checker {
    * property on the right or a literal on the left, the comparison uses Property-Property Comparisons.
    */
   side(x: unknown, path: string, where: string): Side | undefined {
+    if (isArithmetic(x)) return this.arithmetic(x as Json, path);
     if (isPropertyRef(x) || foldsProperty(x)) {
       const subject = this.subject(x, path);
       return subject && { subject, path, ...(subject.folded ? { fold: opOf(x)! } : {}) };
@@ -416,10 +419,56 @@ class Checker {
     return kind && { literal: kind, path };
   }
 
-  /** Notes a side that the portable shape (a property on the left, literals on the right) doesn't allow. */
+  /**
+   * An arithmetic expression (Arithmetic Expressions): numbers, number properties and other expressions. A side that
+   * reads the features when a property is in it, else a number; `undefined` after reporting.
+   */
+  arithmetic(x: Json, path: string): Side | undefined {
+    const op = opOf(x)!;
+    this.uses(CONFORMANCE.arithmetic, path, "An arithmetic expression");
+    const args = argsOf(x);
+    if (!args || args.length !== 2) {
+      this.report("wrong-arguments", `${path}/args`, `"${op}" needs exactly two arguments: numbers, number properties or expressions.`);
+      return undefined;
+    }
+    let reads = false;
+    let valid = true;
+    args.forEach((a, i) => {
+      const at = `${path}/args/${i}`;
+      if (isArithmetic(a)) {
+        const side = this.arithmetic(a as Json, at);
+        if (!side) valid = false;
+        else if ("subject" in side) reads = true;
+      } else if (isPropertyRef(a)) {
+        const held = this.property(a, at);
+        reads = true;
+        if (held === undefined) valid = false;
+        else if (held !== "number" && held !== "any") {
+          this.report("type-mismatch", at, `Arithmetic works on numbers, and "${a.property as string}" ${WRITE[held]}.`);
+          valid = false;
+        }
+      } else {
+        const kind = this.literal(a, at, "An operand of an arithmetic expression");
+        if (kind === undefined) valid = false;
+        else if (kind !== "number") {
+          this.report("type-mismatch", at, `Arithmetic works on numbers.`);
+          valid = false;
+        }
+      }
+    });
+    if (!valid) return undefined;
+    return reads
+      ? { subject: { folded: false, name: "the arithmetic expression", held: "number" }, path, arithmetic: true }
+      : { literal: "number", path, arithmetic: true };
+  }
+
+  /**
+   * Notes a side that the portable shape (a property on the left, literals on the right) doesn't allow: a literal or
+   * an expression on the left, or a property on the right (in an expression too).
+   */
   propertyProperty(sides: readonly (Side | undefined)[], path: string): void {
     const [left, ...rest] = sides;
-    if ((left && "literal" in left) || rest.some((side) => side && "subject" in side)) {
+    if ((left && ("literal" in left || left.arithmetic)) || rest.some((side) => side && "subject" in side)) {
       this.uses(CONFORMANCE.propertyProperty, path, "A literal on the left, or a property on the right,");
     }
   }
@@ -760,8 +809,10 @@ function isPropertyProperty(x: Json): boolean {
   if (!(COMPARISON.has(op) || op === "like" || op === "between" || op === "in") || !Array.isArray(x.args)) return false;
   const [left, ...rest] = x.args as unknown[];
   const right = op === "in" && Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
-  const reads = (y: unknown) => isPropertyRef(y) || foldsProperty(y);
-  return !reads(left) || right.some(reads);
+  // On the right, a property counts inside an arithmetic expression too.
+  const reads = (y: unknown): boolean =>
+    isPropertyRef(y) || foldsProperty(y) || (isArithmetic(y) && (argsOf(y as Json) ?? []).some(reads));
+  return !(isPropertyRef(left) || foldsProperty(left)) || right.some(reads);
 }
 
 /**
@@ -776,6 +827,7 @@ export function requiredConformance(filter: Cql2Filter): string[] {
     if (x.op === "like" || x.op === "between" || x.op === "in") used.add(CONFORMANCE.advancedComparison);
     if (x.op === "casei") used.add(CONFORMANCE.caseInsensitive);
     if (x.op === "accenti") used.add(CONFORMANCE.accentInsensitive);
+    if (isArithmetic(x)) used.add(CONFORMANCE.arithmetic);
     if (isPropertyProperty(x)) used.add(CONFORMANCE.propertyProperty);
     if (typeof x.op === "string" && SPATIAL.has(x.op) && Array.isArray(x.args)) {
       const literals = x.args.filter((a) => isObject(a) && !isPropertyRef(a)) as Json[];
