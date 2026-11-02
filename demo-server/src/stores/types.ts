@@ -46,6 +46,7 @@ export interface QueryResult {
 export const BASE_CLASSES: readonly string[] = [
   CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive,
   CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.propertyProperty, CONFORMANCE.arithmetic,
+  CONFORMANCE.temporal,
 ];
 
 export interface Store {

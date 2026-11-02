@@ -52,7 +52,7 @@ describe("Table 17 in SQLite, typed as GeoPackage types it", () => {
   for (const [name, fn] of Object.entries(sqliteFunctions)) db.function(name, { deterministic: true }, fn as never);
   const names = Object.keys(PLACES_QUERYABLES);
   db.exec(`CREATE TABLE places (id INTEGER PRIMARY KEY, name TEXT, nameascii TEXT, pop_min INTEGER, pop_max INTEGER,
-           pop_other INTEGER, start DATETIME, "end" DATETIME)`);
+           pop_other INTEGER, start DATETIME, "end" DATETIME, "date" DATE)`);
   db.exec(`INSERT INTO places VALUES ${places.map((f) => `(${[f.id, ...names.map((n) => f.properties[n])].map(sqlLiteral).join(", ")})`).join(", ")}`);
 
   it.for(TABLE_17)("%s: %i", ([text, expected]) => {

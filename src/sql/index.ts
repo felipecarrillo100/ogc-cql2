@@ -17,12 +17,14 @@ import { Cql2Error } from "../core/errors.js";
 import { unwrap } from "../core/folds.js";
 import { heldKind, type HeldKind } from "../core/queryables.js";
 import { CONVERSE } from "../core/relate.js";
+import { OPEN, RELATIONS, isTemporal, type End } from "../core/temporal.js";
 import type {
-  ArithmeticOperand, Cql2Filter, FoldedString, PropertyRef, ScalarLiteral, SpatialLiteral, SpatialOperator, StringSubject,
+  ArithmeticOperand, Cql2Filter, FoldedString, IntervalEnd, PropertyRef, ScalarLiteral, SpatialLiteral, SpatialOperator,
+  StringSubject, TemporalOperand, TemporalPredicate,
 } from "../core/types.js";
 import { toEvaluator } from "../evaluate/index.js";
 import { intersects, literalParts } from "../evaluate/spatial.js";
-import { foldKey, instantOf } from "../evaluate/strings.js";
+import { dayNumber, foldKey, instantOf } from "../evaluate/strings.js";
 import { NOT_IN_SQL, refuseUnsupported } from "../core/unsupported.js";
 import { compute, isArithmetic, readsProperty } from "../core/arithmetic.js";
 import { CONFORMANCE } from "../core/conformance.js";
@@ -43,6 +45,22 @@ const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, pos
 
 /** `a op b` is `b MIRROR[op] a`. */
 const MIRROR: Readonly<Record<string, string>> = { "=": "=", "<>": "<>", "<": ">", ">": "<", "<=": ">=", ">=": "<=" };
+
+/** `a op b`, given the sign of comparing a with b. */
+const ORDERED: Readonly<Record<string, (o: number) => boolean>> = {
+  "=": (o) => o === 0, "<": (o) => o < 0, ">": (o) => o > 0, "<=": (o) => o <= 0, ">=": (o) => o >= 0,
+};
+
+/** A condition: decided when the SQL is built, or SQL, written when called (parameters are added in SQL order). */
+type Condition = boolean | (() => string);
+const all = (cs: readonly Condition[]): Condition => {
+  const rest = cs.filter((c) => c !== true) as (() => string)[];
+  return cs.includes(false) ? false : rest.length === 0 ? true : () => rest.map((c) => (rest.length === 1 ? c() : `(${c()})`)).join(" AND ");
+};
+const any = (cs: readonly Condition[]): Condition => {
+  const rest = cs.filter((c) => c !== false) as (() => string)[];
+  return cs.includes(true) ? true : rest.length === 0 ? false : () => rest.map((c) => (rest.length === 1 ? c() : `(${c()})`)).join(" OR ");
+};
 
 /** What two properties compared with each other can hold, when their queryables say. */
 const COMPARABLE: ReadonlySet<HeldKind> = new Set(["text", "number", "boolean", "date", "instant"]);
@@ -111,12 +129,22 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   /** A literal's value as a parameter of the view. */
   const valueParam = (v: View, value: SqlValue): string => param(v.value ? v.value(value) : value, v.cast);
   const compare = (v: View, op: string, p: string): string => (v.compare ? v.compare(op, p) : `${v.sql} ${op} ${p}`);
+  /**
+   * A view's condition on literals, an infinite value (`View.finite`) taken as NULL, as `evaluate` takes it. Under an
+   * even number of NOTs FALSE selects the same rows as NULL, under an odd number TRUE does (see Dialect.intersects), so
+   * the column stays alone on its side and keeps its index (a CASE would lose it).
+   */
+  const bounded = (v: View, condition: string, positive: boolean): string =>
+    v.finite === undefined ? condition : positive ? `(${condition} AND ${v.finite})` : `(${condition} OR NOT ${v.finite})`;
 
   // A folded literal compares text: the column's text view, or its folded view under CASEI / ACCENTI (property).
   const viewKind = (kind: Kind): Kind => (kind === "fold" ? "text" : kind);
 
   /** A filter of literals only (Property-Property Comparisons): decided here, exactly as `evaluate` decides it. */
-  const constant = (f: Cql2Filter): string => (toEvaluator(f)(undefined) === true ? dialect.true : dialect.false);
+  const constant = (f: Cql2Filter): string => {
+    const truth = toEvaluator(f)(undefined);
+    return truth === null ? dialect.never : truth ? dialect.true : dialect.false; // NULL: an interval beginning after it ends
+  };
 
   /**
    * A number for arithmetic (Arithmetic Expressions): a constant (an expression of literals, computed here as
@@ -150,14 +178,14 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
    * the left is the property on the left with the operator mirrored, so a property against a literal is always written
    * one way.
    */
-  const comparison = (a: ArithmeticOperand, op: string, b: ArithmeticOperand, pathA: string, pathB: string): string => {
+  const comparison = (a: ArithmeticOperand, op: string, b: ArithmeticOperand, pathA: string, pathB: string, positive: boolean): string => {
     if (isArithmetic(a) || isArithmetic(b)) return arithmeticComparison(a, op, b, pathA, pathB);
     if (!reads(a) && !reads(b)) return constant({ op, args: [a, b] } as Cql2Filter);
-    if (!reads(a)) return comparison(b, MIRROR[op]!, a, pathB, pathA);
+    if (!reads(a)) return comparison(b, MIRROR[op]!, a, pathB, pathA, positive);
     if (!reads(b)) {
       const lit = literal(b);
       const v = subject(a, viewKind(lit.kind), pathA);
-      return v === undefined ? dialect.never : compare(v, op, valueParam(v, lit.value));
+      return v === undefined ? dialect.never : bounded(v, compare(v, op, valueParam(v, lit.value)), positive);
     }
     return properties(a, op, b, pathA, pathB);
   };
@@ -226,6 +254,97 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     return dialect.spatialPair!(op, sa, sb, param) ?? dialect.never;
   };
 
+  /** An end of a temporal function's operand: a constant (a literal's day or instant, ±Infinity for ".."), or a property. */
+  type TemporalEnd = { readonly value: number; readonly literal?: ScalarLiteral } | { readonly ref: PropertyRef; readonly path: string };
+  const isPropertyEnd = (e: TemporalEnd): e is Extract<TemporalEnd, { ref: PropertyRef }> => "ref" in e;
+  const endOf = (x: IntervalEnd, open: number, path: string): TemporalEnd =>
+    typeof x !== "string" ? { ref: x, path }
+      : x === OPEN ? { value: open }
+      : x.includes("T") ? { value: instantOf(x)!, literal: { timestamp: x } } // validate has checked both
+      : { value: dayNumber(x), literal: { date: x } };
+  /** An operand's begin and end: an instant is the interval from it to itself (one end, twice). */
+  const endsOf = (x: TemporalOperand, path: string): readonly [TemporalEnd, TemporalEnd] => {
+    if ("interval" in x) return [endOf(x.interval[0], -Infinity, `${path}/interval/0`), endOf(x.interval[1], Infinity, `${path}/interval/1`)];
+    const end: TemporalEnd = "property" in x ? { ref: x, path }
+      : "date" in x ? { value: dayNumber(x.date), literal: x } : { value: instantOf(x.timestamp)!, literal: x };
+    return [end, end];
+  };
+
+  /**
+   * A temporal function (Temporal Functions), as `evaluate` decides it: the relation's comparisons of the operands'
+   * ends (`RELATIONS`), each end read in a day or an instant view, `'..'` decided here. The kind is a literal's, else
+   * what the columns' queryables say, else the values' own: the relation in each kind, COALESCE (a value has one kind,
+   * so at most one of them isn't NULL). NULL when an end is NULL or infinite, or an interval begins after it ends:
+   * `CASE WHEN <each end a value, each interval begins before it ends> THEN <the relation> END`. Without that CASE
+   * when a single property (an instant, or an interval's end with the other '..') is compared with literals: every
+   * comparison left then reads it, so its NULL comes through them, and a DATE column keeps its index.
+   */
+  const temporal = (f: TemporalPredicate, path: string, positive: boolean): string => {
+    const ends = [...endsOf(f.args[0], `${path}/args/0`), ...endsOf(f.args[1], `${path}/args/1`)];
+    const read = [...new Set(ends.filter(isPropertyEnd))];
+    if (read.length === 0) return constant(f);
+    const kindOf = (l: ScalarLiteral): Kind => (typeof l === "object" && "date" in l ? "day" : "instant");
+    const literals = new Set(ends.flatMap((e) => ("literal" in e && e.literal !== undefined ? [kindOf(e.literal)] : [])));
+    const held = new Set(read.flatMap((e) => {
+      const h = heldKind(columnOf(e.ref, e.path).column);
+      return h === "date" ? ["day" as const] : h === "instant" ? ["instant" as const] : [];
+    }));
+    const kinds: Kind[] = literals.size > 0 ? [...literals] : held.size > 0 ? [...held] : ["day", "instant"];
+    if (literals.size === 0 && held.size > 1) return dialect.never; // queryables of both kinds: never one kind
+    const [b1, e1, b2, e2] = ends as [TemporalEnd, TemporalEnd, TemporalEnd, TemporalEnd];
+    const at: Readonly<Record<End, TemporalEnd>> = { b1, e1, b2, e2 };
+    const intervals = [[b1, e1], [b2, e2]].filter(([b, e]) => b !== e) as [TemporalEnd, TemporalEnd][];
+    if (intervals.some(([b, e]) => !isPropertyEnd(b) && !isPropertyEnd(e) && b.value > e.value)) return dialect.never;
+
+    const views = kinds.flatMap((kind) => {
+      const vs = read.map((e) => subject(e.ref, kind, e.path));
+      return vs.every((v) => v !== undefined) ? [new Map(read.map((e, i) => [e, vs[i]!]))] : [];
+    });
+    const parts = views.map((view) => {
+      let plain = false; // see above: decided below, before any SQL is written
+      /** `l op r` of two ends; with `plain`, an infinite value taken as NULL by the comparison itself. */
+      const end = (l: TemporalEnd, op: string, r: TemporalEnd): Condition => {
+        if (!isPropertyEnd(l) && !isPropertyEnd(r)) return ORDERED[op]!(Math.sign(l.value - r.value) || 0);
+        if (!isPropertyEnd(l)) return end(r, MIRROR[op]!, l);
+        const v = view.get(l)!;
+        if (!isPropertyEnd(r)) {
+          if (r.literal === undefined) return ORDERED[op]!(-Math.sign(r.value)); // '..': before or after every value
+          const lit = r.literal;
+          return () => {
+            const c = compare(v, op, valueParam(v, literal(lit).value));
+            return plain ? bounded(v, c, positive) : c;
+          };
+        }
+        const w = view.get(r)!;
+        return () => dialect.compareViews?.(v, op, w) ?? `${v.pair ?? v.sql} ${op} ${w.pair ?? w.sql}`;
+      };
+      const relation = any(RELATIONS[f.op].map((group) => {
+        const seen = new Set<string>(); // an instant's begin and end are one end: each comparison once
+        return all(group.flatMap(([l, op, r]) => {
+          const key = `${ends.indexOf(at[l])}${op}${ends.indexOf(at[r])}`;
+          return seen.has(key) ? [] : (seen.add(key), [end(at[l], op, at[r])]);
+        }));
+      }));
+      const sql = (c: Condition) => (typeof c === "boolean" ? (c ? dialect.true : dialect.false) : c());
+      const checks = intervals.map(([b, e]) => [b, e, end(b, "<=", e)] as const);
+      const bounds = all(checks.map(([, , c]) => c));
+      plain = read.length === 1 && views.length === 1 && bounds === true && typeof relation !== "boolean";
+      if (plain) return sql(relation);
+      // An end compared in a check is NULL there; infinity isn't, so a view that can hold it checks `finite`.
+      const checked = new Set(checks.flatMap(([b, e, c]) => (typeof c === "boolean" ? [] : [b, e])));
+      const guard = all([
+        ...read.flatMap((e) => {
+          const v = view.get(e)!;
+          return v.finite !== undefined ? [() => v.finite!] : checked.has(e) ? [] : [() => `${v.sql} IS NOT NULL`];
+        }),
+        bounds,
+      ]);
+      const when = sql(guard); // before the relation: its parameters come first
+      return `CASE WHEN ${when} THEN ${sql(relation)} END`;
+    });
+    return parts.length === 0 ? dialect.never : parts.length === 1 ? parts[0]! : `COALESCE(${parts.join(", ")})`;
+  };
+
   /** `positive`: under an even number of NOTs, where a NULL and FALSE select the same rows (see Dialect.intersects). */
   const write = (f: Cql2Filter, path: string, positive = true): string => {
     if (typeof f === "boolean") return f ? dialect.true : dialect.false;
@@ -255,7 +374,7 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         // With a property bound or a literal first: x >= low AND x <= high, in SQL's three-valued logic as in evaluate's.
         if (![s, low, high].some(readsAny)) return constant(f);
         const [p0, p1, p2] = [0, 1, 2].map((i) => `${path}/args/${i}`) as [string, string, string];
-        return `(${comparison(s, ">=", low, p0, p1)}) AND (${comparison(s, "<=", high, p0, p2)})`;
+        return `(${comparison(s, ">=", low, p0, p1, positive)}) AND (${comparison(s, "<=", high, p0, p2, positive)})`;
       }
       case "s_intersects":
       case "s_disjoint":
@@ -270,18 +389,19 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         const [s, list] = f.args as readonly [ArithmeticOperand, readonly ArithmeticOperand[]];
         if (!reads(s) || list.some((item) => reads(item) || isArithmetic(item))) {
           // With a literal on the left or a property among the items: the OR of the equalities.
-          const parts = list.map((item, i) => `(${comparison(s, "=", item, `${path}/args/0`, `${path}/args/1/${i}`)})`);
+          const parts = list.map((item, i) => `(${comparison(s, "=", item, `${path}/args/0`, `${path}/args/1/${i}`, positive)})`);
           return `(${parts.join(" OR ")})`;
         }
         const items = (list as readonly (ScalarLiteral | FoldedString)[]).map(literal);
         const v = subject(s, viewKind(items[0]!.kind), `${path}/args/0`);
         if (v === undefined) return dialect.never;
         const ps = items.map((item) => valueParam(v, item.value));
-        return v.compare ? `(${ps.map((p) => compare(v, "=", p)).join(" OR ")})` : `${v.sql} IN (${ps.join(", ")})`;
+        return bounded(v, v.compare ? `(${ps.map((p) => compare(v, "=", p)).join(" OR ")})` : `${v.sql} IN (${ps.join(", ")})`, positive);
       }
       default: {
+        if (isTemporal(f.op)) return temporal(f as TemporalPredicate, path, positive);
         const [a, b] = f.args as readonly [ArithmeticOperand, ArithmeticOperand];
-        return comparison(a, f.op, b, `${path}/args/0`, `${path}/args/1`);
+        return comparison(a, f.op, b, `${path}/args/0`, `${path}/args/1`, positive);
       }
     }
   };

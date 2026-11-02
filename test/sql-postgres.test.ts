@@ -53,10 +53,17 @@ describe("the postgres dialect", () => {
     );
   });
 
-  it("dates and instants: native on date / timestamptz columns, as the served text otherwise", () => {
-    expect(sql({ op: ">=", args: [p("day"), { date: "2020-07-26" }] })).toEqual({ where: `"day" >= $1::date`, params: ["2020-07-26"] });
+  it("dates and instants: native on date / timestamptz columns (infinity as NULL), as the served text otherwise", () => {
+    // An infinite date is NULL: FALSE selects the same rows outside a NOT, TRUE inside one; the column keeps its index.
+    expect(sql({ op: ">=", args: [p("day"), { date: "2020-07-26" }] })).toEqual({
+      where: `("day" >= $1::date AND isfinite("day"))`,
+      params: ["2020-07-26"],
+    });
+    expect(sql({ op: "not", args: [{ op: ">=", args: [p("day"), { date: "2020-07-26" }] }] }).where).toBe(
+      `NOT (("day" >= $1::date OR NOT isfinite("day")))`,
+    );
     expect(sql({ op: "<", args: [p("at"), { timestamp: "2023-01-01T00:00:00.5Z" }] })).toEqual({
-      where: `date_trunc('milliseconds', "at") < $1::timestamptz`,
+      where: `(CASE WHEN isfinite("at") THEN date_trunc('milliseconds', "at") END) < $1::timestamptz`,
       params: ["2023-01-01T00:00:00.500Z"],
     });
     expect(sql({ op: "=", args: [p("name"), { date: "2020-07-26" }] }).where).toBe(`cql2_day("name"::text) COLLATE "C" = $1`);
@@ -64,9 +71,32 @@ describe("the postgres dialect", () => {
       `cql2_instant("name"::text) = $1::timestamptz`,
     );
     expect(sql({ op: "=", args: [p("at"), "2023-01-01T00:00:00.000Z"] }).where).toBe(
-      `to_char("at" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') COLLATE "C" = $1`,
+      `COALESCE(to_char("at" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), "at"::text) COLLATE "C" = $1`,
     );
     expect(sql({ op: "=", args: [p("plain"), { date: "2020-07-26" }] }).where).toBe(`cql2_day("plain"::text) COLLATE "C" = $1`);
+  });
+
+  it("Temporal Functions: the ends compared in their views; a CASE gives NULL where an interval reads the table", () => {
+    const iv = (a: unknown, b: unknown) => ({ interval: [a, b] });
+    // One property against literals: every comparison reads it, so NULL comes through; the index still applies.
+    expect(sql({ op: "t_intersects", args: [p("day"), iv("2020-01-01", "2020-12-31")] })).toEqual({
+      where: `(("day" <= $1::date AND isfinite("day"))) AND (("day" >= $2::date AND isfinite("day")))`,
+      params: ["2020-12-31", "2020-01-01"],
+    });
+    expect(sql({ op: "t_after", args: [p("day"), iv("..", "2020-12-31")] }).where).toBe(`("day" > $1::date AND isfinite("day"))`);
+    // An interval of two columns: NULL unless both ends are values and it begins before it ends.
+    expect(sql({ op: "t_meets", args: [iv(p("day"), p("day")), iv("2020-01-01", "2020-02-01")] })).toEqual({
+      where: `CASE WHEN (isfinite("day")) AND (isfinite("day")) AND (to_char("day", 'YYYY-MM-DD') COLLATE "C" <= to_char("day", 'YYYY-MM-DD') COLLATE "C") THEN "day" = $1::date END`,
+      params: ["2020-01-01"],
+    });
+    expect(sql({ op: "t_disjoint", args: [p("name"), p("name")] }).where).toBe(
+      `COALESCE(CASE WHEN (cql2_day("name"::text) COLLATE "C" IS NOT NULL) AND (cql2_day("name"::text) COLLATE "C" IS NOT NULL) THEN (cql2_day("name"::text) COLLATE "C" < cql2_day("name"::text) COLLATE "C") OR (cql2_day("name"::text) COLLATE "C" > cql2_day("name"::text) COLLATE "C") END, CASE WHEN (cql2_instant("name"::text) IS NOT NULL) AND (cql2_instant("name"::text) IS NOT NULL) THEN (cql2_instant("name"::text) < cql2_instant("name"::text)) OR (cql2_instant("name"::text) > cql2_instant("name"::text)) END)`,
+    );
+    // Literals only: decided here; an interval beginning after it ends is NULL.
+    expect(sql({ op: "t_before", args: [iv("2020-01-01", "2020-02-01"), iv("2020-03-01", "..")] }).where).toBe("TRUE");
+    expect(sql({ op: "not", args: [{ op: "t_before", args: [iv("2020-02-01", "2020-01-01"), iv("2020-03-01", "..")] }] }).where).toBe("NOT (NULL::boolean)");
+    // A date column against an instant: no value can match.
+    expect(sql({ op: "t_after", args: [p("day"), { timestamp: "2020-01-01T00:00:00Z" }] }).where).toBe("NULL::boolean");
   });
 
   it("a literal no value of the column can match is NULL, typed", () => {
@@ -166,9 +196,10 @@ describe("postgresValue: what the application selects, so it serves what the SQL
     ["name", `"name"`],
     ["n", `"n"::double precision`],
     ["active", `"active"`],
-    ["day", `to_char("day", 'YYYY-MM-DD')`],
-    ["at", `to_char("at" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`],
-    ["local_at", `to_char("local_at", 'YYYY-MM-DD"T"HH24:MI:SS.MS')`],
+    // Infinity as `infinity` / `-infinity` (to_char gives NULL): no date, but not NULL either.
+    ["day", `COALESCE(to_char("day", 'YYYY-MM-DD'), "day"::text)`],
+    ["at", `COALESCE(to_char("at" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), "at"::text)`],
+    ["local_at", `COALESCE(to_char("local_at", 'YYYY-MM-DD"T"HH24:MI:SS.MS'), "local_at"::text)`],
   ])("%s", (name, expected) => {
     expect(postgresValue(name, COLUMNS[name]!)).toBe(expected);
   });

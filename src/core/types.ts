@@ -5,7 +5,8 @@
  * The shapes are the portable ones every server of those classes must accept: a property on the left and a literal
  * on the right (`/per/basic-cql2/cql2filter` and `/per/advanced-comparison-operators/*` let a server refuse
  * anything else). With the Property-Property Comparisons class, either side may be a property or a literal (the
- * `Operand…` shapes), and with Arithmetic Expressions a number may be computed (the `Arithmetic…` shapes). `validate`
+ * `Operand…` shapes), with Arithmetic Expressions a number may be computed (the `Arithmetic…` shapes), and Temporal
+ * Functions relate instants and intervals (`TemporalPredicate`). `validate`
  * checks a value against them; these types describe what it lets through.
  */
 
@@ -279,6 +280,33 @@ export interface OperandSpatialPredicate {
   readonly args: readonly [PropertyRef | SpatialLiteral, PropertyRef | SpatialLiteral];
 }
 
+// --- Temporal Functions: how two instants or intervals relate ------------------------------------------------------
+
+export type TemporalOperator =
+  | "t_after" | "t_before" | "t_contains" | "t_disjoint" | "t_during" | "t_equals" | "t_finishedBy" | "t_finishes"
+  | "t_intersects" | "t_meets" | "t_metBy" | "t_overlappedBy" | "t_overlaps" | "t_startedBy" | "t_starts";
+
+/** An end of an interval: a date `"YYYY-MM-DD"`, a timestamp `"YYYY-MM-DDThh:mm:ss[.fff]Z"`, `".."` (unbounded), or a property. */
+export type IntervalEnd = string | PropertyRef;
+
+/** `{ "interval": [start, end] }`: closed at both ends, which are both dates or both timestamps (or `".."`). */
+export interface IntervalLiteral {
+  readonly interval: readonly [IntervalEnd, IntervalEnd];
+}
+
+/** What a temporal function relates: an instant (a date, a timestamp, a property holding one) or an interval. */
+export type TemporalOperand = PropertyRef | InstantLiteral | IntervalLiteral;
+
+/**
+ * `T_DURING(INTERVAL(start, end), INTERVAL('2022-01-01', '2022-12-31'))` and the other relations of OWL-Time. The
+ * relations of intervals only (T_CONTAINS … T_STARTS) take two intervals; T_AFTER, T_BEFORE, T_DISJOINT, T_EQUALS and
+ * T_INTERSECTS instants too. A literal first, or a property second, needs the Property-Property Comparisons class.
+ */
+export interface TemporalPredicate {
+  readonly op: TemporalOperator;
+  readonly args: readonly [TemporalOperand, TemporalOperand];
+}
+
 /** A CQL2-JSON filter in the profile. `true` and `false` are filters too: all features, or none. */
 export type Cql2Filter =
   | boolean
@@ -297,4 +325,5 @@ export type Cql2Filter =
   | OperandSpatialPredicate
   | ArithmeticComparison
   | ArithmeticBetween
-  | ArithmeticIn;
+  | ArithmeticIn
+  | TemporalPredicate;

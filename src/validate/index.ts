@@ -10,7 +10,8 @@
 import { CONFORMANCE, CQL2_CONFORMANCE } from "../core/conformance.js";
 import { Cql2Error } from "../core/errors.js";
 import { heldKind, type HeldKind } from "../core/queryables.js";
-import type { Cql2Filter, Queryable } from "../core/types.js";
+import { INTERVALS_ONLY, OPEN, isTemporal } from "../core/temporal.js";
+import type { Cql2Filter, Queryable, TemporalOperator } from "../core/types.js";
 
 export type ProblemCode =
   /** Not a filter at all: not an object, no `op`, or an expression that gives no TRUE / FALSE (`casei`, `+`…). */
@@ -78,10 +79,6 @@ const COMPARISON = new Set(["=", "<>", "<", "<=", ">", ">="]);
 const ARITHMETIC = new Set(["+", "-", "*", "/", "^", "%", "div"]);
 const SPATIAL = new Set([
   "s_contains", "s_crosses", "s_disjoint", "s_equals", "s_intersects", "s_overlaps", "s_touches", "s_within",
-]);
-const TEMPORAL = new Set([
-  "t_after", "t_before", "t_contains", "t_disjoint", "t_during", "t_equals", "t_finishedBy", "t_finishes",
-  "t_intersects", "t_meets", "t_metBy", "t_overlappedBy", "t_overlaps", "t_startedBy", "t_starts",
 ]);
 const ARRAY = new Set(["a_containedBy", "a_contains", "a_equals", "a_overlaps"]);
 
@@ -158,6 +155,18 @@ const AS_LITERAL: Readonly<Partial<Record<HeldKind, LiteralKind>>> = {
   text: "string", number: "number", boolean: "boolean", date: "date", instant: "timestamp",
 };
 
+/** An end of a temporal operand that passed the checks: a date or an instant (none for a property without a queryable). */
+interface TemporalEnd {
+  readonly kind: "date" | "timestamp" | undefined;
+  readonly path: string;
+  /** The property's name, for a property. */
+  readonly name?: string;
+}
+
+/** Whether an operand of a temporal function reads the features: a property, or an interval with one at an end. */
+const readsTemporal = (x: unknown): boolean =>
+  isPropertyRef(x) || (isObject(x) && Array.isArray(x.interval) && x.interval.some(isPropertyRef));
+
 /** Whether `x` is `casei(…)` / `accenti(…)` with a property inside (one or two levels): a folded subject. */
 const foldsProperty = (x: unknown): boolean => {
   for (let i = 0; i < 2 && (opOf(x) === "casei" || opOf(x) === "accenti"); i++) x = argsOf(x as Json)?.[0];
@@ -216,11 +225,7 @@ class Checker {
     if (op === "isNull") return this.isNull(args, path);
 
     if (SPATIAL.has(op)) return this.spatial(op, args, path);
-    if (TEMPORAL.has(op)) {
-      return this.report(
-        "outside-profile", path, `"${op}" is a temporal function, not in the profile yet.`, CQL2_CONFORMANCE.temporal,
-      );
-    }
+    if (isTemporal(op)) return this.temporal(op, args, path);
     if (ARRAY.has(op)) {
       return this.report(
         "outside-profile", path, `"${op}" is an array function, not in the profile yet.`, CQL2_CONFORMANCE.arrays,
@@ -320,26 +325,30 @@ class Checker {
       this.report("invalid-number", path, `${x} is not a finite number; CQL2 has no literal for it.`);
       return undefined;
     }
-    if (isObject(x) && "date" in x) {
-      const m = typeof x.date === "string" ? DATE.exec(x.date) : null;
-      if (m && isRealDay(+m[1]!, +m[2]!, +m[3]!)) return "date";
-      this.report("invalid-date", `${path}/date`, `A date must be "YYYY-MM-DD" and exist, e.g. "2026-10-30".`);
-      return undefined;
-    }
-    if (isObject(x) && "timestamp" in x) {
-      const m = typeof x.timestamp === "string" ? TIMESTAMP.exec(x.timestamp) : null;
-      // A leap second (:60) is refused: RFC 3339 allows it, but no engine here can compare it (JavaScript has none,
-      // PostgreSQL rolls it over to the next minute), so it could not mean the same everywhere.
-      if (m && isRealDay(+m[1]!, +m[2]!, +m[3]!) && +m[4]! <= 23 && +m[5]! <= 59 && +m[6]! <= 59) return "timestamp";
-      this.report(
-        "invalid-timestamp", `${path}/timestamp`,
-        `A timestamp must be "YYYY-MM-DDThh:mm:ss[.fff]Z" (UTC) and exist, with seconds 00-59, e.g. "2026-10-30T12:00:00Z".`,
-      );
-      return undefined;
-    }
+    if (isObject(x) && "date" in x) return this.instantString(x.date, "date", `${path}/date`);
+    if (isObject(x) && "timestamp" in x) return this.instantString(x.timestamp, "timestamp", `${path}/timestamp`);
     const op = opOf(x);
     if (op === "casei" || op === "accenti") return this.foldedLiteral(x as Json, op, path, undefined);
     this.notInProfile(x, path, where);
+    return undefined;
+  }
+
+  /** A date or a timestamp string: its kind, or `undefined` after reporting that it isn't one that exists. */
+  instantString(x: unknown, kind: "date" | "timestamp", path: string): "date" | "timestamp" | undefined {
+    if (kind === "date") {
+      const m = typeof x === "string" ? DATE.exec(x) : null;
+      if (m && isRealDay(+m[1]!, +m[2]!, +m[3]!)) return "date";
+      this.report("invalid-date", path, `A date must be "YYYY-MM-DD" and exist, e.g. "2026-10-30".`);
+      return undefined;
+    }
+    const m = typeof x === "string" ? TIMESTAMP.exec(x) : null;
+    // A leap second (:60) is refused: RFC 3339 allows it, but no engine here can compare it (JavaScript has none,
+    // PostgreSQL rolls it over to the next minute), so it could not mean the same everywhere.
+    if (m && isRealDay(+m[1]!, +m[2]!, +m[3]!) && +m[4]! <= 23 && +m[5]! <= 59 && +m[6]! <= 59) return "timestamp";
+    this.report(
+      "invalid-timestamp", path,
+      `A timestamp must be "YYYY-MM-DDThh:mm:ss[.fff]Z" (UTC) and exist, with seconds 00-59, e.g. "2026-10-30T12:00:00Z".`,
+    );
     return undefined;
   }
 
@@ -363,7 +372,7 @@ class Checker {
   /** Reports an operand outside the profile, naming the class it would need, or invalid if it's not CQL2 at all. */
   notInProfile(x: unknown, path: string, where: string): void {
     const op = opOf(x);
-    const { propertyProperty, arithmetic, functions, arrays, temporal } = CQL2_CONFORMANCE;
+    const { propertyProperty, arithmetic, functions, arrays } = CQL2_CONFORMANCE;
     if (isPropertyRef(x)) {
       this.report(
         "outside-profile", path,
@@ -390,7 +399,7 @@ class Checker {
     } else if (Array.isArray(x)) {
       this.report("outside-profile", path, `${where} is an array: arrays need the Array Functions class.`, arrays);
     } else if (isObject(x) && "interval" in x) {
-      this.report("outside-profile", path, `${where} is an interval: it needs the Temporal Functions class.`, temporal);
+      this.report("wrong-arguments", path, `${where} is an interval: an interval goes in a temporal function, e.g. t_intersects.`);
     } else if (isObject(x) && ("type" in x || "bbox" in x)) {
       this.report("wrong-arguments", path, `${where} is a geometry: a geometry goes in a spatial function, e.g. s_intersects.`);
     } else if (x === null) {
@@ -639,6 +648,113 @@ class Checker {
     this.uses(conformance, path, what);
   }
 
+  /**
+   * A temporal function: an instant (a date, a timestamp, a property holding one) or an interval in either place; the
+   * relations of intervals only take two intervals (an instant there is a client error, as the standard says). All
+   * the ends are dates, or all instants (values are never converted). A literal first, or a property second (in an
+   * interval too), needs Property-Property Comparisons.
+   */
+  temporal(op: TemporalOperator, args: unknown[], path: string): void {
+    const what = op.toUpperCase();
+    this.uses(CONFORMANCE.temporal, path, what);
+    if (args.length !== 2) {
+      return this.report("wrong-arguments", `${path}/args`, `"${op}" needs two arguments: instants or intervals.`);
+    }
+    if (!readsTemporal(args[0]) || readsTemporal(args[1])) {
+      this.uses(CONFORMANCE.propertyProperty, path, `${what} with a literal first, or a property second,`);
+    }
+    const operands = args.map((x, i) => this.temporalOperand(x, `${path}/args/${i}`, `The ${i === 0 ? "first" : "second"} argument of ${what}`));
+    operands.forEach((o, i) => {
+      if (o && !o.interval && INTERVALS_ONLY.has(op)) {
+        this.report(
+          "wrong-arguments", `${path}/args/${i}`,
+          `${what} relates intervals, and this is an instant: write an interval, e.g. { "interval": [{ "property": "start" }, { "property": "end" }] }.`,
+        );
+      }
+    });
+    // All the ends of one kind: the first that says, against every other.
+    const ends = operands.flatMap((o) => o?.ends ?? []);
+    const first = ends.find((e) => e.kind !== undefined);
+    const describe = (e: TemporalEnd) => (e.name === undefined ? NAME[e.kind!] : `"${e.name}" (${NAME[e.kind!]})`);
+    for (const e of ends) {
+      if (first && e.kind !== undefined && e.kind !== first.kind) {
+        this.report(
+          "type-mismatch", e.path,
+          `${what} relates dates with dates and instants with instants: ${describe(first)} and ${describe(e)} don't match.`,
+        );
+      }
+    }
+  }
+
+  /** An operand of a temporal function: whether it is an interval, and its ends; `undefined` after reporting. */
+  temporalOperand(x: unknown, path: string, where: string): { interval: boolean; ends: TemporalEnd[] } | undefined {
+    if (isObject(x) && "interval" in x) {
+      const ends = x.interval;
+      if (!Array.isArray(ends) || ends.length !== 2) {
+        this.report(
+          "wrong-arguments", `${path}/interval`,
+          `An interval is { "interval": [start, end] }: two ends, each a date, a timestamp, ".." (unbounded) or a property.`,
+        );
+        return undefined;
+      }
+      const read = ends.map((end, j) => this.intervalEnd(end, `${path}/interval/${j}`));
+      if (read.some((e) => e === undefined)) return undefined;
+      const [a, b] = read as (TemporalEnd | null)[];
+      if (a && b && a.name === undefined && b.name === undefined && a.kind !== b.kind) {
+        // The standard: "both instants have the same granularity (i.e., they are either timestamps or dates)".
+        this.report("type-mismatch", b.path, `An interval's ends are both dates or both instants; this one has ${NAME[a.kind!]} and ${NAME[b.kind!]}.`);
+        return undefined;
+      }
+      return { interval: true, ends: [a, b].filter((e): e is TemporalEnd => e !== null) };
+    }
+    if (isPropertyRef(x)) {
+      const end = this.temporalProperty(x, path);
+      return end && { interval: false, ends: [end] };
+    }
+    if (isObject(x) && ("date" in x || "timestamp" in x)) {
+      const kind = this.literal(x, path, where) as "date" | "timestamp" | undefined;
+      return kind && { interval: false, ends: [{ kind, path }] };
+    }
+    if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") {
+      this.report(
+        "type-mismatch", path,
+        `${where} is ${typeof x === "string" ? "a string" : `a ${typeof x}`}: a temporal function relates instants ({ "date": "2026-10-30" }, ` +
+          `{ "timestamp": "2026-10-30T12:00:00Z" }, a property) and intervals ({ "interval": [start, end] }).`,
+      );
+      return undefined;
+    }
+    this.notInProfile(x, path, where);
+    return undefined;
+  }
+
+  /** An end of an interval: its kind (none for a property without a queryable), `null` for "..", `undefined` after reporting. */
+  intervalEnd(x: unknown, path: string): TemporalEnd | null | undefined {
+    if (x === OPEN) return null;
+    if (typeof x === "string") {
+      const kind = this.instantString(x, /T/.test(x) ? "timestamp" : "date", path);
+      return kind && { kind, path };
+    }
+    if (isPropertyRef(x)) return this.temporalProperty(x, path);
+    if (isObject(x) && ("date" in x || "timestamp" in x)) {
+      this.report("wrong-arguments", path, `An end of an interval is a plain string in CQL2-JSON: "2026-10-30", not { "date": "2026-10-30" }.`);
+      return undefined;
+    }
+    this.notInProfile(x, path, "An end of an interval");
+    return undefined;
+  }
+
+  /** A property as an instant: a date or an instant, as its queryable says (any without queryables). */
+  temporalProperty(x: { property: unknown }, path: string): TemporalEnd | undefined {
+    const held = this.property(x, path);
+    if (held === undefined) return undefined;
+    const name = x.property as string;
+    if (held === "date" || held === "instant" || held === "any") {
+      return { kind: held === "date" ? "date" : held === "instant" ? "timestamp" : undefined, path, name };
+    }
+    this.report("type-mismatch", path, `A temporal function relates dates and instants, and "${name}" holds ${NAME[held]}.`);
+    return undefined;
+  }
+
   /** A geometry literal or a bbox: whether it is a point or a box (Basic) or another geometry; `undefined` if invalid. */
   spatialLiteral(x: Json, path: string): "point-or-box" | "other" | undefined {
     const before = this.problems.length;
@@ -835,6 +951,11 @@ export function requiredConformance(filter: Cql2Filter): string[] {
       used.add(x.op !== "s_intersects" ? CONFORMANCE.spatial : pointOrBox ? CONFORMANCE.basicSpatial : CONFORMANCE.basicSpatialPlus);
       if (!isPropertyRef(x.args[0]) || isPropertyRef(x.args[1])) used.add(CONFORMANCE.propertyProperty);
       return; // a geometry literal holds no other class
+    }
+    if (typeof x.op === "string" && isTemporal(x.op) && Array.isArray(x.args)) {
+      used.add(CONFORMANCE.temporal);
+      if (!readsTemporal(x.args[0]) || readsTemporal(x.args[1])) used.add(CONFORMANCE.propertyProperty);
+      return; // instants and intervals hold no other class
     }
     if (Array.isArray(x.args)) walk(x.args);
   };
