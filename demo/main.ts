@@ -1,5 +1,5 @@
 import { CONFORMANCE, CQL2_CONFORMANCE, CQL2_VERSION, type Cql2Filter, type Queryable } from "ogc-cql2";
-import { toEvaluator, type Truth } from "ogc-cql2/evaluate";
+import { evaluateConformance, toEvaluator, type Truth } from "ogc-cql2/evaluate";
 import { textProblem, toText } from "ogc-cql2/text";
 import { requiredConformance, validate, type Problem } from "ogc-cql2/validate";
 import kitchenSinkParquet from "../demo-server/data/kitchen_sink.parquet?url";
@@ -53,6 +53,8 @@ interface ServerCollection {
   readonly source: string;
   readonly featureCount: number;
   readonly warnings: readonly string[];
+  /** The classes its store evaluates (demo-server lists them; absent from an older server). */
+  readonly conformance?: readonly string[];
 }
 
 /** `undefined`: the sample features in this browser. `engine`: DuckDB-WASM's version, for a file filtered in this browser. */
@@ -145,6 +147,7 @@ async function selectSource(id: string): Promise<void> {
       columns: Object.keys(opened.queryables),
       queryables: opened.queryables,
       engine: `${opened.engine}, opened in ${Math.round(opened.milliseconds)} ms`,
+      conformance: opened.conformance,
     };
     examples = SERVER_EXAMPLES[file.id] ?? ANY_COLLECTION;
   } else if (!found) {
@@ -167,6 +170,9 @@ async function selectSource(id: string): Promise<void> {
         : `demo-server (${engineOf(collection.source)} on the server)`,
     ),
   );
+  // What the source evaluates: the sample features with evaluate (no geometry engine in this page), a file with the
+  // duckdb dialect, a server collection as its store says.
+  declare(collection ? (collection.conformance ?? Object.values(CONFORMANCE)) : evaluateConformance());
   fillExamples();
   showExample(0);
 }
@@ -184,22 +190,33 @@ function fillExamples(): void {
   exampleSelect.append(edited);
 }
 
-// --- Conformance classes the server declares (for the validation shown here) -------------------------------------
+// --- Conformance classes the source supports (for the validation shown here) -------------------------------------
 
-const declared = new Set<string>(Object.values(CONFORMANCE));
+// Ticked from the chosen source's classes (`declare`); untick one to see what a source without it would answer.
+const declared = new Set<string>();
+const boxes = new Map<string, HTMLInputElement>();
 for (const uri of Object.values(CONFORMANCE)) {
   const label = el("label");
   const box = document.createElement("input");
   box.type = "checkbox";
-  box.checked = true;
   box.addEventListener("change", () => {
     if (box.checked) declared.add(uri);
     else declared.delete(uri);
     run();
   });
+  boxes.set(uri, box);
   label.append(box, ` ${nameOf(uri)}`);
   conformanceBox.append(label);
 }
+
+function declare(classes: readonly string[]): void {
+  declared.clear();
+  for (const [uri, box] of boxes) {
+    box.checked = classes.includes(uri);
+    if (box.checked) declared.add(uri);
+  }
+}
+declare(evaluateConformance()); // the sample features, the first source
 
 // --- Rendering -----------------------------------------------------------------------------------------------------
 
@@ -382,16 +399,18 @@ function run(): void {
     timer = setTimeout(() => void runOnServer(value, id, columns), 250);
     return;
   }
-  if (!alone.valid) {
-    summaryOut.textContent = "Fix the filter to see which features it selects.";
+  // Validated against the classes ticked (evaluateConformance's, at first) before it is evaluated, as an application
+  // does: what evaluate can't evaluate here is refused above, as needs-conformance, never thrown as unsupported.
+  if (!result.valid) {
+    summaryOut.textContent = "Fix the filter, or tick the class it needs, to see which features it selects.";
     renderLocal(undefined);
     return;
   }
   let evaluator: ReturnType<typeof toEvaluator>;
   try {
-    evaluator = toEvaluator(alone.filter);
+    evaluator = toEvaluator(result.filter);
   } catch (error) {
-    // A spatial filter: valid, and written as CQL2-text to send to a server, but evaluate has no spatial engine yet.
+    // A class ticked by hand that evaluate can't evaluate here (Spatial Functions, without a geometry engine).
     summaryOut.textContent = (error as Error).message;
     renderLocal(undefined);
     return;

@@ -34,7 +34,8 @@ import type {
   ArithmeticOperand, Cql2Filter, FoldedString, Geometry, IntervalEnd, NumericOperand, Operand,
   PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator, TemporalOperand, TemporalOperator,
 } from "../core/types.js";
-import { NOT_IN_EVALUATE, refuseUnsupported } from "../core/unsupported.js";
+import { CONFORMANCE } from "../core/conformance.js";
+import { implementedBut, refuseUnsupported } from "../core/unsupported.js";
 import { geometryParts, intersects, literalParts } from "./spatial.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
 import { compareCodePoints, dayNumber, dayOf, foldKey, instantOf, likeRegExp } from "./strings.js";
@@ -55,9 +56,10 @@ export interface EvaluateOptions<F = unknown> {
    */
   readonly geometryProperty?: string;
   /**
-   * A geometry engine for the Spatial Functions class (S_EQUALS, S_TOUCHES, S_WITHIN, S_OVERLAPS, S_CROSSES,
-   * S_CONTAINS); without one they are refused (`unsupported`). S_INTERSECTS and S_DISJOINT always use the package's own
-   * exact engine. See {@link SpatialEngine}.
+   * A geometry engine for the Spatial Functions class (S_DISJOINT, S_EQUALS, S_TOUCHES, S_WITHIN, S_OVERLAPS,
+   * S_CROSSES, S_CONTAINS); without one the class is refused (`unsupported`), S_DISJOINT included, and
+   * {@link evaluateConformance} leaves it out. S_INTERSECTS (Basic Spatial Functions) needs none. With one, S_INTERSECTS
+   * and S_DISJOINT still use the package's own exact engine. See {@link SpatialEngine}.
    */
   readonly spatialEngine?: SpatialEngine;
   /**
@@ -460,15 +462,25 @@ function compile<F>(
 }
 
 /**
+ * The conformance classes `evaluate`, `toEvaluator` and `toPredicate` evaluate with these options, as URIs (as in
+ * `CONFORMANCE`): every class the package implements, but Spatial Functions without a `spatialEngine`. Pass it to
+ * `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what these options would refuse as
+ * `unsupported`; a filter valid against it never is. A new array, in `CONFORMANCE`'s order, to change at will.
+ */
+export function evaluateConformance<F = unknown>(options: EvaluateOptions<F> = {}): string[] {
+  return implementedBut(options.spatialEngine ? [] : [CONFORMANCE.spatial]);
+}
+
+/**
  * The filter compiled once, to the three-valued result for each feature: `true`, `false` or `null` (unknown).
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
- * @throws Cql2Error `unsupported` for a relation of the Spatial Functions class other than `s_intersects` and
- * `s_disjoint` (S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
+ * @throws Cql2Error `unsupported` for a filter of a class not in {@link evaluateConformance}: Spatial Functions
+ * (S_DISJOINT, S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
  */
 export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => Truth {
   const valid = assertValid(filter);
-  if (!options.spatialEngine) refuseUnsupported(requiredConformance(valid), NOT_IN_EVALUATE, "ogc-cql2/evaluate without options.spatialEngine");
+  refuseUnsupported(requiredConformance(valid), evaluateConformance(options), `ogc-cql2/evaluate${options.spatialEngine ? "" : " without options.spatialEngine"}`);
   return compile(
     valid, options.getProperty ?? (defaultGetProperty as Getter<F>), options.geometryProperty ?? "geometry", options.spatialEngine,
     options.queryables,
@@ -480,8 +492,8 @@ export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOp
  * NULL alike.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
- * @throws Cql2Error `unsupported` for a relation of the Spatial Functions class other than `s_intersects` and
- * `s_disjoint` (S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
+ * @throws Cql2Error `unsupported` for a filter of a class not in {@link evaluateConformance}: Spatial Functions
+ * (S_DISJOINT, S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
  */
 export function toPredicate<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => boolean {
   const evaluator = toEvaluator(filter, options);
@@ -493,8 +505,8 @@ export function toPredicate<F = unknown>(filter: Cql2Filter, options: EvaluateOp
  * {@link toPredicate} or {@link toEvaluator}.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
- * @throws Cql2Error `unsupported` for a relation of the Spatial Functions class other than `s_intersects` and
- * `s_disjoint` (S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
+ * @throws Cql2Error `unsupported` for a filter of a class not in {@link evaluateConformance}: Spatial Functions
+ * (S_DISJOINT, S_EQUALS, S_TOUCHES, …) without `options.spatialEngine`.
  */
 export function evaluate<F = unknown>(filter: Cql2Filter, feature: F, options: EvaluateOptions<F> = {}): Truth {
   return toEvaluator(filter, options)(feature);

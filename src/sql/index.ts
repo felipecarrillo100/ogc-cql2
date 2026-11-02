@@ -25,7 +25,7 @@ import type {
 import { toEvaluator } from "../evaluate/index.js";
 import { intersects, literalParts } from "../evaluate/spatial.js";
 import { dayNumber, foldKey, instantOf } from "../evaluate/strings.js";
-import { NOT_IN_SQL, refuseUnsupported } from "../core/unsupported.js";
+import { implementedBut, refuseUnsupported } from "../core/unsupported.js";
 import { compute, isArithmetic, readsProperty } from "../core/arithmetic.js";
 import { CONFORMANCE } from "../core/conformance.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
@@ -72,20 +72,37 @@ const readsAny = (x: ArithmeticOperand): boolean => (isArithmetic(x) ? readsProp
 const reads = (x: ArithmeticOperand): x is StringSubject =>
   typeof x === "object" && !isArithmetic(x) && ("property" in x || ("op" in x && typeof unwrap(x as FoldedString).inner !== "string"));
 
+/** `relate`, when the dialect evaluates Spatial Functions with these options (SQLite only with SpatiaLite). */
+const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect["relate"] =>
+  options.dialect === "sqlite" && options.spatialite !== true ? undefined : DIALECTS[options.dialect].relate;
+
+/**
+ * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
+ * package implements on `postgres` and `duckdb`, and on `sqlite` all but Spatial Functions unless `spatialite` is
+ * `true`. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what `toSql` would
+ * refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the database has:
+ * the spatial classes also need PostGIS, or DuckDB's spatial extension, and the package's functions installed
+ * (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`). A new array, in `CONFORMANCE`'s order, to change at will.
+ */
+export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pick<SqlOptions, "columns">>): string[] {
+  // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
+  if (relateOf(options)) return implementedBut([]);
+  if (DIALECTS[options.dialect].intersects) return implementedBut([CONFORMANCE.spatial]);
+  return implementedBut([CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial]);
+}
+
 /**
  * Builds the `WHERE` condition and its values.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
- * @throws Cql2Error `unsupported` for a spatial class the dialect doesn't evaluate.
+ * @throws Cql2Error `unsupported` for a filter of a class not in {@link sqlConformance}: Spatial Functions on `sqlite`
+ * without `spatialite` (S_DISJOINT included).
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
   const dialect = DIALECTS[options.dialect];
-  // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
-  const relate = options.dialect === "sqlite" && options.spatialite !== true ? undefined : dialect.relate;
-  const notEvaluated = relate ? [] : dialect.intersects ? [CONFORMANCE.spatial] : NOT_IN_SQL;
-  refuseUnsupported(requiredConformance(valid), notEvaluated, `ogc-cql2/sql (${options.dialect})`);
+  refuseUnsupported(requiredConformance(valid), sqlConformance(options), `ogc-cql2/sql (${options.dialect})`);
   const params: SqlValue[] = [];
   const param = (value: SqlValue, cast = ""): string => {
     params.push(value);

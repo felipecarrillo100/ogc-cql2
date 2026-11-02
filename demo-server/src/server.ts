@@ -58,13 +58,17 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
     return store;
   };
 
+  // With the classes the store evaluates, so that a client validates against them before sending (a demo field: an
+  // OGC API server declares its classes once, at /conformance).
+  const described = (store: Store) => ({ ...store.describe(), conformance: store.conformance() });
+
   app.get("/collections", (_req, res) => {
-    res.json({ collections: [...stores.values()].map((store) => store.describe()) });
+    res.json({ collections: [...stores.values()].map(described) });
   });
 
   app.get("/collections/:id", (req, res) => {
     const store = storeOf(req, res);
-    if (store) res.json(store.describe());
+    if (store) res.json(described(store));
   });
 
   app.get("/collections/:id/queryables", (req, res) => {

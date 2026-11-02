@@ -239,6 +239,18 @@ describe("filterProperties", () => {
   it("never mistakes a literal for a property", () => {
     expect(filterProperties(assertValid({ op: "=", args: [p("a"), "property"] }))).toEqual(["a"]);
   });
+
+  it("finds properties in arithmetic, and at the ends of an interval", () => {
+    const filter = assertValid({
+      op: "and",
+      args: [
+        { op: "t_during", args: [{ interval: [p("start"), p("end")] }, { interval: ["2020-01-01", ".."] }] },
+        { op: "t_after", args: [{ interval: ["..", p("until")] }, p("start")] },
+        { op: ">", args: [{ op: "*", args: [p("pop"), 2] }, 1] },
+      ],
+    });
+    expect(filterProperties(filter)).toEqual(["start", "end", "until", "pop"]);
+  });
 });
 
 describe("assertValid", () => {

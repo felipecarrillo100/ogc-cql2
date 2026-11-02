@@ -113,7 +113,7 @@ export const EXAMPLES: readonly Example[] = [
   { label: "Arithmetic: population in thousands over 1 000", filter: { op: ">", args: [{ op: "/", args: [p("population"), 1000] }, 1000] } },
   { label: "Spatial: in a map view (a bbox around central Europe)", filter: { op: "s_intersects", args: [p("geometry"), { bbox: [5, 45, 15, 51] }] } },
   { label: "Spatial: in a drawn area (a polygon around Ontario)", filter: { op: "s_intersects", args: [p("geometry"), { type: "Polygon", coordinates: [[[-81, 42], [-74, 42], [-74, 47], [-81, 47], [-81, 42]]] }] } },
-  { label: "Spatial: S_WITHIN (Spatial Functions): valid, to send to servers; not evaluated here yet", filter: { op: "s_within", args: [p("geometry"), { bbox: [-81, 42, -74, 47] }] } },
+  { label: "Spatial: S_WITHIN (Spatial Functions): valid, to send to servers; this page has no geometry engine, so it needs that class", filter: { op: "s_within", args: [p("geometry"), { bbox: [-81, 42, -74, 47] }] } },
   { label: "Country is not one of CA, DE (NULL when missing)", filter: { op: "not", args: [{ op: "in", args: [p("country"), ["CA", "DE"]] }] } },
   { label: "Founded before 1800 (dates)", filter: { op: "<", args: [p("founded"), { date: "1800-01-01" }] } },
   { label: "Updated in 2026 (timestamps)", filter: { op: ">=", args: [p("updated"), { timestamp: "2026-01-01T00:00:00Z" }] } },

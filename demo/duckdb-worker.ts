@@ -12,7 +12,7 @@ import * as arrow from "apache-arrow";
 import * as duckdb from "duckdb-wasm-blocking";
 import type { Cql2Filter, Queryable } from "ogc-cql2";
 import { duckdbFunctions } from "ogc-cql2/sql";
-import { describeSql, geoSql, parquetTable, type ParquetTable } from "../demo-server/src/stores/duckdb-columns.ts";
+import { describeSql, duckdbConformance, geoSql, parquetTable, type ParquetTable } from "../demo-server/src/stores/duckdb-columns.ts";
 import type { Feature } from "../demo-server/src/stores/types.ts";
 
 export type WorkerRequest =
@@ -24,6 +24,8 @@ export interface Opened {
   readonly queryables: Readonly<Record<string, Queryable>>;
   readonly featureCount: number;
   readonly warnings: readonly string[];
+  /** The classes it serves: the `duckdb` dialect's, without the spatial ones if the spatial extension didn't load. */
+  readonly conformance: readonly string[];
   /** DuckDB's version, and how long opening took (the engine and the spatial extension the first time), in ms. */
   readonly engine: string;
   readonly milliseconds: number;
@@ -93,7 +95,10 @@ async function handle(request: WorkerRequest): Promise<Opened | Answered> {
     if (Number(ids!.ids) !== featureCount || Number(ids!.distinct_ids) !== featureCount) throw new Error(`${file}: its id column has NULLs or duplicates.`);
     tables.set(request.id, table);
     const queryables = table.filterable && !Object.hasOwn(table.queryables, "geometry") ? { ...table.queryables, geometry: { format: "geometry-any" } } : table.queryables;
-    return { queryables, featureCount, warnings: [...warnings, ...table.warnings], engine, milliseconds: performance.now() - t0 };
+    return {
+      queryables, featureCount, warnings: [...warnings, ...table.warnings], conformance: duckdbConformance(spatial), engine,
+      milliseconds: performance.now() - t0,
+    };
   }
   const table = tables.get(request.id);
   if (!table) throw new Error(`${file} isn't open.`);
