@@ -39,7 +39,18 @@ const IN_PROFILE = new Set([
   // Arithmetic Expressions, since 1.2.0.
   "clause6_02c", "clause7_19", "example72", "example73", "example74", "example75", "example76", "example77", "example78",
   "example85",
+  // Temporal Functions, since 1.3.0.
+  "clause7_12", "clause7_13", "clause7_17", "example20", "example21", "example22", "example53", "example54", "example55",
+  "example56", "example57", "example58", "example59", "example61", "example62", "example64", "example65", "example66",
+  "example67",
 ]);
+
+/**
+ * Valid in the schema, but against the standard's own rule that an interval's two ends "have the same granularity (i.e.,
+ * they are either timestamps or dates)": each writes a date at one end and a timestamp at the other. Refused as a type
+ * mismatch, the error the standard lists for such an interval.
+ */
+const MIXED_INTERVALS = new Set(["example60", "example63"]);
 
 /**
  * cql2-rs 0.5.6 reads a geometry's Z coordinates as dropped and BBOX(…) as a function call (measured), so for the
@@ -62,9 +73,22 @@ const signedNumbers = (x: unknown): unknown => {
   return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, signedNumbers(v)]));
 };
 
+/**
+ * cql2-rs 0.5.6 names the temporal functions in lower case (`t_finishedby`, measured), where CQL2-JSON writes four of
+ * them in camel case (`t_finishedBy`, `t_metBy`, `t_overlappedBy`, `t_startedBy`): the same functions.
+ */
+const CAMEL: Readonly<Record<string, string>> = Object.fromEntries(
+  ["t_finishedBy", "t_metBy", "t_overlappedBy", "t_startedBy"].map((name) => [name.toLowerCase(), name]),
+);
+const camelCase = (x: unknown): unknown => {
+  if (Array.isArray(x)) return x.map(camelCase);
+  if (typeof x !== "object" || x === null) return x;
+  return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, k === "op" && typeof v === "string" ? (CAMEL[v] ?? v) : camelCase(v)]));
+};
+
 function readWithCql2rs(text: string): string {
   const json: unknown = parseText(text).to_json();
-  return canonical(signedNumbers(typeof json === "string" ? JSON.parse(json) : json));
+  return canonical(camelCase(signedNumbers(typeof json === "string" ? JSON.parse(json) : json)));
 }
 
 /**
@@ -91,6 +115,14 @@ function canonical(value: unknown): string {
  */
 const CQL2RS_MISREADS = new Set(["example06a"]);
 
+/**
+ * The standard writes these instants differently in its two encodings: `05:30:00.000000Z` in the text,
+ * `05:30:00Z` in the JSON, the same instant. The reading keeps what the text says, so these are compared with a zero
+ * fraction dropped.
+ */
+const ZERO_FRACTIONS = new Set(["example54", "example55", "example82"]);
+const dropZeroFractions = (x: unknown): unknown => JSON.parse(JSON.stringify(x).replace(/(T\d\d:\d\d:\d\d)\.0+Z/g, "$1Z"));
+
 describe("the standard's examples", () => {
   it("are all there, and the official schema accepts every one", () => {
     expect(examples).toHaveLength(109);
@@ -110,10 +142,16 @@ describe("the standard's examples", () => {
     }
     const expected = canonical(filter);
     expect(readWithCql2rs(toText(filter as never))).toBe(expected);
-    if (!CQL2RS_MISREADS.has(name)) expect(readWithCql2rs(standardText)).toBe(expected);
+    const standard = (text: string) => (ZERO_FRACTIONS.has(name) ? canonical(dropZeroFractions(JSON.parse(readWithCql2rs(text)))) : readWithCql2rs(text));
+    if (!CQL2RS_MISREADS.has(name)) expect(standard(standardText)).toBe(expected);
   });
 
-  it.each(examples.filter(([name]) => !IN_PROFILE.has(name)))("%s is refused only as outside the profile", (_, filter) => {
+  it.each(examples.filter(([name]) => MIXED_INTERVALS.has(name)))("%s is refused as an interval of a date and a timestamp", (_, filter) => {
+    const result = validate(filter);
+    expect(result.valid ? [] : result.problems.map((p) => p.code)).toEqual(["type-mismatch"]);
+  });
+
+  it.each(examples.filter(([name]) => !IN_PROFILE.has(name) && !MIXED_INTERVALS.has(name)))("%s is refused only as outside the profile", (_, filter) => {
     const result = validate(filter);
     expect(result.valid).toBe(false);
     if (result.valid) return;
@@ -136,13 +174,6 @@ const texts = readdirSync(textDir)
     return [name.replace(/\.txt$/, ""), readFileSync(new URL(name, textDir), "utf8"), examples.find(([n]) => n === base)![1]];
   });
 
-/**
- * The standard writes these instants differently in its two encodings: `05:30:00.000000Z` in the text,
- * `05:30:00Z` in the JSON, the same instant. The reading keeps what the text says, so these are compared with a zero
- * fraction dropped.
- */
-const ZERO_FRACTIONS = new Set(["example54", "example55", "example82"]);
-const dropZeroFractions = (x: unknown): unknown => JSON.parse(JSON.stringify(x).replace(/(T\d\d:\d\d:\d\d)\.0+Z/g, "$1Z"));
 
 describe("the standard's text examples, read", () => {
   it("are all there: 109, and 11 other texts of them", () => {
@@ -156,14 +187,15 @@ describe("the standard's text examples, read", () => {
     expect(ZERO_FRACTIONS.has(name) ? dropZeroFractions(read) : read).toEqual(json);
   });
 
-  it.for(texts.filter(([name]) => IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s comes out of fromText, and reads back through toText", ([, text, json]) => {
-    expect(fromText(text)).toEqual(json);
+  it.for(texts.filter(([name]) => IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s comes out of fromText, and reads back through toText", ([name, text, json]) => {
+    const zero = ZERO_FRACTIONS.has(name) ? dropZeroFractions : (x: unknown) => x;
+    expect(zero(fromText(text))).toEqual(json);
     // toText writes -0 (the standard's "-0.0") as 0, the same coordinate: compared as JSON, where they are one value.
     const asJson = (x: unknown) => JSON.parse(JSON.stringify(x)) as unknown;
-    expect(asJson(readText(toText(fromText(text))))).toEqual(asJson(json));
+    expect(asJson(zero(readText(toText(fromText(text)))))).toEqual(asJson(json));
   });
 
-  it.for(texts.filter(([name]) => !IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s is refused by fromText only as outside the profile", ([, text]) => {
+  it.for(texts.filter(([name]) => !IN_PROFILE.has(name.replace(/-alt01$/, "")) && !MIXED_INTERVALS.has(name.replace(/-alt01$/, ""))))("%s is refused by fromText only as outside the profile", ([, text]) => {
     let error: { code?: string; details?: { problems?: { code: string; conformance?: string; message: string }[] } } = {};
     try {
       fromText(text);

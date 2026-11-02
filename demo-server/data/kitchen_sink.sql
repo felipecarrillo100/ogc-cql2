@@ -15,6 +15,7 @@ CREATE TABLE cql2demo.kitchen_sink (
   day date,
   at timestamptz,
   local_at timestamp,
+  until timestamptz,
   note text,
   geom geometry(Geometry, 4326)
 );
