@@ -12,7 +12,9 @@
     // `vite.config.ts` aliases the same way, for Vite and Vitest.
     "paths": {
       "ogc-cql2": ["./src/index.ts"],
-      "ogc-cql2/*": ["./src/*/index.ts"]
+      "ogc-cql2/*": ["./src/*/index.ts"],
+      // The playground's DuckDB worker: DuckDB-WASM's synchronous build, aliased the same way in vite.config.ts.
+      "duckdb-wasm-blocking": ["./node_modules/@duckdb/duckdb-wasm/dist/duckdb-browser-blocking.d.ts"]
     }
   },
   "include": ["src", "test", "demo", "*.config.ts"]

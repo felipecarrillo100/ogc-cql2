@@ -29,6 +29,7 @@ const queryablesOf = (store: Store): Record<string, object> => {
 };
 import { readConfig } from "./config.ts";
 import { sendProblem } from "./problems.ts";
+import { openDuckDB, openGeoParquet, type DuckDB } from "./stores/duckdb.ts";
 import { loadGeoJsonStore } from "./stores/geojson.ts";
 import { openGeoPackage } from "./stores/geopackage.ts";
 import { createPool, openPostgres } from "./stores/postgres.ts";
@@ -144,10 +145,15 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 let pool: ReturnType<typeof createPool> | undefined;
 const postgresPool = () => (pool ??= createPool());
 
-/** Closes the PostgreSQL connections, if any were opened (tests, shutdown). */
+/** One DuckDB database for the process, opened on first use: only when collections.json has a geoparquet entry. */
+let duck: Promise<DuckDB> | undefined;
+
+/** Closes the PostgreSQL connections and the DuckDB database, if they were opened (tests, shutdown). */
 export async function closeStores(): Promise<void> {
   await pool?.end();
   pool = undefined;
+  (await duck?.catch(() => undefined))?.close();
+  duck = undefined;
 }
 
 /** Loads every configured collection. A collection that fails to load is reported and left out; the rest are served. */
@@ -161,10 +167,16 @@ export async function loadStores(configPath: string, log: (line: string) => void
     for (const warning of warnings) log(`  warning: ${warning}`);
   };
   for (const collection of readConfig(configPath)) {
-    const origin = collection.source === "geojson" ? collection.id : collection.source === "geopackage" ? collection.file : "PostgreSQL";
+    const origin = collection.source === "geojson" || collection.source === "geoparquet" ? collection.id : collection.source === "geopackage" ? collection.file : "PostgreSQL";
     try {
       if (collection.source === "geojson") {
         add(collection.id, loadGeoJsonStore(collection, collection.file), collection.file);
+      } else if (collection.source === "geoparquet") {
+        if (!duck) {
+          duck = openDuckDB();
+          for (const warning of (await duck).warnings) log(`DuckDB: ${warning}`);
+        }
+        add(collection.id, await openGeoParquet(await duck, collection), collection.file);
       } else if (collection.source === "geopackage") {
         const { stores: tables, warnings } = openGeoPackage(collection);
         for (const { id, store } of tables) add(id, store, collection.file);

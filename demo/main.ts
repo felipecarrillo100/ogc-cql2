@@ -1,7 +1,10 @@
-import { CONFORMANCE, CQL2_CONFORMANCE, CQL2_VERSION, type Queryable } from "ogc-cql2";
+import { CONFORMANCE, CQL2_CONFORMANCE, CQL2_VERSION, type Cql2Filter, type Queryable } from "ogc-cql2";
 import { toEvaluator, type Truth } from "ogc-cql2/evaluate";
 import { textProblem, toText } from "ogc-cql2/text";
 import { requiredConformance, validate, type Problem } from "ogc-cql2/validate";
+import kitchenSinkParquet from "../demo-server/data/kitchen_sink.parquet?url";
+import statesParquet from "../demo-server/data/states.parquet?url";
+import type { Answered, Opened, WorkerRequest, WorkerResponse } from "./duckdb-worker.ts";
 import { ANY_COLLECTION, COLUMNS, EXAMPLES, FEATURES, SERVER_EXAMPLES, type Example } from "./samples.ts";
 
 const byId = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -42,7 +45,7 @@ const table = byId<HTMLTableElement>("features");
 
 byId("version").textContent = CQL2_VERSION;
 
-// --- Data sources: the sample features in this page, or a demo-server collection -----------------------------------
+// --- Data sources: the sample features in this page, a GeoParquet file in DuckDB-WASM, or a demo-server collection -
 
 interface ServerCollection {
   readonly id: string;
@@ -52,14 +55,45 @@ interface ServerCollection {
   readonly warnings: readonly string[];
 }
 
-/** `undefined`: the sample features in this browser. */
-let collection: (ServerCollection & { columns: readonly string[]; queryables: Record<string, Queryable> }) | undefined;
+/** `undefined`: the sample features in this browser. `engine`: DuckDB-WASM's version, for a file filtered in this browser. */
+let collection: (ServerCollection & { columns: readonly string[]; queryables: Readonly<Record<string, Queryable>>; engine?: string }) | undefined;
 let examples: readonly Example[] = EXAMPLES;
 let serverCollections: ServerCollection[] = [];
 
 const local = el("option", "Sample features (in this browser)") as HTMLOptionElement;
 local.value = "";
 sourceSelect.append(local);
+
+/** demo-server's GeoParquet files, filtered in this browser by DuckDB-WASM, in a worker started when one is chosen. */
+const BROWSER_FILES = [
+  { id: "parquet-states", title: "US states", url: statesParquet },
+  { id: "parquet-kitchen_sink", title: "Kitchen sink", url: kitchenSinkParquet },
+];
+for (const file of BROWSER_FILES) {
+  const option = el("option", `${file.title}: GeoParquet, DuckDB-WASM in this browser`) as HTMLOptionElement;
+  option.value = `browser:${file.id}`;
+  sourceSelect.append(option);
+}
+
+let worker: Worker | undefined;
+let seq = 0;
+const waiting = new Map<number, (response: WorkerResponse) => void>();
+
+/** Asks the DuckDB-WASM worker, starting it the first time. */
+function ask(request: WorkerRequest extends infer R ? (R extends WorkerRequest ? Omit<R, "seq"> : never) : never): Promise<Opened | Answered> {
+  if (!worker) {
+    worker = new Worker(new URL("./duckdb-worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      waiting.get(event.data.seq)?.(event.data);
+      waiting.delete(event.data.seq);
+    };
+  }
+  const message = { ...request, seq: ++seq } as WorkerRequest;
+  return new Promise((resolve, reject) => {
+    waiting.set(message.seq, (response) => (response.ok ? resolve(response.result) : reject(new Error(response.error))));
+    worker!.postMessage(message);
+  });
+}
 
 async function loadServerCollections(): Promise<void> {
   try {
@@ -80,11 +114,40 @@ async function loadServerCollections(): Promise<void> {
 
 /** What filters a server collection, by its source. */
 const engineOf = (source: string): string =>
-  source === "geopackage" ? "ogc-cql2/sql, in SQLite" : source === "postgres" ? "ogc-cql2/sql, in PostgreSQL" : "ogc-cql2/evaluate";
+  source === "geopackage" ? "ogc-cql2/sql, in SQLite"
+    : source === "postgres" ? "ogc-cql2/sql, in PostgreSQL"
+    : source === "geoparquet" ? "ogc-cql2/sql, in DuckDB"
+    : "ogc-cql2/evaluate";
 
 async function selectSource(id: string): Promise<void> {
   const found = serverCollections.find((c) => c.id === id);
-  if (!found) {
+  const file = BROWSER_FILES.find((f) => `browser:${f.id}` === id);
+  if (file) {
+    collection = undefined;
+    request++; // whatever is still on its way is now out of date
+    validationOut.replaceChildren();
+    renderTable("id", [], []);
+    summaryOut.textContent = "Starting DuckDB-WASM in this browser (the engine and its spatial extension download the first time)…";
+    let opened: Opened;
+    try {
+      opened = (await ask({ kind: "open", id: file.id, url: file.url })) as Opened;
+    } catch (error) {
+      if (sourceSelect.value === id) summaryOut.textContent = `DuckDB-WASM couldn't open ${file.title}: ${(error as Error).message}`;
+      return;
+    }
+    if (sourceSelect.value !== id) return; // another source was chosen meanwhile
+    collection = {
+      id: file.id,
+      title: file.title,
+      source: "geoparquet",
+      featureCount: opened.featureCount,
+      warnings: opened.warnings,
+      columns: Object.keys(opened.queryables),
+      queryables: opened.queryables,
+      engine: `${opened.engine}, opened in ${Math.round(opened.milliseconds)} ms`,
+    };
+    examples = SERVER_EXAMPLES[file.id] ?? ANY_COLLECTION;
+  } else if (!found) {
     collection = undefined;
     examples = EXAMPLES;
   } else {
@@ -97,7 +160,12 @@ async function selectSource(id: string): Promise<void> {
   }
   resultsTitle.replaceChildren(
     collection ? `${collection.title} ` : "Sample features ",
-    el("code", collection ? `demo-server (${engineOf(collection.source)} on the server)` : "ogc-cql2/evaluate"),
+    el(
+      "code",
+      !collection ? "ogc-cql2/evaluate"
+        : collection.engine ? `ogc-cql2/sql, in DuckDB-WASM ${collection.engine}`
+        : `demo-server (${engineOf(collection.source)} on the server)`,
+    ),
   );
   fillExamples();
   showExample(0);
@@ -222,16 +290,37 @@ async function runOnServer(value: unknown, id: string, columns: readonly string[
     renderTable("id", columns, []);
     return;
   }
-  const features = answer.features ?? [];
+  showMatches(answer.numberMatched ?? 0, answer.features ?? [], columns, "on the server");
+}
+
+/** The features a store selected: how many, then the first page of them. */
+function showMatches(numberMatched: number, features: readonly { id: unknown; properties: Readonly<Record<string, unknown>> }[], columns: readonly string[], where: string): void {
   summaryOut.textContent =
-    `${answer.numberMatched} matched on the server` +
-    (answer.numberMatched === features.length ? "." : `, showing the first ${features.length}.`) +
+    `${numberMatched} matched ${where}` +
+    (numberMatched === features.length ? "." : `, showing the first ${features.length}.`) +
     " NULL and FALSE alike are not returned.";
   renderTable(
     "id",
     columns,
     features.map((f) => ({ lead: el("td", String(f.id)), selected: true, properties: f.properties })),
   );
+}
+
+/** Filters a GeoParquet file in the DuckDB-WASM worker; a later run supersedes an earlier one. */
+async function runInBrowser(filter: Cql2Filter, id: string, columns: readonly string[]): Promise<void> {
+  const mine = ++request;
+  let answer: Answered;
+  try {
+    answer = (await ask({ kind: "query", id, filter, limit: 100 })) as Answered;
+  } catch (error) {
+    if (mine === request) {
+      summaryOut.textContent = `DuckDB-WASM refused it: ${(error as Error).message}`;
+      renderTable("id", columns, []);
+    }
+    return;
+  }
+  if (mine !== request) return;
+  showMatches(answer.numberMatched, answer.features, columns, `in this browser, in ${Math.round(answer.milliseconds)} ms`);
 }
 
 function run(): void {
@@ -271,6 +360,20 @@ function run(): void {
     textOut.textContent = "—";
   }
 
+  if (collection?.engine) {
+    // Filtered here, so only a valid filter is run: what demo-server would refuse is shown above, as it would answer.
+    const { id, columns } = collection;
+    request++;
+    if (!result.valid) {
+      summaryOut.textContent = "Fix the filter to see which features it selects.";
+      renderTable("id", columns, []);
+      return;
+    }
+    summaryOut.textContent = "Filtering in this browser…";
+    const filter = result.filter;
+    timer = setTimeout(() => void runInBrowser(filter, id, columns), 250);
+    return;
+  }
   if (collection) {
     // Sent even when it's invalid here: the server validates on its own, and its refusal is part of the demo.
     const { id, columns } = collection;

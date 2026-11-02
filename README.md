@@ -563,7 +563,9 @@ Test `error.code`, not `instanceof`: that keeps working when two copies of the p
 In a clone of the repository:
 
 - **`npm run demo`** opens a page where you type CQL2-JSON and see the problems, the conformance classes, the
-  CQL2-text and which sample features match.
+  CQL2-text and which sample features match. Under "Data", the demo's two GeoParquet files can also be filtered in the
+  page itself, by DuckDB-WASM in a Web Worker, with no server (the engine, about 8 MB compressed, and its spatial
+  extension download when one is chosen).
 - **`demo-server/`** is a small Node backend (Express) that answers the same filters from data files, so the page can
   query a server instead of filtering in the browser. Start it with `npm install && npm start` in `demo-server/`
   (it listens on port 3100; `PORT=… npm start` for another), keep that terminal open, run `npm run demo` in a second
@@ -573,7 +575,8 @@ In a clone of the repository:
 The server's collections are listed in `demo-server/collections.json`. A collection is either a GeoJSON
 FeatureCollection file, filtered in memory with `ogc-cql2/evaluate`, or a table of a **GeoPackage** (OGC's SQLite
 format), filtered in the database with `ogc-cql2/sql`: one entry serves every table the GeoPackage lists in
-`gpkg_contents`. A **PostgreSQL** entry serves the tables it lists, from the database in `demo-server/.env`
+`gpkg_contents`. A **GeoParquet** (or Parquet) file is read in place by DuckDB (`@duckdb/node-api`), filtered with the
+`duckdb` dialect, its bbox covering used when the file has one. A **PostgreSQL** entry serves the tables it lists, from the database in `demo-server/.env`
 (copy `.env_sample`), filtered with the `postgres` dialect. The samples: the states, the census sub-regions and a
 "kitchen sink" of every type and edge case, the same rows in every source (`demo-server/data/README.md` says how to load
 them into PostgreSQL). Its routes:

@@ -4,11 +4,13 @@
  * ```json
  * { "collections": [
  *   { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" },
+ *   { "id": "parquet-states", "title": "US states", "source": "geoparquet", "file": "data/states.parquet" },
  *   { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-", "tables": ["states"] },
  *   { "source": "postgres", "prefix": "pg-", "functionSchema": "cql2demo", "tables": [{ "table": "cql2demo.states" }] }
  * ] }
  * ```
- * A `geojson` entry is one collection. A `geopackage` entry is one collection per table the GeoPackage lists (or only
+ * A `geojson` entry is one collection, and so is a `geoparquet` entry (a GeoParquet or Parquet file, read in place by
+ * DuckDB; its id column is `id` unless `idColumn` names another). A `geopackage` entry is one collection per table the GeoPackage lists (or only
  * `tables`), each with the id `prefix` + table name. A `postgres` entry is one collection per listed table, from the
  * database the environment's `PG*` variables name (`.env`). Files are relative to the directory of `collections.json`.
  */
@@ -17,6 +19,7 @@ import { dirname, resolve } from "node:path";
 
 export type CollectionConfig =
   | { readonly source: "geojson"; readonly id: string; readonly title: string; readonly file: string }
+  | { readonly source: "geoparquet"; readonly id: string; readonly title: string; readonly file: string; readonly idColumn?: string }
   | { readonly source: "geopackage"; readonly file: string; readonly prefix?: string; readonly tables?: readonly string[] }
   | {
       readonly source: "postgres";
@@ -62,14 +65,21 @@ export function readConfig(path: string): CollectionConfig[] {
       return;
     }
     const file = resolve(dirname(path), entry.file);
-    if (entry.source === "geojson") {
+    if (entry.source === "geojson" || entry.source === "geoparquet") {
       if (typeof entry.id !== "string" || !ID.test(entry.id)) {
         problems.push(`${where}: "id" must use letters, digits, "_" or "-".`);
         return;
       }
       if (seen.has(entry.id)) problems.push(`${where}: the id "${entry.id}" is used twice.`);
       seen.add(entry.id);
-      out.push({ source: "geojson", id: entry.id, title: typeof entry.title === "string" ? entry.title : entry.id, file });
+      const title = typeof entry.title === "string" ? entry.title : entry.id;
+      if (entry.source === "geojson") {
+        out.push({ source: "geojson", id: entry.id, title, file });
+      } else if (entry.idColumn !== undefined && typeof entry.idColumn !== "string") {
+        problems.push(`${where}: "idColumn" must be a column name.`);
+      } else {
+        out.push({ source: "geoparquet", id: entry.id, title, file, ...(entry.idColumn !== undefined ? { idColumn: entry.idColumn as string } : {}) });
+      }
     } else if (entry.source === "geopackage") {
       if (entry.prefix !== undefined && (typeof entry.prefix !== "string" || !/^[A-Za-z0-9_-]*$/.test(entry.prefix))) {
         problems.push(`${where}: "prefix" must use letters, digits, "_" or "-".`);
@@ -86,7 +96,7 @@ export function readConfig(path: string): CollectionConfig[] {
         ...(entry.tables !== undefined ? { tables: entry.tables as string[] } : {}),
       });
     } else {
-      problems.push(`${where}: source "${String(entry.source)}" is not supported; use "geojson", "geopackage" or "postgres".`);
+      problems.push(`${where}: source "${String(entry.source)}" is not supported; use "geojson", "geoparquet", "geopackage" or "postgres".`);
     }
   });
   if (problems.length > 0) throw new Error(problems.join("\n"));

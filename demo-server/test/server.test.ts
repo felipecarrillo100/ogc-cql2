@@ -51,10 +51,11 @@ describe("collections", () => {
     const files = answer.collections.filter((c: { source: string }) => c.source !== "postgres");
     assert.deepEqual(
       files.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
-      [["states", "geojson", 51], ["kitchen_sink", "geojson", 24], ["gpkg-kitchen_sink", "geopackage", 24],
+      [["states", "geojson", 51], ["kitchen_sink", "geojson", 24], ["parquet-states", "geoparquet", 51],
+        ["parquet-kitchen_sink", "geoparquet", 24], ["gpkg-kitchen_sink", "geopackage", 24],
         ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["dupes", "geojson", 2]],
     );
-    assert.match(files[5].warnings[0], /Dropped 1 feature/);
+    assert.match(files[7].warnings[0], /Dropped 1 feature/);
     assert.ok(log.includes(`states: 51 features from ${fileURLToPath(new URL("../data/states.geojson", import.meta.url))}`));
   });
 

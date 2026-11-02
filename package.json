@@ -78,11 +78,13 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",
+    "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
     "@duckdb/node-api": "^2.0.0-r.1",
     "@duckdb/node-api-1.4": "npm:@duckdb/node-api@1.4.3-r.3",
     "@types/node": "^24.19.2",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "apache-arrow": "^17.0.0",
     "cql2-wasm": "0.5.6",
     "geos.js": "0.1.5",
     "publint": "^0.3.25",
@@ -95,9 +97,18 @@
     "access": "public"
   },
   "funding": [
-    { "type": "github", "url": "https://github.com/sponsors/felipecarrillo100" },
-    { "type": "buymeacoffee", "url": "https://buymeacoffee.com/felipecarrillo100" },
-    { "type": "paypal", "url": "https://www.paypal.com/donate/?business=7X3JAPNBQTXZG&amount=5&no_recurring=0&item_name=NPM%2FGitHub+libraries&currency_code=USD" }
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/felipecarrillo100"
+    },
+    {
+      "type": "buymeacoffee",
+      "url": "https://buymeacoffee.com/felipecarrillo100"
+    },
+    {
+      "type": "paypal",
+      "url": "https://www.paypal.com/donate/?business=7X3JAPNBQTXZG&amount=5&no_recurring=0&item_name=NPM%2FGitHub+libraries&currency_code=USD"
+    }
   ],
   "license": "MIT"
 }

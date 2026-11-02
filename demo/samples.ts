@@ -72,16 +72,18 @@ const SUB_REGION_EXAMPLES: readonly Example[] = [
   { label: "All sub-regions", filter: true },
 ];
 
-/** Examples for a server collection, by its id. A collection without its own gets {@link ANY_COLLECTION}. */
+/** Examples for a server collection (or a GeoParquet file in this browser), by its id. A collection without its own gets {@link ANY_COLLECTION}. */
 export const SERVER_EXAMPLES: Readonly<Record<string, readonly Example[]>> = {
   states: STATE_EXAMPLES,
   "gpkg-states": STATE_EXAMPLES, // the same states in every source
   "pg-states": STATE_EXAMPLES,
+  "parquet-states": STATE_EXAMPLES,
   "gpkg-sub_regions": SUB_REGION_EXAMPLES,
   "pg-sub_regions": SUB_REGION_EXAMPLES,
   kitchen_sink: KITCHEN_SINK_EXAMPLES,
   "gpkg-kitchen_sink": KITCHEN_SINK_EXAMPLES,
   "pg-kitchen_sink": KITCHEN_SINK_EXAMPLES,
+  "parquet-kitchen_sink": KITCHEN_SINK_EXAMPLES,
   "pg-kitchen_sink_3857": KITCHEN_SINK_EXAMPLES,
 };
 

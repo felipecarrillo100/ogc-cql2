@@ -418,7 +418,7 @@ filter selects). The server never knows which store it talks to.
 | GeoJSON | one FeatureCollection file, read once at startup | `ogc-cql2/evaluate` | 0.1.0 |
 | GeoPackage (SQLite) | the `features` and `attributes` tables a GeoPackage lists in `gpkg_contents` (Node's built-in `node:sqlite`, read-only) | `ogc-cql2/sql` | 0.1.0 |
 | PostgreSQL / PostGIS | the tables `collections.json` lists (never discovered); the connection in a git-ignored `.env` | `ogc-cql2/sql`, `postgres` dialect | 0.1.0 |
-| GeoParquet (DuckDB) | the Parquet files `collections.json` lists, read in place with `@duckdb/node-api` | `ogc-cql2/sql`, `duckdb` dialect | planned, 0.2.0 |
+| GeoParquet (DuckDB) | the Parquet files `collections.json` lists, read in place with `@duckdb/node-api` | `ogc-cql2/sql`, `duckdb` dialect | after 1.0.0 |
 
 - A GeoPackage table: the id is its INTEGER primary key (Req 29, 119), the queryables come from its declared types
   (Table 1), BOOLEAN 0 / 1 is served as `false` / `true`, and geometry is decoded from GeoPackageBinary (the `GP`
@@ -426,6 +426,12 @@ filter selects). The server never knows which store it talks to.
 - A PostgreSQL table: the id is its primary key (or `id` in the config), the queryables come from the declared types,
   values are selected through `postgresValue`, and a PostGIS geometry is read as WKB, converted to WGS 84 with
   `ST_Transform` when needed.
+- A GeoParquet file: the id is a column (`id`, or `idColumn` in the config), unique and never NULL; the queryables
+  come from the column types; values are selected through `duckdbValue`; the geometry is the `geo` metadata's primary
+  column, read as WKB. A file not in WGS 84, or with spherical edges, is served without geometry, and that's reported.
+  The file's bbox covering (GeoParquet 1.1) goes to `toSql`. Spatial filters need DuckDB's spatial extension; without
+  it the spatial classes aren't declared. The files are made by GDAL (`data/make-parquet.sh`), which keeps every
+  value of the kitchen sink.
 - Every store answers GeoJSON features. A GeoJSON file's ids are kept when unique; missing ones are generated
   deterministically (the position in the file, or after the largest numeric id); a duplicate id drops the later
   feature, which is reported.
@@ -433,7 +439,8 @@ filter selects). The server never knows which store it talks to.
   (`filterProperties`), and refuses with HTTP 400 and `application/problem+json`. A filter sent with
   `"filter-lang": "cql2-text"` is read with `fromText`, with the same checks; text that isn't CQL2-text is refused as
   `invalid-text`, with its position.
-- Only the server has dependencies (Express, and `pg` for PostgreSQL; SQLite is Node's built-in `node:sqlite`). The
+- Only the server has dependencies (Express, `pg` for PostgreSQL, `@duckdb/node-api` for GeoParquet; SQLite is
+  Node's built-in `node:sqlite`). The
   package stays free of them: `check:imports` and `check:bundle` (below) prove it on every publish.
 
 ## Testing
@@ -470,7 +477,8 @@ filter selects). The server never knows which store it talks to.
     Vite's build), with the same result. The browser carries an
     older engine (DuckDB 1.4.3, against 2.0 in Node), so passing in Node doesn't prove the browser;
   - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 10,016 generated filters give the same features from
-    the GeoJSON file, the GeoPackage and PostgreSQL (when the database is set up; skipped otherwise);
+    the GeoJSON file, the GeoPackage, the GeoParquet file (DuckDB, with GDAL's float32 bbox covering) and PostgreSQL
+    (when the database is set up; skipped otherwise), and so do the spatial literals and the seven other relations;
   - `test/naturalearth.test.ts`: the standard's own acceptance test for Basic Spatial Functions (Table 12, conformance
     test 26) on Natural Earth 1:110m (public domain, `test/fixtures/naturalearth/`): all eight counts;
   - `demo-server/test/spatial.test.ts`: S_INTERSECTS on the US states against GEOS (PostGIS's `NOT ST_Disjoint`), 5,705
@@ -556,7 +564,7 @@ checks that they agree.
 | 0.11.0 | **`ogc-cql2/parse`:** `fromText`, CQL2-text → CQL2-JSON (the whole grammar, then the profile check), for servers implementing OGC API Features Part 3, where `filter-lang=cql2-text` is the default; its own entry point, so web apps don't load it; tested on the standard's 120 text examples, on reading back `toText`'s output, and against cql2-rs and pycql2. `toText` refuses characters a string can't hold and quotes names holding U+1680. demo-server accepts text filters |
 | 0.12.0 | **Before the freeze:** Node 22 or later (Node 20's end of life); `CQL2_CONFORMANCE` (all twelve filter classes, fixed) in place of `OTHER_CONFORMANCE`; the stability policy (README, "Versioning and stability") |
 | 1.0.0 | **The API freeze:** 0.12.0's API, kept stable under the README's "Versioning and stability"; CI (GitHub Actions) runs the proof routine on every push, and the newest DuckDB engines weekly |
-| next (demo only, not published) | GeoParquet files and a DuckDB store in `demo-server`, the kitchen sink then compared across four stores; DuckDB-WASM as a source in the playground, on desktop and on phones |
+| after 1.0.0 (demo only, not published) | GeoParquet files (made by GDAL) and a DuckDB store in `demo-server`, the kitchen sink giving the same features from four stores; the same files filtered in the playground by DuckDB-WASM, with the store's own SQL, on desktop and on phones |
 | 1.x.x | **Property-Property Comparisons** (a property on both sides); **more SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 

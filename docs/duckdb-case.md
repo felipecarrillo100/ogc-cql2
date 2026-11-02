@@ -64,8 +64,8 @@ it turned out:
 | the dialect | small: close to `postgres`, on the dialect interface it pays for | as estimated: `src/sql/dialects/duckdb.ts`, on the interface that SQLite and PostgreSQL moved onto unchanged |
 | CASEI | a JavaScript function (as for SQLite), or an SQL macro (as for PostgreSQL) | JavaScript functions returning integers (`cql2_casei_cmp`, `cql2_casei_like`): DuckDB-WASM can't return text from a function, and a macro can't be exact, since DuckDB has no NFD |
 | tests | no server, no Docker: DuckDB in the test process | as estimated: 11,050 generated filters against `evaluate`, also under a `nocase` default collation and another time zone |
-| a DuckDB store in `demo-server` | small; GeoParquet files listed in `collections.json` | in progress |
-| the browser | not estimated | the same differential check in DuckDB-WASM, in Chrome: done for 0.2.0. DuckDB-WASM as a source in the playground: next |
+| a DuckDB store in `demo-server` | small; GeoParquet files listed in `collections.json` | as estimated, after 1.0.0: GeoParquet files made by GDAL, read in place, the kitchen sink giving the same features as the GeoJSON, GeoPackage and PostgreSQL stores |
+| the browser | not estimated | the same differential check in DuckDB-WASM, in Chrome: done for 0.2.0. DuckDB-WASM as a source in the playground, after 1.0.0: the GeoParquet files, with demo-server's SQL, in a Web Worker; the kitchen sink's 12,070 filters give the same features as `evaluate` in Chrome. DuckDB-WASM 1.33 reads the geometry as WKB there (`enable_geoparquet_conversion = false`): with the spatial extension loaded, it fails on the type `GEOMETRY('OGC:CRS84')` (duckdb/duckdb-wasm#2199) |
 
 The package itself stays dependency-free: the DuckDB driver belongs to the application (a server, or a web page
 loading DuckDB-WASM), as `node:sqlite` and `pg` do today.
