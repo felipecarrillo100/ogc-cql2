@@ -63,8 +63,6 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["not of two", { op: "not", args: [true, false] }, "wrong-arguments", "/args"],
   ["= of three", { op: "=", args: [p("a"), 1, 2] }, "wrong-arguments", "/args"],
   ["property not a string", { op: "=", args: [{ property: 1 }, 1] }, "wrong-arguments", "/args/0/property"],
-  ["literal on the left", { op: "=", args: ["Toronto", p("city")] }, "outside-profile", "/args/0"],
-  ["property on the right", { op: "=", args: [p("a"), p("b")] }, "outside-profile", "/args/1"],
   ["function on the left", { op: "=", args: [{ op: "upper", args: [p("a")] }, "X"] }, "outside-profile", "/args/0"],
   ["arithmetic on the right", { op: ">", args: [p("a"), { op: "+", args: [1, 2] }] }, "outside-profile", "/args/1"],
   ["accenti inside accenti", { op: "=", args: [{ op: "accenti", args: [{ op: "accenti", args: [p("a")] }] }, "é"] }, "outside-profile", "/args/0/args/0"],
@@ -128,8 +126,17 @@ describe("validate refuses, with a code and where", () => {
   it("names the class that outside-profile CQL2 needs", () => {
     const result = validate({ op: "t_after", args: [p("built"), { timestamp: "2020-01-01T00:00:00Z" }] });
     expect(result.valid || result.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.temporal);
-    const pp = validate({ op: "=", args: [p("a"), p("b")] });
-    expect(pp.valid || pp.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.propertyProperty);
+  });
+
+  it("a property on the right, or a literal on the left: Property-Property Comparisons, needed when a server leaves it out", () => {
+    for (const filter of [{ op: "=", args: [p("a"), p("b")] }, { op: "=", args: ["Toronto", p("city")] }]) {
+      expect(validate(filter).valid).toBe(true);
+      const without = Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.propertyProperty);
+      const result = validate(filter, { conformance: without });
+      expect(result.valid ? [] : result.problems.map((x) => [x.code, x.path, x.conformance])).toEqual([
+        ["needs-conformance", "", CQL2_CONFORMANCE.propertyProperty],
+      ]);
+    }
   });
 
   it("names the right spatial class: points and boxes are basic; other geometries need the plus class", () => {
@@ -305,10 +312,15 @@ describe("spatial filters", () => {
     expect(problems(literal)).toEqual([problem]);
   });
 
-  it("the literal second; a property-property comparison and functions are outside the profile", () => {
-    const first = validate({ op: "s_equals", args: [point([1, 2]), p("geometry")] });
-    expect(first.valid ? [] : first.problems.map(({ code, path, conformance }) => [code, path, conformance])).toEqual([["outside-profile", "/args/0", undefined]]);
-    expect(problems(p("other"))).toEqual(["outside-profile /args/1"]);
+  it("a literal first or a property second: Property-Property Comparisons; functions are outside the profile", () => {
+    const without = Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.propertyProperty);
+    for (const filter of [{ op: "s_equals", args: [point([1, 2]), p("geometry")] }, { op: "s_intersects", args: [p("geometry"), p("other")] }]) {
+      expect(validate(filter).valid).toBe(true);
+      const refused = validate(filter, { conformance: without });
+      expect(refused.valid ? [] : refused.problems.map(({ code, path, conformance }) => [code, path, conformance])).toEqual([
+        ["needs-conformance", "", CONFORMANCE.propertyProperty],
+      ]);
+    }
     const buffer = validate({ op: "s_within", args: [p("road"), { op: "Buffer", args: [p("geometry"), 10, "m"] }] });
     expect(buffer.valid || buffer.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.functions);
     expect(validate({ op: "=", args: [p("a"), point([1, 2])] }).valid).toBe(false); // a geometry in a comparison

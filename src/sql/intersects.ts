@@ -1,7 +1,7 @@
 /**
  * S_INTERSECTS as a function the SQL engine calls: a stored geometry (GeoPackage blob or WKB) against the filter's
- * literal (as JSON text), decided by `evaluate`'s own engine, so exactly as `evaluate` decides it. Shared by the
- * `sqlite` and `duckdb` dialects' registered functions. Internal to the package.
+ * literal (as JSON text), or against another stored geometry, decided by `evaluate`'s own engine, so exactly as
+ * `evaluate` decides it. Internal to the package.
  */
 import type { SpatialLiteral } from "../core/types.js";
 import { geometryParts, intersects, literalParts } from "../evaluate/spatial.js";
@@ -39,4 +39,17 @@ export function intersectsStored(value: unknown, literal: unknown): number | nul
   if (stored === null) return 0;
   const parts = geometryParts(stored);
   return parts === undefined ? null : intersects(parts, target) ? 1 : 0;
+}
+
+/**
+ * 1 if two stored geometries intersect, 0 if not (or either is empty), NULL when either is NULL or isn't a geometry
+ * (Property-Property Comparisons: two geometry columns).
+ */
+export function intersectsStoredPair(a: unknown, b: unknown): number | null {
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) return null;
+  const [ga, gb] = [readStoredGeometry(a), readStoredGeometry(b)];
+  if (ga === undefined || gb === undefined) return null;
+  if (ga === null || gb === null) return 0;
+  const [pa, pb] = [geometryParts(ga), geometryParts(gb)];
+  return pa === undefined || pb === undefined ? null : intersects(pa, pb) ? 1 : 0;
 }

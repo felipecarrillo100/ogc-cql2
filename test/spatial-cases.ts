@@ -177,3 +177,46 @@ export function differences(run: (filter: Cql2Filter) => number[], values: unkno
 
 /** Every row of the blob tables. */
 export const ALL = [...VALUES, GARBAGE];
+
+// --- Property-Property Comparisons: a literal first, two geometry columns, two literals --------------------------
+
+/** `op(a, b)` is `op'(b, a)` with S_WITHIN and S_CONTAINS exchanged (the others are symmetric). */
+const CONVERSE: Record<string, string> = { s_within: "s_contains", s_contains: "s_within" };
+
+/** A filter with each spatial leaf's literal first, the relation its converse: it selects the same rows. */
+export function literalFirst(filter: unknown): unknown {
+  if (Array.isArray(filter)) return filter.map(literalFirst);
+  if (typeof filter !== "object" || filter === null || !("op" in filter)) return filter;
+  const { op, args } = filter as { op: string; args: unknown[] };
+  if (op.startsWith("s_") && "property" in (args[0] as object)) return { op: CONVERSE[op] ?? op, args: [args[1], args[0]] };
+  return { op, args: args.map(literalFirst) };
+}
+export const LITERAL_FIRST = [...FILTERS, ...RELATION_FILTERS].map(literalFirst) as Cql2Filter[];
+
+const g = { property: "geometry" };
+const other = { property: "other" };
+/** Every relation of two geometry columns, each way round, and under a NOT. */
+export const PAIR_FILTERS = (["s_intersects", ...RELATIONS] as const).flatMap((op) => [
+  { op, args: [g, other] }, { op, args: [other, g] }, { op: "not", args: [{ op, args: [g, other] }] },
+]) as unknown as Cql2Filter[];
+/** Every relation of two literals (eight pairs each): decided without a row. */
+export const LITERAL_PAIRS = (["s_intersects", ...RELATIONS] as const).flatMap((op) =>
+  LITERALS.slice(0, 8).map((l, i) => ({ op, args: [l, LITERALS[(i * 3 + 10) % LITERALS.length]] }))) as unknown as Cql2Filter[];
+
+/** Rows of two geometries: every pair of `values`, the first `geometry`, the second `other`. */
+export const pairsOf = <T>(values: readonly T[]): [T, T][] => values.flatMap((a) => values.map((b): [T, T] => [a, b]));
+
+/** The rows `evaluate` selects among the pairs (GeoJSON, as `asGeoJson` gives them), with GEOS plugged in. */
+export const fromEvaluatePairs = (pairs: readonly [unknown, unknown][], filter: Cql2Filter): number[] =>
+  pairs.map(([a, b], i) => ({ type: "Feature", id: i + 1, properties: { other: b }, geometry: a }))
+    .filter(toPredicate(filter, { spatialEngine: geosEngine })).map((f) => f.id);
+
+export function pairDifferences(run: (filter: Cql2Filter) => number[], pairs: readonly [unknown, unknown][], filters: readonly Cql2Filter[]): string {
+  const out: string[] = [];
+  for (const filter of filters) {
+    const sql = run(filter);
+    const memory = fromEvaluatePairs(pairs, filter);
+    if (JSON.stringify(sql) !== JSON.stringify(memory)) out.push(`${JSON.stringify(filter)}\n    sql ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
+  }
+  return out.slice(0, 10).join("\n");
+}

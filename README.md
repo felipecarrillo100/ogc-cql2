@@ -34,6 +34,7 @@ The package implements these conformance classes:
 | Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | ✅ |
 | Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | ✅ |
 | Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB; SQLite with SpatiaLite |
+| Property-Property Comparisons | a property or a literal on either side: comparisons, `like` (a string on the left), `between`, `in`, the spatial functions | ✅ | ✅ | ✅ |
 
 Spatial filters can be built, validated and sent to servers (see "Spatial filters" below). `evaluate` tests
 `s_intersects` and `s_disjoint` in memory, and the other relations with a geometry engine you plug in (GEOS in
@@ -41,9 +42,11 @@ WebAssembly, for one); `sql` translates them for PostGIS and DuckDB (with its sp
 GeoPackage (`s_intersects` with the package's own functions, the other relations with SpatiaLite). Where an engine is
 missing, a filter is refused with the code `unsupported`.
 
-It accepts the form every server of those classes must support: a property on the left, a literal on the right.
-Anything else that is valid CQL2 (temporal and array functions, arithmetic, comparing two
-properties, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
+Every server of those classes must support a property on the left and a literal on the right. With Property-Property
+Comparisons, either side may be a property or a literal (`name = nameascii`, `'København' < name`,
+`S_WITHIN(BBOX(7,50,8,51), geom)`): a server that doesn't declare that class gets `needs-conformance` for them (see
+[Comparing two properties](#comparing-two-properties)). Anything else that is valid CQL2 (temporal and array functions,
+arithmetic, custom functions) is refused as `outside-profile`, with the conformance class it would need. More classes
 will follow.
 
 ## A filter
@@ -195,7 +198,9 @@ The rules are the standard's:
 - **NULL:** a comparison, `LIKE`, `BETWEEN` or `IN` on a null or missing value is unknown. Unknown never selects, and
   neither does its `NOT`. `isNull` is never unknown.
 - **Types:** both sides of a comparison must have the same type. A number property compared with the string `"5"`,
-  or a non-number in `BETWEEN`, is unknown: values are never converted.
+  or a non-number in `BETWEEN`, is unknown: values are never converted. NaN, which only `getProperty` can give (JSON
+  has none, and CQL2 defines none), is equal to itself and greater than every other number, as PostgreSQL and DuckDB
+  order it.
 - **Dates and timestamps:** `{ "date" }` matches a `"YYYY-MM-DD"` string or a `Date`; `{ "timestamp" }` an ISO 8601
   string with `Z` or an offset, or a `Date`. Values are read strictly, the same in every engine: the day must exist
   (no 30 February), hours are 00–23, minutes and seconds 00–59, and a fraction counts to the millisecond. A leap second
@@ -528,6 +533,36 @@ features.filter(toPredicate(inArea, { spatialEngine: geos }));
 
 **In SQL**, the three dialects give the same answers as `evaluate`: see "Spatial filters" in the SQLite, PostgreSQL
 and DuckDB sections above.
+
+## Comparing two properties
+
+With the Property-Property Comparisons class, a property can be on the right and a literal on the left, everywhere
+the standard allows: comparisons, `between` (properties as bounds), `in` (properties among the items), the left side
+of `like` (its pattern is always a literal), and the spatial functions.
+
+```js
+{ op: ">", args: [{ property: "POP1996" }, { property: "POP1990" }] }                  // POP1996 > POP1990
+{ op: "between", args: [{ property: "pop_other" }, { property: "pop_min" }, { property: "pop_max" }] }
+{ op: "s_within", args: [{ bbox: [7, 50, 8, 51] }, { property: "geom" }] }            // the literal first
+```
+
+- **`evaluate`:** with no literal to say what two properties hold, pass the collection's queryables
+  (`toPredicate(filter, { queryables })`, the same object `validate` takes): a property with `format: "date"` or
+  `"date-time"` is then read as a day or an instant, as against a date or timestamp literal. Without them, two
+  properties compare by their values' types: strings as strings (exact for `YYYY-MM-DD` dates, and for UTC instants
+  written alike), numbers, booleans, `Date`s as instants. Under `casei` / `accenti`, as strings.
+- **`sql`:** each column's type decides, as for a literal, so a dialect selects what `evaluate` selects given the
+  columns as its queryables. Two columns whose types can't be compared (a string and a number, a date and an
+  instant) are refused (`invalid-filter`), as `validate` refuses them with the queryables. Two literals are decided
+  when the SQL is built (`TRUE` or `FALSE`).
+- **Spatial:** a literal first is the converse relation, the arguments swapped (`s_within` and `s_contains` exchange;
+  the others are symmetric), so it uses the same index. Two geometry columns are compared in the database (SQLite:
+  `cql2_intersects_pair`, and SpatiaLite for the other relations); two literals are decided when the SQL is built for
+  `s_intersects` and `s_disjoint`, by the database for the others.
+- **DuckDB:** two columns under `casei` / `accenti` go through `cql2_compare`, one more of `duckdbFunctions`.
+- **Tested** with the standard's own Table 16 (Annex A.12) on its test data, in `evaluate`, SQLite, DuckDB (2.0 and
+  1.4.3) and, for its spatial rows, on Natural Earth with GEOS; and with generated filters on every pair of columns,
+  against `evaluate`, in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
 
 ## LIKE patterns
 

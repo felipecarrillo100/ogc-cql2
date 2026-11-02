@@ -10,7 +10,10 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
-import { ALL, envelopeOf, FILTERS, GARBAGE, leaf, differences, fromEvaluate, RELATION_FILTERS, RELATIONS, STORAGES, stored, asGeoJson, type G } from "./spatial-cases.ts";
+import {
+  ALL, envelopeOf, FILTERS, GARBAGE, leaf, differences, fromEvaluate, literalFirst, LITERAL_PAIRS, pairDifferences, PAIR_FILTERS,
+  pairsOf, RELATION_FILTERS, RELATIONS, STORAGES, stored, asGeoJson, type G,
+} from "./spatial-cases.ts";
 
 // --- SQLite ----------------------------------------------------------------------------------------------------------
 
@@ -67,6 +70,50 @@ describe("SQLite selects exactly what evaluate selects", () => {
   });
 });
 
+// --- Property-Property Comparisons: a literal first, two geometry columns, two literals ---------------------------
+
+const PAIRS = pairsOf(ALL);
+const PAIR_COLUMNS: Record<string, SqlColumn> = { ...GEOMETRY, other: { format: "geometry-any", column: "geom2" } };
+/** S_INTERSECTS alone: Basic Spatial Functions, which SQLite evaluates without SpatiaLite (S_DISJOINT is Spatial Functions). */
+const intersectsOnly = (filters: readonly Cql2Filter[]) => filters.filter((f) => /"op":"s_intersects"/.test(JSON.stringify(f)));
+
+/** A table of every pair of the values, in a storage. */
+function pairTable(db: DatabaseSync, storage: string): void {
+  db.exec(`DROP TABLE IF EXISTS p; CREATE TABLE p (id INTEGER PRIMARY KEY, geom BLOB, geom2 BLOB)`);
+  const insert = db.prepare("INSERT INTO p VALUES (?, ?, ?)");
+  PAIRS.forEach(([a, b], i) => insert.run(i + 1, stored(a, STORAGES[storage]!) as never, stored(b, STORAGES[storage]!) as never));
+}
+const pairRun = (db: DatabaseSync, spatialite = false) => (filter: Cql2Filter) => {
+  const { where, params } = toSql(filter, { dialect: "sqlite", columns: PAIR_COLUMNS, ...(spatialite ? { spatialite } : {}) });
+  return (db.prepare(`SELECT id FROM p WHERE ${where} ORDER BY id`).all(...(params as never[])) as { id: number }[]).map((r) => r.id);
+};
+const asPairs = PAIRS.map(([a, b]): [unknown, unknown] => [asGeoJson(a), asGeoJson(b)]);
+
+describe("Property-Property Comparisons in SQLite: exactly what evaluate selects", () => {
+  const db = new DatabaseSync(":memory:");
+  for (const [name, fn] of Object.entries(sqliteFunctions)) db.function(name, { deterministic: true }, fn as never);
+
+  it.each(Object.keys(STORAGES))(`the literal first: ${FILTERS.length} filters on ${ALL.length} geometries: %s`, (storage) => {
+    db.exec(`DROP TABLE IF EXISTS t; CREATE TABLE t (id INTEGER PRIMARY KEY, geom BLOB)`);
+    const insert = db.prepare("INSERT INTO t VALUES (?, ?)");
+    ALL.forEach((v, i) => insert.run(i + 1, stored(v, STORAGES[storage]!) as never));
+    const run = (filter: Cql2Filter) => {
+      const { where, params } = toSql(filter, { dialect: "sqlite", columns: GEOMETRY });
+      return (db.prepare(`SELECT id FROM t WHERE ${where} ORDER BY id`).all(...(params as never[])) as { id: number }[]).map((r) => r.id);
+    };
+    expect(differences(run, ALL.map(asGeoJson), FILTERS.map(literalFirst) as Cql2Filter[])).toBe("");
+  });
+
+  it.each(Object.keys(STORAGES))(`two geometry columns, S_INTERSECTS, ${PAIRS.length} pairs: %s`, (storage) => {
+    pairTable(db, storage);
+    expect(pairDifferences(pairRun(db), asPairs, intersectsOnly(PAIR_FILTERS))).toBe("");
+  });
+
+  it("two literals, S_INTERSECTS: decided without SQL", () => {
+    for (const f of intersectsOnly(LITERAL_PAIRS)) expect(toSql(f, { dialect: "sqlite", columns: {} }).where).toMatch(/^[01]$/);
+  });
+});
+
 // --- SQLite with SpatiaLite: the other relations ---------------------------------------------------------------------
 
 /** mod_spatialite, from CQL2_SPATIALITE or the usual places; the reason it can't load, otherwise. */
@@ -101,6 +148,27 @@ describe("SQLite with SpatiaLite: the other relations, exactly as evaluate (with
     const insert = d.prepare("INSERT INTO t VALUES (?, ?)");
     ALL.forEach((v, i) => insert.run(i + 1, stored(v, STORAGES[storage]!) as never));
     expect(differences(run(GEOMETRY), ALL.map(asGeoJson), RELATION_FILTERS)).toBe("");
+  });
+
+  it.for(Object.keys(STORAGES))(`the literal first: ${RELATION_FILTERS.length} filters: %s`, (storage, context) => {
+    if (skip) return context.skip(skip);
+    const d = db as DatabaseSync;
+    d.exec(`DROP TABLE IF EXISTS t; CREATE TABLE t (id INTEGER PRIMARY KEY, geom BLOB)`);
+    const insert = d.prepare("INSERT INTO t VALUES (?, ?)");
+    ALL.forEach((v, i) => insert.run(i + 1, stored(v, STORAGES[storage]!) as never));
+    expect(differences(run(GEOMETRY), ALL.map(asGeoJson), RELATION_FILTERS.map(literalFirst) as Cql2Filter[])).toBe("");
+  });
+
+  it.for(Object.keys(STORAGES))(`two geometry columns, every relation, ${PAIRS.length} pairs: %s`, (storage, context) => {
+    if (skip) return context.skip(skip);
+    pairTable(db as DatabaseSync, storage);
+    expect(pairDifferences(pairRun(db as DatabaseSync, true), asPairs, PAIR_FILTERS)).toBe("");
+  });
+
+  it(`two literals, every relation: ${LITERAL_PAIRS.length} filters`, (context) => {
+    if (skip) return context.skip(skip);
+    pairTable(db as DatabaseSync, "WKB");
+    expect(pairDifferences(pairRun(db as DatabaseSync, true), asPairs, LITERAL_PAIRS)).toBe("");
   });
 
   it(`with GeoPackage's R-tree: ${RELATION_FILTERS.length} filters`, (context) => {

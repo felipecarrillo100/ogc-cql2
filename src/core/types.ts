@@ -4,7 +4,8 @@
  *
  * The shapes are the portable ones every server of those classes must accept: a property on the left and a literal
  * on the right (`/per/basic-cql2/cql2filter` and `/per/advanced-comparison-operators/*` let a server refuse
- * anything else). `validate` checks a value against them; these types describe what it lets through.
+ * anything else). With the Property-Property Comparisons class, either side may be a property or a literal (the
+ * `Operand…` shapes). `validate` checks a value against them; these types describe what it lets through.
  */
 
 /**
@@ -106,6 +107,45 @@ export interface In {
   readonly args: readonly [StringSubject, readonly (ScalarLiteral | FoldedString)[]];
 }
 
+// --- Property-Property Comparisons: a property or a literal on either side -------------------------------------
+
+/** A side that reads the features: a property, or `CASEI` / `ACCENTI` of one. */
+export type PropertyOperand = StringSubject;
+
+/** A side that is a value: a literal, or a string under `CASEI` / `ACCENTI`. */
+export type LiteralOperand = ScalarLiteral | FoldedString;
+
+/** Either side of a comparison, with the Property-Property Comparisons class. */
+export type Operand = PropertyOperand | LiteralOperand;
+
+/**
+ * A comparison with the Property-Property Comparisons class: a property or a literal on either side
+ * (`name = nameascii`, `'København' < name`, `1 = 1`). The sides hold the same type; under `CASEI` / `ACCENTI`,
+ * strings.
+ */
+export interface OperandComparison {
+  readonly op: ComparisonOperator;
+  readonly args: readonly [Operand, Operand];
+}
+
+/** `LIKE` with a string literal on the left (`'København' LIKE 'K_benhavn'`); the pattern is always a literal. */
+export interface OperandLike {
+  readonly op: "like";
+  readonly args: readonly [Operand, string | FoldedString];
+}
+
+/** `BETWEEN` with a property or a number in each place (`pop_other BETWEEN pop_min AND pop_max`). */
+export interface OperandBetween {
+  readonly op: "between";
+  readonly args: readonly [PropertyRef | number, PropertyRef | number, PropertyRef | number];
+}
+
+/** `IN` with a property or a literal on the left, and properties among the items (`x IN (a, 3)`). */
+export interface OperandIn {
+  readonly op: "in";
+  readonly args: readonly [Operand, readonly Operand[]];
+}
+
 /** `property IS NULL`. */
 export interface IsNull {
   readonly op: "isNull";
@@ -191,5 +231,28 @@ export interface SpatialPredicate {
   readonly args: readonly [PropertyRef, SpatialLiteral];
 }
 
+/**
+ * A spatial relation with the Property-Property Comparisons class: a geometry property or a literal in either place
+ * (`S_WITHIN(BBOX(7,50,8,51), geom)`, two geometry properties, two literals).
+ */
+export interface OperandSpatialPredicate {
+  readonly op: SpatialOperator;
+  readonly args: readonly [PropertyRef | SpatialLiteral, PropertyRef | SpatialLiteral];
+}
+
 /** A CQL2-JSON filter in the profile. `true` and `false` are filters too: all features, or none. */
-export type Cql2Filter = boolean | Comparison | Like | Between | In | IsNull | SpatialPredicate | AndOr | Not;
+export type Cql2Filter =
+  | boolean
+  | Comparison
+  | Like
+  | Between
+  | In
+  | IsNull
+  | SpatialPredicate
+  | AndOr
+  | Not
+  | OperandComparison
+  | OperandLike
+  | OperandBetween
+  | OperandIn
+  | OperandSpatialPredicate;

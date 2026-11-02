@@ -89,6 +89,13 @@ export interface View {
   readonly compare?: (op: string, param: string) => string;
   /** The condition `view LIKE pattern`, when it isn't the dialect's. */
   readonly like?: (pattern: string, param: (value: SqlValue) => string) => string;
+  /**
+   * The expression to compare with another column's view of the same kind (Property-Property Comparisons), when it
+   * isn't `sql`: a form both columns share (a day as a number, for a DATE column against dates held as text).
+   */
+  readonly pair?: string;
+  /** `duckdb`: the text and the folds behind a text or folded view, for comparing two of them in a function. */
+  readonly folded?: { readonly text: string; readonly folds: readonly Fold[] };
 }
 
 export interface Dialect {
@@ -109,6 +116,8 @@ export interface Dialect {
   view(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string, folds: readonly Fold[]): View | undefined;
   /** `view LIKE pattern`, the pattern keyed as `evaluate` keys it; `param` adds a parameter. */
   like(view: View, pattern: string, param: (value: SqlValue) => string): string;
+  /** `a op b` for two columns' views of one kind, when it isn't `a.pair ?? a.sql op b.pair ?? b.sql`. */
+  compareViews?(a: View, op: string, b: View): string | undefined;
   /**
    * S_INTERSECTS(column, literal), exactly as `evaluate` decides it; `undefined` when the column holds no geometry
    * (no value can match). Absent: the dialect has no spatial SQL yet, and spatial filters are `unsupported`.
@@ -123,6 +132,15 @@ export interface Dialect {
    * `undefined` when the column holds no geometry. Absent: the class is `unsupported`. `positive` as for `intersects`.
    */
   relate?(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined;
+  /**
+   * A relation of two geometry columns, or of a column and a literal in the database's own terms, or (but for
+   * S_INTERSECTS) of two literals (Property-Property Comparisons): S_INTERSECTS, or one of `relate`'s, exactly as
+   * `evaluate` decides it; `undefined` when a column holds no geometry. No prefilter: neither side is a constant box.
+   */
+  spatialPair?(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string): string | undefined;
 }
+
+/** A side of a spatial relation of two geometries: a column, or a literal. */
+export type PairSide = { readonly sql: string; readonly column: SqlColumn } | { readonly literal: SpatialLiteral };
 
 export const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;

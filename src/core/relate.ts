@@ -6,7 +6,7 @@
  * A matrix is nine characters, row by row: I(a)∩I(b), I(a)∩B(b), I(a)∩E(b), B(a)∩I(b) … E(a)∩E(b), each `F` (empty)
  * or the dimension of the intersection, `0`, `1` or `2`.
  */
-import type { Geometry, SpatialLiteral } from "./types.js";
+import type { Geometry, SpatialLiteral, SpatialOperator } from "./types.js";
 
 /** The relations decided from a matrix; S_INTERSECTS and S_DISJOINT have an exact engine of their own. */
 export type MatrixRelation = "s_equals" | "s_touches" | "s_within" | "s_overlaps" | "s_crosses" | "s_contains";
@@ -81,3 +81,9 @@ export function literalGeometry(x: SpatialLiteral): Geometry {
     ? { type: "MultiPolygon", coordinates: [[ring(west, 180)], [ring(-180, east)]] }
     : { type: "Polygon", coordinates: [ring(west, east)] };
 }
+
+/** `op(a, b)` is `CONVERSE[op](b, a)`: S_WITHIN and S_CONTAINS swap; the others are symmetric. */
+export const CONVERSE: Readonly<Record<SpatialOperator, SpatialOperator>> = {
+  s_intersects: "s_intersects", s_disjoint: "s_disjoint", s_equals: "s_equals", s_touches: "s_touches",
+  s_overlaps: "s_overlaps", s_crosses: "s_crosses", s_within: "s_contains", s_contains: "s_within",
+};

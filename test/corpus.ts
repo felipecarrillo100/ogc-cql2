@@ -60,3 +60,42 @@ export function generateFilters(properties: readonly string[]): Cql2Filter[] {
   }
   return [...valid, ...nots, ...pairs];
 }
+
+/**
+ * Property-Property Comparisons for the same differential tests: every pair of the properties (plain, and under
+ * CASEI / ACCENTI), the literals on the left, BETWEEN and IN with properties as bounds and items, two literals, and
+ * the same under NOT, AND and OR. Only filters valid without queryables: a pair the table's types can't compare is
+ * for the test to leave out (`toSql` refuses it).
+ */
+export function generatePropertyFilters(properties: readonly string[]): Cql2Filter[] {
+  const leaves: unknown[] = [];
+  const left = LITERALS.filter((_, i) => i % 3 === 0); // a third of the literals, on the left
+  for (const a of properties) {
+    for (const b of properties) {
+      for (const op of OPS) leaves.push({ op, args: [p(a), p(b)] });
+      for (const op of ["=", "<"]) {
+        leaves.push({ op, args: [casei(p(a)), casei(p(b))] }, { op, args: [casei(p(a)), p(b)] });
+        leaves.push({ op, args: [accenti(p(a)), accenti(p(b))] }, { op, args: [p(a), accenti(p(b))] });
+        leaves.push({ op, args: [casei(accenti(p(a))), accenti(casei(p(b)))] });
+      }
+      leaves.push({ op: "between", args: [p(a), p(b), 10] }, { op: "between", args: [p(a), 0, p(b)] });
+      leaves.push({ op: "between", args: [1, p(a), p(b)] }, { op: "in", args: [p(a), [p(b), 5]] });
+      leaves.push({ op: "in", args: [p(a), [p(b), "Straße"]] }, { op: "in", args: [casei(p(a)), [casei(p(b)), casei("strasse")]] });
+    }
+    for (const value of left) for (const op of OPS) leaves.push({ op, args: [value, p(a)] });
+    leaves.push({ op: "=", args: [casei("STRASSE"), casei(p(a))] }, { op: "<", args: [accenti("Sao"), accenti(p(a))] });
+    leaves.push({ op: "in", args: ["Straße", [p(a), "x"]] }, { op: "in", args: [5, [p(a)]] });
+  }
+  leaves.push(
+    { op: "=", args: [1, 1] }, { op: "<", args: ["a", "b"] }, { op: ">", args: [{ date: "2020-01-02" }, { date: "2020-01-01" }] },
+    { op: "like", args: ["København", "K_benhavn"] }, { op: "like", args: [casei("STRASSE"), casei("str%")] },
+    { op: "between", args: [5, 1, 9] }, { op: "in", args: [3, [1, 2]] },
+  );
+  const valid = leaves.filter((f) => validate(f).valid) as Cql2Filter[];
+  const nots = valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter);
+  const pairs: Cql2Filter[] = [];
+  for (let i = 0; i + 1 < valid.length; i += 11) {
+    pairs.push({ op: "and", args: [valid[i]!, valid[i + 1]!] }, { op: "or", args: [valid[i]!, { op: "not", args: [valid[i + 1]!] }] });
+  }
+  return [...valid, ...nots, ...pairs];
+}

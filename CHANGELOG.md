@@ -5,6 +5,53 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.1.0] - 2026-11-02
+
+The Property-Property Comparisons class: a property or a literal on either side, in every part and every engine. A
+minor version: every filter valid in 1.0.0 gives the same SQL, the same text and the same answers.
+
+### Added
+
+- **Property-Property Comparisons** (OGC 21-065r2 §7.10, Requirement 17), in `validate`, `toText`, `fromText`,
+  `evaluate` and every `toSql` dialect:
+  - a property on the right and a literal on the left: comparisons, `between` (properties as bounds), `in`
+    (properties among the items), the left side of `like` (its pattern stays a literal), and either place of a
+    spatial function;
+  - new `Cql2Filter` members: `OperandComparison`, `OperandLike`, `OperandBetween`, `OperandIn`,
+    `OperandSpatialPredicate` (the 1.0 interfaces are unchanged);
+  - `CONFORMANCE.propertyProperty`, so `validate`'s default accepts the class; a server that leaves it out of its
+    `conformance` gets `needs-conformance`.
+- `evaluate`'s **`queryables`** option: two properties holding dates or instants compare as such, as the SQL
+  engines' typed columns do.
+- `duckdbFunctions.cql2_compare` (two columns under `casei` / `accenti`) and `sqliteFunctions.cql2_intersects_pair`
+  (two geometry columns). Code that registers the functions by iterating over them picks them up.
+
+### Changed
+
+- A filter with a literal on the left or a property on the right is now valid by default, where 1.0 refused it as
+  `outside-profile`: the standard's examples `clause7_16`, `example46`, `example49`, `example83` and `example84`
+  among them.
+- A `like` pattern that is a property is `wrong-arguments` (the grammar's `patternExpression` is never a property),
+  where 1.0 named the Property-Property class.
+
+### Fixed
+
+- `evaluate` orders NaN, which only `getProperty` can give, as equal to itself and greater than every other number,
+  from either side, as PostgreSQL and DuckDB do. 1.0 found it greater only on the left: no 1.0 result changes, since
+  the property was always on the left there.
+
+### Tested
+
+- The standard's own test, Table 16 (Annex A.12, conformance test 49), on its test data
+  (`test/fixtures/ogc/data/`, modified as its notice says): its 34 rows outside the spatial and temporal classes in
+  `evaluate`, SQLite and DuckDB 2.0 and 1.4.3; its 31 spatial rows on Natural Earth with GEOS. Tests 46–48 and 50.
+- Generated filters on every pair of columns, against `evaluate`: SQLite, DuckDB (also with a `nocase` collation and
+  another time zone), DuckDB-WASM and PostgreSQL agree; the kitchen sink gives the same features from all four of
+  demo-server's stores. Two geometry columns, a literal first and two literals, against GEOS: SQLite (with
+  SpatiaLite), DuckDB and PostGIS agree.
+- Found while testing: `ST_Equals` holds for two empty geometries in PostGIS and in DuckDB, GEOS's matrix doesn't. A
+  literal is never empty; two columns are guarded.
+
 ## [1.0.0] - 2026-11-01
 
 The API freeze: 0.12.0's API, now kept stable under the policy in the README's "Versioning and stability". From here
@@ -403,6 +450,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[1.1.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.12.0...v1.0.0
 [0.12.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.10.0...v0.11.0

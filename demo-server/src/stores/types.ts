@@ -42,10 +42,10 @@ export interface QueryResult {
   readonly numberMatched: number;
 }
 
-/** The classes every store evaluates: GeoJSON with ogc-cql2/evaluate, GeoPackage and PostgreSQL in the database. */
+/** The classes every store evaluates: GeoJSON with ogc-cql2/evaluate, the others in their database. */
 export const BASE_CLASSES: readonly string[] = [
   CONFORMANCE.basic, CONFORMANCE.advancedComparison, CONFORMANCE.caseInsensitive, CONFORMANCE.accentInsensitive,
-  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus,
+  CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.propertyProperty,
 ];
 
 export interface Store {
