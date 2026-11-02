@@ -12,10 +12,11 @@
  *   features are served, and spatial filters are refused.
  */
 import { DuckDBInstance, DuckDBScalarFunction, INTEGER, VARCHAR, type DuckDBValue } from "@duckdb/node-api";
-import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
+import type { Cql2Filter } from "ogc-cql2";
 import { duckdbFunctions } from "ogc-cql2/sql";
-import { describeSql, geoSql, parquetTable } from "./duckdb-columns.ts";
-import { BASE_CLASSES, type CollectionDescription, type Store } from "./types.ts";
+import { describeSql, duckdbConformance, geoSql, parquetTable } from "./duckdb-columns.ts";
+import { type CollectionDescription, type Store } from "./types.ts";
+
 
 export interface GeoParquetSource {
   readonly id: string;
@@ -99,10 +100,7 @@ export async function openGeoParquet(duck: DuckDB, source: GeoParquetSource): Pr
     describe: () => description,
     queryables: () => table.queryables,
     hasGeometry: () => table.filterable,
-    conformance: () =>
-      duck.spatial
-        ? [...BASE_CLASSES, CONFORMANCE.spatial]
-        : BASE_CLASSES.filter((c) => c !== CONFORMANCE.basicSpatial && c !== CONFORMANCE.basicSpatialPlus),
+    conformance: () => duckdbConformance(duck.spatial),
     async query(filter: Cql2Filter, { limit, offset }) {
       const { page, count, params } = table.query(filter, limit, offset);
       const rows = await duck.rows(page, params);

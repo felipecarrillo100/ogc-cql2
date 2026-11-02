@@ -5,6 +5,53 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.4.0] - 2026-11-02
+
+Each engine now says which conformance classes it supports, so an application validates a filter against them
+before evaluating it, as it does against a server, and a filter UI offers only what the engine supports. And a
+developer guide. A minor version: every filter gives the same SQL, the same text and the same answers as in 1.3.0.
+
+### Added
+
+- **`evaluateConformance(options?)`** in `ogc-cql2/evaluate`: the classes `evaluate`, `toEvaluator` and `toPredicate`
+  support with those options, as conformance URIs. Every implemented class without a `spatialEngine` but Spatial
+  Functions; every class with one. It takes `toPredicate`'s options.
+- **`sqlConformance(options)`** in `ogc-cql2/sql`: the classes `toSql` translates: every class on `postgres` and
+  `duckdb`; on `sqlite`, Spatial Functions only with `spatialite: true`. It takes `toSql`'s options, `columns`
+  optional. It says what the SQL needs, not what the database has installed (PostGIS, DuckDB's spatial extension, the
+  package's functions).
+- Both promise that a filter `validate` accepts against them (`{ conformance }`) is never refused as `unsupported`
+  with the same options: `toEvaluator` and `toSql` now refuse through the same lists. Each is a new array, in
+  `CONFORMANCE`'s order, to change at will, and grows with minor versions as classes are implemented.
+- **The developer guide**, `docs/guide/` in the repository: one page per task (filtering in memory, validating and
+  filter UIs, CQL2-text, SQL backends and each database) and per class. The README is now the overview, linking to it.
+
+### Fixed
+
+- **`filterProperties`** missed the properties at the ends of an `INTERVAL` (1.3.0): `T_DURING(INTERVAL(start, end),
+  …)` listed none.
+- **Documentation:** `s_disjoint` belongs to the Spatial Functions class, so `evaluate` refuses it without a
+  `spatialEngine`, and `toSql` on `sqlite` without SpatiaLite, as they always did. The README and the doc comments
+  said it always worked in memory. With an engine, `s_intersects` and `s_disjoint` still use the package's own exact
+  engine.
+- **Documentation:** a geometry literal first was described as not accepted. Since 1.1.0 it is, with Property-Property
+  Comparisons.
+
+### Changed
+
+- The `unsupported` message no longer says "yet" (messages aren't covered by the stability policy; the code and
+  `details.conformance` are unchanged).
+
+### Tested
+
+- The promise on 6,525 filters (the standard's examples, spatial literals under every relation, the generated
+  corpora) under every option set: each filter compiles exactly when it validates against the list, and is otherwise
+  refused as `unsupported`.
+- Compared with 1.3.0 on 29,275 filters (234,200 outputs: `evaluate` with and without GEOS, each dialect with and
+  without SpatiaLite): the same SQL, answers and refusals.
+- demo-server's stores declare exactly the classes they declared before, now from these functions; the playground,
+  in headless Chrome, ticks each source's classes and refuses up front what its engine can't evaluate.
+
 ## [1.3.0] - 2026-11-02
 
 The Temporal Functions class: how instants and intervals relate, in every part and every engine, for the queries a

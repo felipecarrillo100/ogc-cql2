@@ -914,6 +914,7 @@ export function filterProperties(filter: Cql2Filter): string[] {
     if (!isObject(x)) return;
     if (typeof x.property === "string") names.add(x.property);
     else if (Array.isArray(x.args)) walk(x.args);
+    else if (Array.isArray(x.interval)) walk(x.interval); // INTERVAL(start, end): its ends can be properties
   };
   walk(filter);
   return [...names];

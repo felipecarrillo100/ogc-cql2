@@ -17,10 +17,10 @@
  * The file is opened read-only.
  */
 import { DatabaseSync } from "node:sqlite";
-import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
-import { sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
+import type { Cql2Filter } from "ogc-cql2";
+import { sqlConformance, sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeGeoPackageBinary, type Geometry } from "../geopackage/binary.ts";
-import { BASE_CLASSES, type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
+import { type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
 
 export interface GeoPackageSource {
   readonly file: string;
@@ -222,7 +222,7 @@ function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boo
     describe: description,
     queryables: () => queryables,
     hasGeometry: () => withGeometry,
-    conformance: () => (spatialite ? [...BASE_CLASSES, CONFORMANCE.spatial] : BASE_CLASSES),
+    conformance: () => sqlConformance({ dialect: "sqlite", spatialite }), // Spatial Functions with SpatiaLite
     async query(filter: Cql2Filter, { limit, offset }) {
       const { where, params } = toSql(filter, { dialect: "sqlite", columns: filterColumns, spatialite });
       const rows = all(`SELECT ${select} FROM ${from} WHERE ${where} ORDER BY ${quote(idColumn.name)} LIMIT ? OFFSET ?`, ...params, limit, offset);
