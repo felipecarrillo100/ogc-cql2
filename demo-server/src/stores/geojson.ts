@@ -148,7 +148,8 @@ export function createGeoJsonStore(collection: GeoJsonCollection, json: unknown,
     hasGeometry: () => true, // every GeoJSON feature has a geometry member, maybe null
     conformance: () => [...BASE_CLASSES, CONFORMANCE.spatial], // the other relations through GEOS (geos.js)
     async query(filter, { limit, offset }) {
-      const matched = features.filter(toPredicate(filter, { spatialEngine: geosEngine }));
+      // The queryables, so that two properties holding dates or instants compare as such (Property-Property).
+      const matched = features.filter(toPredicate(filter, { spatialEngine: geosEngine, queryables }));
       return { features: matched.slice(offset, offset + limit), numberMatched: matched.length };
     },
   };

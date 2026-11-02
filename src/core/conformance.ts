@@ -48,6 +48,7 @@ export const CONFORMANCE: {
   readonly basicSpatial: string;
   readonly basicSpatialPlus: string;
   readonly spatial: string;
+  readonly propertyProperty: string;
 } = {
   basic: CQL2_CONFORMANCE.basic,
   advancedComparison: CQL2_CONFORMANCE.advancedComparison,
@@ -56,4 +57,5 @@ export const CONFORMANCE: {
   basicSpatial: CQL2_CONFORMANCE.basicSpatial,
   basicSpatialPlus: CQL2_CONFORMANCE.basicSpatialPlus,
   spatial: CQL2_CONFORMANCE.spatial,
+  propertyProperty: CQL2_CONFORMANCE.propertyProperty,
 };

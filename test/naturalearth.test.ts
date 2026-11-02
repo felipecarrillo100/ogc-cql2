@@ -2,12 +2,14 @@
  * The standard's own acceptance tests, on Natural Earth 1:110m (test/fixtures/naturalearth/, public domain): the
  * predicates and the number of features each must select, for Basic Spatial Functions (OGC 21-065r2, Annex A.7,
  * conformance test 26, Table 12) and for Spatial Functions (Annex A.9.9, conformance test 38, Table 14, with GEOS
- * plugged in as the engine). Each filter is written back as CQL2-text to check it is the standard's own predicate.
+ * plugged in as the engine), and the spatial rows of Property-Property Comparisons (Annex A.12, conformance test 49,
+ * Table 16: the literal first). Each filter is written back as CQL2-text to check it is the standard's own predicate.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
+import { fromText } from "ogc-cql2/parse";
 import { toText } from "ogc-cql2/text";
 import { geosEngine } from "./geos-engine.ts";
 
@@ -85,6 +87,52 @@ describe("the standard's Table 14, on Natural Earth, with GEOS plugged in", () =
   it.each(TABLE_14)("%s: %s → %i", (dataset, text, filter, expected) => {
     expect(toText(filter as Cql2Filter).replaceAll(" ", "")).toBe(text.replaceAll(" ", ""));
     const selects = toPredicate(filter as Cql2Filter, { geometryProperty: "geom", spatialEngine: geosEngine });
+    expect(DATA[dataset]!.filter(selects).length).toBe(expected);
+  });
+});
+
+// Table 16 (Property-Property Comparisons, Annex A.12, conformance test 49): its spatial rows, the literal first, as the
+// standard writes them in CQL2-text. They are Table 12's and Table 14's, the arguments swapped and S_WITHIN and
+// S_CONTAINS exchanged.
+const TABLE_16: [string, string, number][] = [
+  [C, "S_INTERSECTS(BBOX(0,40,10,50),geom)", 8],
+  [C, "S_INTERSECTS(BBOX(150,-90,-150,90),geom)", 10],
+  [C, "S_INTERSECTS(POINT(7.02 49.92),geom)", 1],
+  [PL, "S_INTERSECTS(BBOX(0,40,10,50),geom)", 7],
+  [R, "S_INTERSECTS(BBOX(-180,-90,0,90),geom)", 4],
+  [C, "S_INTERSECTS(POLYGON((0 40,10 40,10 50,0 50,0 40)),geom)", 8],
+  [C, "S_INTERSECTS(LINESTRING(0 40,10 50),geom)", 4],
+  [PL, "S_INTERSECTS(POLYGON((0 40,10 40,10 50,0 50,0 40)),geom)", 7],
+  [R, "S_INTERSECTS(LINESTRING(-60 -90,-60 90),geom)", 2],
+  [C, "S_DISJOINT(BBOX(0,40,10,50),geom)", 169],
+  [C, "S_DISJOINT(POLYGON((0 40,10 40,10 50,0 50,0 40)),geom)", 169],
+  [C, "S_DISJOINT(LINESTRING(0 40,10 50),geom)", 173],
+  [C, "S_DISJOINT(POINT(7.02 49.92),geom)", 176],
+  [PL, "S_DISJOINT(BBOX(0,40,10,50),geom)", 236],
+  [PL, "S_DISJOINT(POLYGON((0 40,10 40,10 50,0 50,0 40)),geom)", 236],
+  [R, "S_DISJOINT(BBOX(-180,-90,0,90),geom)", 9],
+  [R, "S_DISJOINT(LINESTRING(-60 -90,-60 90),geom)", 11],
+  [PL, "S_EQUALS(POINT(6.1300028 49.6116604),geom)", 1],
+  [C, "S_TOUCHES(POLYGON((6.043073357781111 50.128051662794235,6.242751092156993 49.90222565367873,6.186320428094177 49.463802802114515,5.897759230176348 49.44266714130711,5.674051954784829 49.529483547557504,5.782417433300907 50.09032786722122,6.043073357781111 50.128051662794235)),geom)", 3],
+  [C, "S_TOUCHES(POINT(6.043073357781111 50.128051662794235),geom)", 3],
+  [C, "S_TOUCHES(POINT(6.242751092156993 49.90222565367873),geom)", 2],
+  [C, "S_TOUCHES(LINESTRING(6.043073357781111 50.128051662794235,6.242751092156993 49.90222565367873),geom)", 3],
+  [R, "S_CROSSES(BBOX(0,40,10,50),geom)", 1],
+  [R, "S_CROSSES(LINESTRING(-60 -90,-60 90),geom)", 2],
+  [C, "S_CONTAINS(BBOX(-180,-90,0,90),geom)", 44],
+  [PL, "S_CONTAINS(BBOX(-180,-90,0,90),geom)", 74],
+  [R, "S_CONTAINS(BBOX(-180,-90,0,90),geom)", 4],
+  [C, "S_WITHIN(BBOX(7,50,8,51),geom)", 1],
+  [C, "S_WITHIN(LINESTRING(7 50,8 51),geom)", 1],
+  [C, "S_WITHIN(POINT(7.02 49.92),geom)", 1],
+  [C, "S_OVERLAPS(BBOX(-180,-90,0,90),geom)", 11],
+];
+
+describe("the standard's Table 16, its spatial rows, on Natural Earth, with GEOS plugged in", () => {
+  it.each(TABLE_16)("%s: %s → %i", (dataset, text, expected) => {
+    const filter = fromText(text);
+    expect(toText(filter).replaceAll(" ", "")).toBe(text.replaceAll(" ", ""));
+    const selects = toPredicate(filter, { geometryProperty: "geom", spatialEngine: geosEngine });
     expect(DATA[dataset]!.filter(selects).length).toBe(expected);
   });
 });

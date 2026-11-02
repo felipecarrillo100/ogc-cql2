@@ -9,7 +9,9 @@
 import { Cql2Error } from "../core/errors.js";
 import { unwrap, type Fold } from "../core/folds.js";
 import { IDENTIFIER, KEYWORDS, NOT_A_CHARACTER } from "../core/grammar.js";
-import type { Cql2Filter, FoldedString, Geometry, PropertyRef, ScalarLiteral, SpatialLiteral, StringSubject } from "../core/types.js";
+import type {
+  Cql2Filter, FoldedString, Geometry, Operand, PropertyRef, ScalarLiteral, SpatialLiteral,
+} from "../core/types.js";
 import { assertValid } from "../validate/index.js";
 import { positionsOf, wkt, wktNumber as number } from "../core/wkt.js";
 
@@ -107,9 +109,14 @@ function propertyName(ref: PropertyRef): string {
 const wrapped = (inner: string, folds: readonly Fold[]): string =>
   folds.reduce((text, fold) => `${fold.toUpperCase()}(${text})`, inner);
 
-function subject(x: StringSubject): string {
-  const { inner, folds } = unwrap(x);
-  return wrapped(propertyName(inner), folds);
+/** Either side of a comparison: a property or a string under its folds, or a literal. */
+function operand(x: Operand): string {
+  if (typeof x === "object" && "property" in x) return propertyName(x);
+  if (typeof x === "object" && "op" in x) {
+    const { inner, folds } = unwrap(x as FoldedString) as { readonly inner: PropertyRef | string; readonly folds: readonly Fold[] };
+    return wrapped(typeof inner === "string" ? quoteString(inner) : propertyName(inner), folds);
+  }
+  return literal(x);
 }
 
 function literal(x: ScalarLiteral | FoldedString): string {
@@ -144,11 +151,11 @@ function write(filter: Cql2Filter): string {
     case "isNull":
       return `${propertyName(filter.args[0])} IS NULL`;
     case "like":
-      return `${subject(filter.args[0])} LIKE ${literal(filter.args[1])}`;
+      return `${operand(filter.args[0])} LIKE ${literal(filter.args[1])}`;
     case "between":
-      return `${subject(filter.args[0])} BETWEEN ${literal(filter.args[1])} AND ${literal(filter.args[2])}`;
+      return `${operand(filter.args[0])} BETWEEN ${operand(filter.args[1])} AND ${operand(filter.args[2])}`;
     case "in":
-      return `${subject(filter.args[0])} IN (${filter.args[1].map(literal).join(", ")})`;
+      return `${operand(filter.args[0])} IN (${filter.args[1].map(operand).join(", ")})`;
     case "s_intersects":
     case "s_equals":
     case "s_disjoint":
@@ -157,9 +164,9 @@ function write(filter: Cql2Filter): string {
     case "s_overlaps":
     case "s_crosses":
     case "s_contains":
-      return `${filter.op.toUpperCase()}(${propertyName(filter.args[0])}, ${spatialLiteral(filter.args[1])})`;
+      return `${filter.op.toUpperCase()}(${filter.args.map((g) => ("property" in g ? propertyName(g as PropertyRef) : spatialLiteral(g))).join(", ")})`;
     default:
-      return `${subject(filter.args[0])} ${filter.op} ${literal(filter.args[1])}`;
+      return `${operand(filter.args[0])} ${filter.op} ${operand(filter.args[1])}`;
   }
 }
 

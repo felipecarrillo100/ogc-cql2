@@ -99,6 +99,29 @@ function generate(): Cql2Filter[] {
 const FILTERS = generate();
 const PAGE = { limit: 1000, offset: 0 };
 
+/**
+ * Property-Property Comparisons: every pair of the properties (plain, and under CASEI / ACCENTI), literals on the left,
+ * BETWEEN and IN with properties, under NOT, AND and OR; only what the queryables allow (two kinds that can't be
+ * compared are refused by validate, and by toSql).
+ */
+function generatePairs(): Cql2Filter[] {
+  const leaves: unknown[] = [];
+  for (const a of PROPERTIES) {
+    for (const b of PROPERTIES) {
+      for (const op of ["=", "<>", "<", "<=", ">", ">="]) leaves.push({ op, args: [p(a), p(b)] });
+      leaves.push({ op: "=", args: [casei(p(a)), casei(p(b))] }, { op: "<", args: [accenti(p(a)), p(b)] });
+      leaves.push({ op: "between", args: [p(a), p(b), 10] }, { op: "in", args: [p(a), [p(b), 5]] }, { op: "in", args: [p(a), [p(b), "Straße"]] });
+    }
+    for (const value of LITERALS.filter((_, i) => i % 2 === 0)) for (const op of ["=", "<", ">="]) leaves.push({ op, args: [value, p(a)] });
+  }
+  const queryables = fromFile.queryables();
+  const valid = leaves.filter((f) => validate(f, { queryables }).valid) as Cql2Filter[];
+  const set = [...valid, ...valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter)];
+  for (let i = 0; i + 1 < valid.length; i += 5) set.push({ op: "or", args: [valid[i]!, { op: "not", args: [valid[i + 1]!] }] });
+  return set;
+}
+const PAIRS = generatePairs();
+
 async function differences(a: Store, b: Store, label: string): Promise<string[]> {
   const out: string[] = [];
   for (const filter of FILTERS) {
@@ -155,6 +178,16 @@ const RELATIONS_EXACT = RELATIONS.flatMap((op) => [
     .map((f) => ({ op, args: [p("geometry"), f.geometry] })),
 ]);
 
+/** Each spatial leaf with its literal first, the relation its converse (S_WITHIN ↔ S_CONTAINS): the same features. */
+const literalFirst = (f: unknown): unknown => {
+  if (typeof f !== "object" || f === null || typeof (f as { op?: unknown }).op !== "string") return f; // a literal
+  const { op, args } = f as { op: string; args: unknown[] };
+  if (op.startsWith("s_") && "property" in (args[0] as object)) {
+    return { op: op === "s_within" ? "s_contains" : op === "s_contains" ? "s_within" : op, args: [args[1], args[0]] };
+  }
+  return { op, args: args.map(literalFirst) };
+};
+
 async function spatialDifferences(store: Store, filters: unknown[], label: string): Promise<string[]> {
   const out: string[] = [];
   for (const filter of filters) {
@@ -186,6 +219,28 @@ describe("the kitchen sink, four stores", () => {
     if (pgSkip) return t.skip(pgSkip);
     assert.equal((await differences(fromFile, fromPg!, "postgres")).slice(0, 10).join("\n"), "");
   });
+
+  for (const [label, store] of [["GeoPackage", () => fromGpkg], ["GeoParquet (DuckDB)", () => fromParquet], ["PostgreSQL", () => fromPg]] as const) {
+    it(`Property-Property Comparisons, ${PAIRS.length} filters: GeoJSON and ${label} give the same features`, async (t) => {
+      if (label === "PostgreSQL" && pgSkip) return t.skip(pgSkip);
+      assert.ok(PAIRS.length > 1000, `${PAIRS.length} filters`);
+      const out: string[] = [];
+      for (const filter of PAIRS) {
+        const [x, y] = await Promise.all([fromFile.query(filter, PAGE), store()!.query(filter, PAGE)]);
+        if (!isDeepStrictEqual(x.features.map((f) => f.id), y.features.map((f) => f.id))) {
+          out.push(`${JSON.stringify(filter)}\n    geojson ${x.features.map((f) => f.id)} / ${label} ${y.features.map((f) => f.id)}`);
+        }
+      }
+      assert.equal(out.slice(0, 10).join("\n"), "");
+    });
+
+    it(`the literal first, every spatial filter: GeoJSON and ${label} give the same features`, async (t) => {
+      if (label === "PostgreSQL" && pgSkip) return t.skip(pgSkip);
+      const relations = label !== "GeoPackage" || store().conformance().includes(CONFORMANCE.spatial);
+      const filters = [...SPATIAL_MARGIN, ...SPATIAL_EXACT, ...(relations ? [...RELATIONS_MARGIN, ...RELATIONS_EXACT] : [])].map(literalFirst);
+      assert.equal((await spatialDifferences(store()!, filters, label)).slice(0, 10).join("\n"), "");
+    });
+  }
 
   it("the test is not trivial: the filters select many different sets", async () => {
     const sets = new Set<string>();

@@ -12,7 +12,7 @@ import type { Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import { duckdbFunctions, duckdbValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { validate } from "ogc-cql2/validate";
-import { casei, generateFilters, p } from "./corpus.ts";
+import { casei, generateFilters, generatePropertyFilters, p } from "./corpus.ts";
 
 // --- The table -------------------------------------------------------------------------------------------------------
 
@@ -154,6 +154,47 @@ describe("DuckDB selects exactly what evaluate selects", () => {
       label: "river",
     });
     expect(served[3]!.at).toBe("1969-12-31T23:59:59.999Z");
+  });
+});
+
+describe("Property-Property Comparisons: DuckDB selects exactly what evaluate selects, given the columns as queryables", () => {
+  const all = generatePropertyFilters(Object.keys(COLUMNS));
+  const refused = (filter: Cql2Filter) => {
+    try {
+      toSql(filter, { dialect: "duckdb", columns: COLUMNS });
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  const filters = all.filter((f) => !refused(f));
+  const fromMemory = (filter: Cql2Filter): number[] =>
+    served.filter(toPredicate(filter, { getProperty: (row, name) => row[name], queryables: COLUMNS })).map((r) => r.id as number);
+
+  for (const [label, connection] of [["plain settings", () => plain], ["nocase collation, New York time zone", () => hostile]] as const) {
+    it(`${filters.length} filters on ${ROWS.length} rows (${label})`, async () => {
+      expect(filters.length).toBeGreaterThan(3000);
+      const differences: string[] = [];
+      for (const filter of filters) {
+        const sql = await fromSql(connection(), filter);
+        const memory = fromMemory(filter);
+        if (JSON.stringify(sql) !== JSON.stringify(memory)) {
+          differences.push(`${JSON.stringify(filter)}\n    duckdb ${JSON.stringify(sql)}  evaluate ${JSON.stringify(memory)}`);
+        }
+      }
+      expect(differences.slice(0, 20).join("\n")).toBe("");
+    }, 120_000);
+  }
+
+  it("what toSql refuses (two columns whose types can't be compared), validate refuses with the queryables", () => {
+    const refusedOnes = all.filter(refused);
+    expect(refusedOnes.length).toBeGreaterThan(100);
+    for (const f of refusedOnes) expect(validate(f, { queryables: COLUMNS }).valid, JSON.stringify(f)).toBe(false);
+  });
+
+  it("the test is not trivial: filters select different, non-empty sets", () => {
+    const results = new Set(filters.map((f) => JSON.stringify(fromMemory(f))));
+    expect(results.size).toBeGreaterThan(150);
   });
 });
 

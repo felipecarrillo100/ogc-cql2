@@ -26,8 +26,11 @@
  * A `LIKE` `_` matches one code point.
  */
 import { unwrap, type Fold } from "../core/folds.js";
-import { dimension, literalGeometry, relates, transpose, type MatrixRelation } from "../core/relate.js";
-import type { Cql2Filter, FoldedString, Geometry, ScalarLiteral } from "../core/types.js";
+import { CONVERSE, dimension, literalGeometry, relates, transpose, type MatrixRelation } from "../core/relate.js";
+import { heldKind } from "../core/queryables.js";
+import type {
+  Cql2Filter, FoldedString, Geometry, Operand, PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator,
+} from "../core/types.js";
 import { NOT_IN_EVALUATE, refuseUnsupported } from "../core/unsupported.js";
 import { geometryParts, intersects, literalParts } from "./spatial.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
@@ -54,6 +57,15 @@ export interface EvaluateOptions<F = unknown> {
    * exact engine. See {@link SpatialEngine}.
    */
   readonly spatialEngine?: SpatialEngine;
+  /**
+   * The properties' queryables, as `validate` takes them (a collection's queryables). They are used only where two
+   * properties are compared with each other (Property-Property Comparisons), where no literal says what kind of value
+   * to compare: a property with `format: "date"` is then read as a day, one with `"date-time"` as an instant, as
+   * against a date or a timestamp literal. Without them, two properties compare by their values' types: strings as
+   * strings (exact for `YYYY-MM-DD` dates, and for UTC instants written alike), numbers, booleans, and `Date`s as
+   * instants. A SQL dialect selects what `evaluate` selects given the same queryables.
+   */
+  readonly queryables?: Readonly<Record<string, Queryable | object>>;
 }
 
 /**
@@ -78,30 +90,17 @@ const defaultGetProperty = (feature: unknown, name: string): unknown =>
 
 type Key = string | number | boolean;
 
-/** A literal compiled once: its key, and how to read a feature value of the same type (`undefined`: a mismatch). */
-interface Operand {
-  readonly key: Key;
-  readonly read: (value: unknown) => Key | undefined;
-}
-
-/** `subjectFolds`: what the subject's value goes through (`CASEI`, `ACCENTI`), innermost first. */
-function operand(literal: ScalarLiteral | FoldedString, subjectFolds: readonly Fold[]): Operand {
-  const readString = (v: unknown): Key | undefined => (typeof v === "string" ? foldKey(v, subjectFolds) : undefined);
-  if (typeof literal === "string") return { key: foldKey(literal, []), read: readString };
-  if (typeof literal === "number") return { key: literal, read: (v) => (typeof v === "number" ? v : undefined) };
-  if (typeof literal === "boolean") return { key: literal, read: (v) => (typeof v === "boolean" ? v : undefined) };
-  if ("op" in literal) {
-    const { inner, folds } = unwrap(literal);
-    return { key: foldKey(inner, folds), read: readString };
-  }
-  if ("date" in literal) return { key: literal.date, read: dayOf };
-  return { key: instantOf(literal.timestamp)!, read: instantOf }; // validate has checked it is an instant
-}
-
 const isNullish = (v: unknown): v is null | undefined => v === null || v === undefined;
 
-const order = (a: Key, b: Key): number =>
-  typeof a === "string" && typeof b === "string" ? compareCodePoints(a, b) : a === b ? 0 : a < b ? -1 : 1;
+/**
+ * The order of two keys of one kind. NaN (a number only `getProperty` can give: JSON has none) is equal to itself and
+ * greater than every other number, from either side, as PostgreSQL and DuckDB order it; CQL2 defines no NaN.
+ */
+function order(a: Key, b: Key): number {
+  if (typeof a === "string" && typeof b === "string") return compareCodePoints(a, b);
+  if (Number.isNaN(a) || Number.isNaN(b)) return Number.isNaN(a) ? (Number.isNaN(b) ? 0 : 1) : -1;
+  return a === b ? 0 : a < b ? -1 : 1;
+}
 
 const COMPARE: Record<string, (o: number) => boolean> = {
   "=": (o) => o === 0,
@@ -111,6 +110,112 @@ const COMPARE: Record<string, (o: number) => boolean> = {
   ">": (o) => o > 0,
   ">=": (o) => o >= 0,
 };
+
+/** What the two sides of a comparison are compared as. */
+type ReadKind = "string" | "number" | "boolean" | "date" | "instant";
+
+/** A side of a comparison, compiled once: a literal's key, or a property to read from each feature. */
+type Side =
+  | { readonly key: Key; readonly kind: ReadKind }
+  | { readonly name: string; readonly folds: readonly Fold[]; readonly held: ReadKind | undefined };
+
+/** A value read as `kind`, under the side's folds; `undefined` when it isn't one (a type mismatch). */
+function read(value: unknown, kind: ReadKind, folds: readonly Fold[]): Key | undefined {
+  switch (kind) {
+    case "string":
+      return typeof value === "string" ? foldKey(value, folds) : undefined;
+    case "number":
+      return typeof value === "number" ? value : undefined;
+    case "boolean":
+      return typeof value === "boolean" ? value : undefined;
+    case "date":
+      return dayOf(value);
+    case "instant":
+      return instantOf(value);
+  }
+}
+
+/** What a value is, when no literal and no queryable says: its own type (a `Date` is an instant). */
+const kindOf = (value: unknown): ReadKind | undefined =>
+  typeof value === "string" ? "string" : typeof value === "number" ? "number" : typeof value === "boolean" ? "boolean"
+    : value instanceof Date ? "instant" : undefined;
+
+/** A literal side: its key. A string is compared after NFC, folded as written. */
+function literalSide(x: ScalarLiteral | FoldedString): Side {
+  if (typeof x === "string") return { key: foldKey(x, []), kind: "string" };
+  if (typeof x === "number") return { key: x, kind: "number" };
+  if (typeof x === "boolean") return { key: x, kind: "boolean" };
+  if ("op" in x) {
+    const { inner, folds } = unwrap(x);
+    return { key: foldKey(inner, folds), kind: "string" };
+  }
+  if ("date" in x) return { key: x.date, kind: "date" };
+  return { key: instantOf(x.timestamp)!, kind: "instant" }; // validate has checked it is an instant
+}
+
+type Queryables = EvaluateOptions["queryables"];
+
+/** A side: a literal, or a property (or CASEI / ACCENTI of one) with what its queryable says it holds. */
+function sideOf(x: Operand, queryables: Queryables): Side {
+  if (typeof x !== "object" || !("property" in x || ("op" in x && !isFoldedString(x)))) return literalSide(x as unknown as ScalarLiteral | FoldedString);
+  const { inner, folds } = unwrap(x as Exclude<Operand, ScalarLiteral | FoldedString>);
+  const q = queryables && Object.hasOwn(queryables, inner.property) ? heldKind(queryables[inner.property] as Queryable) : undefined;
+  return { name: inner.property, folds, held: q === "date" ? "date" : q === "instant" ? "instant" : undefined };
+}
+
+/** `CASEI('x')` / `ACCENTI('x')`, a string under folds (not a property under them). */
+const isFoldedString = (x: object): boolean => typeof unwrap(x as FoldedString).inner === "string";
+
+/**
+ * Compares two sides: NULL when either is null or missing, or when they aren't of one kind (a type mismatch). The
+ * kind is the literal's; for two properties, a string under CASEI / ACCENTI, else what their queryables say, else
+ * the values' own types.
+ */
+function comparer<F>(a: Side, b: Side, test: (order: number) => boolean, get: Getter<F>): (feature: F) => Truth {
+  // CASEI and ACCENTI give strings, so two properties under them compare as strings.
+  const folded = ("folds" in a && a.folds.length > 0) || ("folds" in b && b.folds.length > 0);
+  const fixed = "kind" in a ? a.kind : "kind" in b ? b.kind : folded ? "string"
+    : "held" in a && a.held ? a.held : "held" in b ? b.held : undefined;
+  const conflict = "held" in a && "held" in b && a.held !== undefined && b.held !== undefined && a.held !== b.held;
+  const keyOf = (side: Side, kind: ReadKind | undefined, value: unknown): Key | null | undefined => {
+    if ("key" in side) return side.key;
+    if (isNullish(value)) return null;
+    return read(value, kind ?? kindOf(value) ?? "string", side.folds);
+  };
+  if ("key" in a && "key" in b) {
+    const result = test(order(a.key, b.key)); // two literals: decided once
+    return () => result;
+  }
+  return (f) => {
+    const va = "name" in a ? get(f, a.name) : undefined;
+    const vb = "name" in b ? get(f, b.name) : undefined;
+    if (("name" in a && isNullish(va)) || ("name" in b && isNullish(vb))) return null;
+    if (conflict) return null;
+    // Two properties without a queryable: both values must be of one kind.
+    const kind = fixed ?? kindOf(va);
+    if (fixed === undefined && (kind === undefined || kindOf(vb) !== kind)) return null;
+    const ka = keyOf(a, kind, va);
+    const kb = keyOf(b, kind, vb);
+    return ka === undefined || kb === undefined || ka === null || kb === null ? null : test(order(ka, kb));
+  };
+}
+
+// --- Spatial relations with a literal first, or two properties (Property-Property Comparisons) ---------------------
+
+const isRef = (x: PropertyRef | SpatialLiteral): x is PropertyRef => "property" in x;
+
+/** Whether the relation holds between two geometries; NULL when the engine can't compute it. */
+function relation(op: SpatialOperator, a: Geometry, b: Geometry, engine: SpatialEngine | undefined): Truth {
+  const [pa, pb] = [geometryParts(a)!, geometryParts(b)!];
+  if (op === "s_intersects" || op === "s_disjoint") return intersects(pa, pb) !== (op === "s_disjoint");
+  // An empty geometry shares no point with anything: no relation but S_DISJOINT holds.
+  if (pa.box === undefined || pb.box === undefined) return relates(op, "FFFFFFFF2", -1, -1);
+  try {
+    return relates(op, engine!.prepare(a).relate(b), dimension(a), dimension(b));
+  } catch {
+    return null; // the engine can't compute it (an invalid polygon): unknown
+  }
+}
 
 // --- Logic ---------------------------------------------------------------------------------------------------------
 
@@ -129,19 +234,43 @@ const not = (a: Truth): Truth => (a === null ? null : !a);
 type Getter<F> = (feature: F, name: string) => unknown;
 
 
-function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string, engine: SpatialEngine | undefined): (feature: F) => Truth {
+function compile<F>(
+  filter: Cql2Filter, get: Getter<F>, geometry: string, engine: SpatialEngine | undefined, queryables: Queryables,
+): (feature: F) => Truth {
   if (typeof filter === "boolean") return () => filter;
+  const sub = (x: Cql2Filter) => compile(x, get, geometry, engine, queryables);
+  if (filter.op in CONVERSE) {
+    const op = filter.op as SpatialOperator;
+    const [a, b] = filter.args as readonly [PropertyRef | SpatialLiteral, PropertyRef | SpatialLiteral];
+    if (!isRef(a) && isRef(b)) return sub({ op: CONVERSE[op], args: [b, a] }); // a literal first: the converse
+    if (!isRef(a) && !isRef(b)) {
+      const result = relation(op, literalGeometry(a), literalGeometry(b), engine); // two literals: decided once
+      return () => result;
+    }
+    if (isRef(a) && isRef(b)) {
+      const read = (ref: PropertyRef) =>
+        ref.property === geometry ? (f: F) => (f as { geometry?: unknown } | null)?.geometry : (f: F) => get(f, ref.property);
+      const [ra, rb] = [read(a), read(b)];
+      return (f) => {
+        const [va, vb] = [ra(f), rb(f)];
+        if (isNullish(va) || isNullish(vb)) return null;
+        // A value that isn't a geometry: a type mismatch, NULL.
+        if (geometryParts(va) === undefined || geometryParts(vb) === undefined) return null;
+        return relation(op, va as Geometry, vb as Geometry, engine);
+      };
+    }
+  }
   switch (filter.op) {
     case "and": {
-      const parts = filter.args.map((arg) => compile(arg, get, geometry, engine));
+      const parts = filter.args.map(sub);
       return (f) => parts.reduce<Truth>((acc, part) => and(acc, part(f)), true);
     }
     case "or": {
-      const parts = filter.args.map((arg) => compile(arg, get, geometry, engine));
+      const parts = filter.args.map(sub);
       return (f) => parts.reduce<Truth>((acc, part) => or(acc, part(f)), false);
     }
     case "not": {
-      const inner = compile(filter.args[0], get, geometry, engine);
+      const inner = sub(filter.args[0]);
       return (f) => not(inner(f));
     }
     case "isNull": {
@@ -149,29 +278,32 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string, engine
       return (f) => isNullish(get(f, name));
     }
     case "like": {
-      const [subject, pattern] = filter.args;
-      const { inner, folds } = unwrap(subject);
+      const [left, pattern] = filter.args;
       // CASEI and ACCENTI fold what they wrap; `%`, `_` and `\` fold to themselves, so the pattern's meaning survives.
       const p = unwrap(pattern);
       const re = likeRegExp(foldKey(p.inner, p.folds));
+      const side = sideOf(left, queryables);
+      if ("key" in side) {
+        const result = re.test(side.key as string); // a string literal on the left: decided once
+        return () => result;
+      }
       return (f) => {
-        const v = get(f, inner.property);
+        const v = get(f, side.name);
         if (isNullish(v) || typeof v !== "string") return null;
-        return re.test(foldKey(v, folds));
+        return re.test(foldKey(v, side.folds));
       };
     }
     case "between": {
-      const [subject, low, high] = filter.args;
-      return (f) => {
-        const v = get(f, subject.property);
-        if (isNullish(v) || typeof v !== "number") return null;
-        return v >= low && v <= high;
-      };
+      // x BETWEEN low AND high is x >= low AND x <= high (the standard's BETWEEN is inclusive), in three-valued logic.
+      const [x, low, high] = filter.args.map((arg) => sideOf(arg, queryables)) as [Side, Side, Side];
+      const atLeast = comparer(x, low, COMPARE[">="]!, get);
+      const atMost = comparer(x, high, COMPARE["<="]!, get);
+      return (f) => and(atLeast(f), atMost(f));
     }
     case "s_intersects":
     case "s_disjoint": {
       // S_DISJOINT is NOT S_INTERSECTS: the same NULLs.
-      const [subject, literal] = filter.args;
+      const [subject, literal] = filter.args as readonly [PropertyRef, SpatialLiteral]; // the shapes above are handled
       const target = literalParts(literal);
       const geometryOf = subject.property === geometry ? (f: F) => (f as { geometry?: unknown } | null)?.geometry : (f: F) => get(f, subject.property);
       const disjoint = filter.op === "s_disjoint";
@@ -188,7 +320,7 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string, engine
     case "s_overlaps":
     case "s_crosses":
     case "s_contains": {
-      const [subject, literal] = filter.args;
+      const [subject, literal] = filter.args as readonly [PropertyRef, SpatialLiteral]; // the shapes above are handled
       const relation: MatrixRelation = filter.op;
       const target = literalGeometry(literal);
       const prepared = engine!.prepare(target); // refused before compiling without an engine
@@ -212,34 +344,15 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string, engine
       };
     }
     case "in": {
-      const [subject, list] = filter.args;
-      const { inner, folds } = unwrap(subject);
-      const name = inner.property;
-      const operands = list.map((item) => operand(item, folds));
-      return (f) => {
-        const v = get(f, name);
-        if (isNullish(v)) return null;
-        let mismatch = false;
-        for (const o of operands) {
-          const key = o.read(v);
-          if (key === undefined) mismatch = true;
-          else if (key === o.key) return true;
-        }
-        return mismatch ? null : false;
-      };
+      // x IN (a, b, …) is x = a OR x = b OR …, in three-valued logic.
+      const [left, list] = filter.args;
+      const x = sideOf(left, queryables);
+      const equals = list.map((item) => comparer(x, sideOf(item, queryables), COMPARE["="]!, get));
+      return (f) => equals.reduce<Truth>((acc, eq) => (acc === true ? true : or(acc, eq(f))), false);
     }
     default: {
-      const [subject, value] = filter.args;
-      const { inner, folds } = unwrap(subject);
-      const name = inner.property;
-      const o = operand(value, folds);
-      const test = COMPARE[filter.op]!;
-      return (f) => {
-        const v = get(f, name);
-        if (isNullish(v)) return null;
-        const key = o.read(v);
-        return key === undefined ? null : test(order(key, o.key));
-      };
+      const [a, b] = filter.args;
+      return comparer(sideOf(a, queryables), sideOf(b, queryables), COMPARE[filter.op]!, get);
     }
   }
 }
@@ -254,7 +367,10 @@ function compile<F>(filter: Cql2Filter, get: Getter<F>, geometry: string, engine
 export function toEvaluator<F = unknown>(filter: Cql2Filter, options: EvaluateOptions<F> = {}): (feature: F) => Truth {
   const valid = assertValid(filter);
   if (!options.spatialEngine) refuseUnsupported(requiredConformance(valid), NOT_IN_EVALUATE, "ogc-cql2/evaluate without options.spatialEngine");
-  return compile(valid, options.getProperty ?? (defaultGetProperty as Getter<F>), options.geometryProperty ?? "geometry", options.spatialEngine);
+  return compile(
+    valid, options.getProperty ?? (defaultGetProperty as Getter<F>), options.geometryProperty ?? "geometry", options.spatialEngine,
+    options.queryables,
+  );
 }
 
 /**

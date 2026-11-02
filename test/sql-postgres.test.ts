@@ -95,6 +95,45 @@ describe("the postgres dialect", () => {
   });
 });
 
+describe("Property-Property Comparisons in the postgres dialect", () => {
+  const COLS: Record<string, SqlColumn> = { ...COLUMNS, other: { type: "string", sqlType: "text" }, sday: { type: "string", format: "date", sqlType: "text" } };
+  const pp = (filter: unknown) => toSql(filter as Cql2Filter, { dialect: "postgres", columns: COLS });
+
+  it("two columns: their views, compared directly", () => {
+    expect(pp({ op: "<", args: [p("name"), p("other")] })).toEqual({
+      where: `normalize("name"::text, NFC) COLLATE "C" < normalize("other"::text, NFC) COLLATE "C"`,
+      params: [],
+    });
+    expect(pp({ op: "=", args: [casei(p("name")), p("other")] }).where).toBe(
+      `cql2_casei(normalize("name"::text, NFC)) COLLATE "C" = normalize("other"::text, NFC) COLLATE "C"`,
+    );
+  });
+
+  it("a date column against dates held as text: both as YYYY-MM-DD text", () => {
+    expect(pp({ op: "<", args: [p("day"), p("sday")] }).where).toBe(
+      `to_char("day", 'YYYY-MM-DD') COLLATE "C" < cql2_day("sday"::text) COLLATE "C"`,
+    );
+  });
+
+  it("a literal on the left is the property on the left, the operator mirrored", () => {
+    expect(pp({ op: "<", args: [5, p("n")] })).toEqual(pp({ op: ">", args: [p("n"), 5] }));
+  });
+
+  it("two literals: TRUE or FALSE; BETWEEN and IN with properties: ANDs and ORs of comparisons", () => {
+    expect(pp({ op: "<", args: ["a", "b"] }).where).toBe("TRUE");
+    expect(pp({ op: "between", args: [p("n"), p("amount"), 10] }).where).toBe(
+      `("n"::double precision >= "amount"::double precision) AND ("n"::double precision <= $1::double precision)`,
+    );
+    expect(pp({ op: "in", args: [p("n"), [p("amount"), 3]] }).where).toBe(
+      `(("n"::double precision = "amount"::double precision) OR ("n"::double precision = $1::double precision))`,
+    );
+  });
+
+  it("columns whose types can't be compared: refused", () => {
+    expect(() => pp({ op: "=", args: [p("name"), p("n")] })).toThrowError(expect.objectContaining({ code: "invalid-filter", path: "/args/1" }));
+  });
+});
+
 describe("postgresValue: what the application selects, so it serves what the SQL compares", () => {
   it.each([
     ["name", `"name"`],

@@ -18,10 +18,10 @@ import { accentiKey, caseiKey, dayOf, instantOf, likeRegExp, plainKey } from "..
 import { literalGeometry, type MatrixRelation } from "../../core/relate.js";
 import { wkt } from "../../core/wkt.js";
 import { geometryParts, literalParts } from "../../evaluate/spatial.js";
-import { intersectsStored } from "../intersects.js";
+import { intersectsStored, intersectsStoredPair } from "../intersects.js";
 import { gpkgEnvelope, readStoredGeometry } from "../wkb.js";
 import type { SpatialLiteral } from "../../core/types.js";
-import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 const likeCache = new Map<string, RegExp>();
 
@@ -49,6 +49,7 @@ export const sqliteFunctions: {
   readonly cql2_instant: (value: unknown) => number | null;
   readonly cql2_like: (value: unknown, pattern: unknown) => number | null;
   readonly cql2_intersects: (geometry: unknown, literal: unknown) => number | null;
+  readonly cql2_intersects_pair: (a: unknown, b: unknown) => number | null;
   readonly cql2_wkt: (geometry: unknown) => string | null;
 } = {
   /** A text value, NFC-normalized. */
@@ -71,6 +72,11 @@ export const sqliteFunctions: {
    * value that isn't a geometry. `evaluate`'s own engine decides.
    */
   cql2_intersects: intersectsStored,
+  /**
+   * 1 or 0: do two stored geometries intersect (two geometry columns, Property-Property Comparisons)? NULL when either
+   * is NULL or isn't a geometry. `evaluate`'s own engine decides.
+   */
+  cql2_intersects_pair: intersectsStoredPair,
   /**
    * A stored geometry (a GeoPackage blob, or WKB, extended WKB included) as WKT, for SpatiaLite (`spatialite: true`)
    * where its own readers can't take it; `""` for an empty geometry, which SpatiaLite can't represent; NULL for a NULL
@@ -176,6 +182,31 @@ function sqliteRelate(relation: MatrixRelation, sql: string, column: SqlColumn, 
   );
 }
 
+/**
+ * A relation of two geometries, each a column or a literal (Property-Property Comparisons). S_INTERSECTS of two
+ * columns: `cql2_intersects_pair`, `evaluate`'s engine. The others with SpatiaLite, GEOS deciding, each side as WKT
+ * (a column through `cql2_wkt`, so every storage reads the same). As in `evaluate`, a value that isn't a geometry is
+ * NULL, and an empty geometry is in no relation (FALSE); SpatiaLite's −1 for what it can't read is NULL.
+ */
+function sqlitePair(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string): string | undefined {
+  const geometry = (side: PairSide) => "literal" in side || (typeof side.column.format === "string" && side.column.format.startsWith("geometry-"));
+  if (!geometry(a) || !geometry(b)) return undefined;
+  if (relation === "s_intersects") {
+    // Two columns: with a literal, toSql writes the column-and-literal form.
+    const value = (side: PairSide) => ("literal" in side ? param(JSON.stringify(side.literal)) : side.sql);
+    return "literal" in b ? `cql2_intersects(${value(a)}, ${value(b)}) = 1` : `cql2_intersects_pair(${value(a)}, ${value(b)}) = 1`;
+  }
+  const columns = [a, b].filter((side): side is Extract<PairSide, { sql: string }> => "sql" in side);
+  // Positional placeholders: the literals' parameters are added in the order they stand in the SQL.
+  const asGeometry = (side: PairSide) =>
+    "literal" in side ? `GeomFromText(${param(wkt(literalGeometry(side.literal)))}, 4326)` : `GeomFromText(cql2_wkt(${side.sql}), 4326)`;
+  const test = `NULLIF(${SPATIALITE[relation]}(${asGeometry(a)}, ${asGeometry(b)}), -1)`;
+  if (columns.length === 0) return test;
+  // As evaluate: a value that isn't a geometry is NULL, before an empty one is FALSE.
+  const any = (condition: (sql: string) => string) => columns.map((c) => condition(c.sql)).join(" OR ");
+  return `(CASE WHEN ${any((c) => `cql2_wkt(${c}) IS NULL`)} THEN NULL WHEN ${any((c) => `cql2_wkt(${c}) = ''`)} THEN 0 ELSE ${test} END)`;
+}
+
 export const sqlite: Dialect = {
   placeholder: () => "?",
   true: "1",
@@ -187,4 +218,5 @@ export const sqlite: Dialect = {
   like: (v, pattern, param) => `cql2_like(${v.sql}, ${param(pattern)})`,
   intersects: sqliteIntersects,
   relate: sqliteRelate,
+  spatialPair: sqlitePair,
 };

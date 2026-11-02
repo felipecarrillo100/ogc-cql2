@@ -9,6 +9,7 @@
  */
 import { CONFORMANCE, CQL2_CONFORMANCE } from "../core/conformance.js";
 import { Cql2Error } from "../core/errors.js";
+import { heldKind, type HeldKind } from "../core/queryables.js";
 import type { Cql2Filter, Queryable } from "../core/types.js";
 
 export type ProblemCode =
@@ -109,25 +110,6 @@ const argsOf = (x: Json): unknown[] | undefined => (Array.isArray(x.args) ? x.ar
 /** The type of a literal on the right, for the type checks. */
 type LiteralKind = "string" | "number" | "boolean" | "date" | "timestamp" | "folded-string";
 
-/** What a queryable holds, for the type checks; `any` when it doesn't say. */
-type HeldKind = "text" | "date" | "instant" | "number" | "boolean" | "geometry" | "other" | "any";
-
-function heldKind(q: Queryable): HeldKind {
-  // OGC API Features Part 3 describes a geometry queryable by a format (`geometry-point`, `geometry-any`…) or by a
-  // reference to a GeoJSON schema.
-  if (typeof q.format === "string" && q.format.startsWith("geometry-")) return "geometry";
-  const ref = (q as { $ref?: unknown }).$ref;
-  if (typeof ref === "string" && /geojson\.org\/schema\//.test(ref)) return "geometry";
-  // JSON Schema allows a list of types: a nullable property is ["string", "null"]. NULL is always possible in CQL2.
-  const types: unknown = Array.isArray(q.type) ? q.type.filter((t) => t !== "null") : q.type;
-  const type = Array.isArray(types) ? (types.length === 1 ? types[0] : undefined) : types;
-  if (type === undefined) return q.format === "date" ? "date" : q.format === "date-time" ? "instant" : "any";
-  if (type === "string") return q.format === "date" ? "date" : q.format === "date-time" ? "instant" : "text";
-  if (type === "number" || type === "integer") return "number";
-  if (type === "boolean") return "boolean";
-  return "other";
-}
-
 /** The literals each kind of property can be compared with. */
 const ACCEPTS: Readonly<Record<HeldKind, readonly LiteralKind[]>> = {
   text: ["string", "folded-string"],
@@ -157,6 +139,28 @@ interface Subject {
   readonly name: string;
   readonly held: HeldKind;
 }
+
+/** A side of a comparison that passed the checks: a property (a subject) or a literal (its kind). */
+type Side =
+  | { readonly subject: Subject; readonly path: string; readonly fold?: string }
+  | { readonly literal: LiteralKind; readonly path: string };
+
+/** A kind of literal, or of property, in the messages. */
+const NAME: Readonly<Record<Exclude<LiteralKind, "folded-string"> | Exclude<HeldKind, "any">, string>> = {
+  string: "a string", text: "a string", number: "a number", boolean: "a boolean", date: "a date", timestamp: "an instant",
+  instant: "an instant", geometry: "a geometry", other: "a value the profile can't compare",
+};
+
+/** The literal kind a property of this kind is compared as, for two properties; `undefined` for any. */
+const AS_LITERAL: Readonly<Partial<Record<HeldKind, LiteralKind>>> = {
+  text: "string", number: "number", boolean: "boolean", date: "date", instant: "timestamp",
+};
+
+/** Whether `x` is `casei(…)` / `accenti(…)` with a property inside (one or two levels): a folded subject. */
+const foldsProperty = (x: unknown): boolean => {
+  for (let i = 0; i < 2 && (opOf(x) === "casei" || opOf(x) === "accenti"); i++) x = argsOf(x as Json)?.[0];
+  return isPropertyRef(x);
+};
 
 class Checker {
   readonly problems: Problem[] = [];
@@ -305,8 +309,8 @@ class Checker {
     return true;
   }
 
-  /** A literal on the right. Returns its kind, or `undefined` after reporting why it isn't one. */
-  literal(x: unknown, path: string): LiteralKind | undefined {
+  /** A literal (on the right, unless `where` says). Returns its kind, or `undefined` after reporting why it isn't one. */
+  literal(x: unknown, path: string, where = "The right side"): LiteralKind | undefined {
     if (typeof x === "string") return "string";
     if (typeof x === "boolean") return "boolean";
     if (typeof x === "number") {
@@ -333,7 +337,7 @@ class Checker {
     }
     const op = opOf(x);
     if (op === "casei" || op === "accenti") return this.foldedLiteral(x as Json, op, path, undefined);
-    this.notInProfile(x, path, "The right side");
+    this.notInProfile(x, path, where);
     return undefined;
   }
 
@@ -399,28 +403,94 @@ class Checker {
     }
   }
 
+  /**
+   * Either side of a comparison: a property, `casei(…)` / `accenti(…)` of a property or a string, or a literal. With a
+   * property on the right or a literal on the left, the comparison uses Property-Property Comparisons.
+   */
+  side(x: unknown, path: string, where: string): Side | undefined {
+    if (isPropertyRef(x) || foldsProperty(x)) {
+      const subject = this.subject(x, path);
+      return subject && { subject, path, ...(subject.folded ? { fold: opOf(x)! } : {}) };
+    }
+    const kind = this.literal(x, path, where);
+    return kind && { literal: kind, path };
+  }
+
+  /** Notes a side that the portable shape (a property on the left, literals on the right) doesn't allow. */
+  propertyProperty(sides: readonly (Side | undefined)[], path: string): void {
+    const [left, ...rest] = sides;
+    if ((left && "literal" in left) || rest.some((side) => side && "subject" in side)) {
+      this.uses(CONFORMANCE.propertyProperty, path, "A literal on the left, or a property on the right,");
+    }
+  }
+
+  /** Reports two sides whose types can't match (the second side's path). */
+  match(a: Side, b: Side): void {
+    if ("subject" in a && "literal" in b) return this.matchLiteral(a, b.literal, b.path);
+    if ("literal" in a && "subject" in b) return this.matchLiteral(b, a.literal, a.path);
+    if ("literal" in a && "literal" in b) {
+      const plain = (k: LiteralKind) => (k === "folded-string" ? "string" : k);
+      if (plain(a.literal) !== plain(b.literal)) {
+        const folded = a.literal === "folded-string" || b.literal === "folded-string";
+        const other = plain(a.literal === "folded-string" ? b.literal : a.literal) as Exclude<LiteralKind, "folded-string">;
+        this.report(
+          "type-mismatch", b.path,
+          folded
+            ? `casei(…) and accenti(…) give a string, so the other side must be a string, not ${NAME[other]}.`
+            : `${NAME[plain(a.literal) as "string"]} can't be compared with ${NAME[plain(b.literal) as "string"]}.`,
+        );
+      }
+      return;
+    }
+    const [x, y] = [(a as { subject: Subject }).subject, (b as { subject: Subject }).subject];
+    if (x.held === "any" || y.held === "any") return;
+    if (x.held === y.held && AS_LITERAL[x.held]) return;
+    this.report(
+      "type-mismatch", b.path,
+      x.held === y.held
+        ? `"${y.name}" ${WRITE[y.held as Exclude<HeldKind, "any">]}.`
+        : `"${x.name}" holds ${NAME[x.held as Exclude<HeldKind, "any">]} and "${y.name}" ${NAME[y.held as Exclude<HeldKind, "any">]}: they can't be compared.`,
+    );
+  }
+
+  /**
+   * A property side against a literal (reported at the literal's path). CASEI('x') against a plain property is valid:
+   * the property's value is then compared as it is.
+   */
+  matchLiteral(side: { subject: Subject; fold?: string }, kind: LiteralKind, path: string): void {
+    if (side.fold && kind !== "string" && kind !== "folded-string") {
+      this.report("type-mismatch", path, `${side.fold}(…) gives a string, so it can only be compared with a string.`);
+    } else {
+      this.against(side.subject, kind, path);
+    }
+  }
+
   comparison(op: string, args: unknown[], path: string): void {
     this.uses(CONFORMANCE.basic, path, "A comparison");
     if (args.length !== 2) return this.report("wrong-arguments", `${path}/args`, `"${op}" needs exactly two arguments.`);
-    const subject = this.subject(args[0], `${path}/args/0`);
-    const kind = this.literal(args[1], `${path}/args/1`);
-    // CASEI('x') against a plain property is valid: the property's value is then compared as it is.
-    if (subject?.folded && kind && kind !== "string" && kind !== "folded-string") {
-      this.report("type-mismatch", `${path}/args/1`, `${opOf(args[0])}(…) gives a string, so it can only be compared with a string.`);
-    } else {
-      this.against(subject, kind, `${path}/args/1`);
-    }
+    const left = this.side(args[0], `${path}/args/0`, "The left side");
+    const right = this.side(args[1], `${path}/args/1`, "The right side");
+    this.propertyProperty([left, right], path);
+    if (left && right) this.match(left, right);
   }
 
   like(args: unknown[], path: string): void {
     this.uses(CONFORMANCE.advancedComparison, path, "LIKE");
     if (args.length !== 2) return this.report("wrong-arguments", `${path}/args`, `"like" needs exactly two arguments.`);
-    const subject = this.subject(args[0], `${path}/args/0`);
+    const left = this.side(args[0], `${path}/args/0`, "The left side");
+    this.propertyProperty([left], path);
+    // The grammar's `patternExpression`: a string, under CASEI / ACCENTI at most, never a property.
+    if (isPropertyRef(args[1]) || foldsProperty(args[1])) {
+      this.report("wrong-arguments", `${path}/args/1`, `A LIKE pattern is a string literal, e.g. "Riv%", never a property.`);
+      return;
+    }
     const kind = this.literal(args[1], `${path}/args/1`);
     if (kind && kind !== "string" && kind !== "folded-string") {
       this.report("type-mismatch", `${path}/args/1`, `A LIKE pattern is a string, e.g. "Riv%".`);
-    } else if (subject && subject.held !== "text" && subject.held !== "any") {
-      this.report("type-mismatch", `${path}/args/0`, `LIKE works on strings, and "${subject.name}" ${WRITE[subject.held]}.`);
+    } else if (left && "literal" in left && left.literal !== "string" && left.literal !== "folded-string") {
+      this.report("type-mismatch", `${path}/args/0`, `LIKE works on strings.`);
+    } else if (left && "subject" in left && left.subject.held !== "text" && left.subject.held !== "any") {
+      this.report("type-mismatch", `${path}/args/0`, `LIKE works on strings, and "${left.subject.name}" ${WRITE[left.subject.held]}.`);
     }
   }
 
@@ -431,22 +501,21 @@ class Checker {
         "wrong-arguments", `${path}/args`, `"between" needs three arguments: a property, the low and the high value.`,
       );
     }
-    let subject: Subject | undefined;
-    if (opOf(args[0]) === "casei" || opOf(args[0]) === "accenti") {
-      this.report("type-mismatch", `${path}/args/0`, `BETWEEN works on numbers only, and ${opOf(args[0])}(…) gives a string.`);
-    } else {
-      subject = this.subject(args[0], `${path}/args/0`, false);
-    }
-    let numbers = true;
-    for (const i of [1, 2]) {
-      const kind = this.literal(args[i], `${path}/args/${i}`);
-      if (kind && kind !== "number") {
-        this.report("type-mismatch", `${path}/args/${i}`, `BETWEEN works on numbers only.`);
-        numbers = false;
+    const sides = args.map((x, i) => {
+      const at = `${path}/args/${i}`;
+      if (opOf(x) === "casei" || opOf(x) === "accenti") {
+        this.report("type-mismatch", at, `BETWEEN works on numbers only, and ${opOf(x)}(…) gives a string.`);
+        return undefined;
       }
-    }
-    if (numbers && subject && subject.held !== "number" && subject.held !== "any") {
-      this.report("type-mismatch", `${path}/args/0`, `BETWEEN works on numbers, and "${subject.name}" ${WRITE[subject.held]}.`);
+      return this.side(x, at, i === 0 ? "The left side" : "The right side");
+    });
+    this.propertyProperty(sides, path);
+    for (const side of sides) {
+      if (side && "literal" in side && side.literal !== "number") {
+        this.report("type-mismatch", side.path, `BETWEEN works on numbers only.`);
+      } else if (side && "subject" in side && side.subject.held !== "number" && side.subject.held !== "any") {
+        this.report("type-mismatch", side.path, `BETWEEN works on numbers, and "${side.subject.name}" ${WRITE[side.subject.held]}.`);
+      }
     }
   }
 
@@ -455,58 +524,69 @@ class Checker {
     if (args.length !== 2) {
       return this.report("wrong-arguments", `${path}/args`, `"in" needs two arguments: a property and a list.`);
     }
-    const subject = this.subject(args[0], `${path}/args/0`);
+    const left = this.side(args[0], `${path}/args/0`, "The left side");
     const list = args[1];
     if (!Array.isArray(list)) {
       return this.report("wrong-arguments", `${path}/args/1`, `The second argument of "in" is a list (an array) of literals.`);
     }
     if (list.length === 0) return this.report("empty-list", `${path}/args/1`, `An IN list needs at least one value.`);
+    const items = list.map((item, i) => this.side(item, `${path}/args/1/${i}`, "An item of the IN list"));
+    this.propertyProperty([left, ...items], path);
     const kinds = new Set<LiteralKind>();
-    list.forEach((item, i) => {
-      const kind = this.literal(item, `${path}/args/1/${i}`);
-      if (kind) kinds.add(kind === "folded-string" ? "string" : kind);
-    });
+    for (const item of items) if (item && "literal" in item) kinds.add(item.literal === "folded-string" ? "string" : item.literal);
     if (kinds.size > 1) {
-      this.report(
+      return this.report(
         "mixed-list", `${path}/args/1`,
         `The values of an IN list must all be of one type; this one mixes ${[...kinds].join(", ")}.`,
       );
-    } else if (subject?.folded && kinds.size === 1 && !kinds.has("string")) {
-      this.report("type-mismatch", `${path}/args/1`, `${opOf(args[0])}(…) gives a string, so the list must hold strings.`);
-    } else if (kinds.size === 1) {
-      this.against(subject, [...kinds][0], `${path}/args/1`);
     }
+    if (!left) return;
+    // The literals once, as the list's type (as before); each property item on its own.
+    const literal = items.find((item): item is Side & { literal: LiteralKind } => item !== undefined && "literal" in item);
+    if (literal) {
+      if ("subject" in left && left.subject.folded && literal.literal !== "string" && literal.literal !== "folded-string") {
+        this.report("type-mismatch", `${path}/args/1`, `${opOf(args[0])}(…) gives a string, so the list must hold strings.`);
+      } else {
+        this.match(left, { literal: kinds.values().next().value!, path: `${path}/args/1` });
+      }
+    }
+    for (const item of items) if (item && "subject" in item) this.match(left, item);
   }
 
   /**
-   * A spatial relation: a geometry property first, a geometry literal second. The class: S_INTERSECTS with a point
-   * or a box is Basic Spatial Functions, with any other geometry Basic plus; any other relation Spatial Functions.
+   * A spatial relation: a geometry property first, a geometry literal second; with Property-Property Comparisons, a
+   * property or a literal in either place. The class: S_INTERSECTS with points or boxes (or no literal) is Basic
+   * Spatial Functions, with any other geometry Basic plus; any other relation Spatial Functions.
    */
   spatial(op: string, args: unknown[], path: string): void {
     const what = op.toUpperCase();
     if (args.length !== 2) {
       return this.report("wrong-arguments", `${path}/args`, `"${op}" needs two arguments: a property and a geometry.`);
     }
-    const [first, second] = args;
-    if (!isPropertyRef(first)) {
-      if (isSpatialLiteral(first)) {
-        // Permission 6 (`/per/basic-spatial-functions/spatial-predicates`) lets a server refuse a literal first.
-        return this.report(
-          "outside-profile", `${path}/args/0`,
-          `${what} takes the property first and the geometry second, as every server must accept: swap them.`,
-        );
+    const kinds: ("point-or-box" | "other" | undefined)[] = [];
+    let valid = true;
+    args.forEach((x, i) => {
+      const at = `${path}/args/${i}`;
+      if (isPropertyRef(x)) {
+        const held = this.property(x, at);
+        if (held !== undefined && held !== "geometry" && held !== "any") {
+          this.report("type-mismatch", at, `${what} tests a geometry, and "${x.property}" isn't one.`);
+        }
+      } else if (isSpatialLiteral(x)) {
+        const kind = this.spatialLiteral(x, at);
+        if (kind === undefined) valid = false;
+        kinds.push(kind);
+      } else {
+        this.notInProfile(x, at, `The ${i === 0 ? "first" : "second"} argument of ${what}`);
+        valid = false;
       }
-      return this.notInProfile(first, `${path}/args/0`, `The first argument of ${what}`);
+    });
+    if (!isPropertyRef(args[0]) || isPropertyRef(args[1])) {
+      this.uses(CONFORMANCE.propertyProperty, path, `${what} with a literal first, or a property second,`);
     }
-    const held = this.property(first, `${path}/args/0`);
-    if (held !== undefined && held !== "geometry" && held !== "any") {
-      this.report("type-mismatch", `${path}/args/0`, `${what} tests a geometry, and "${first.property}" isn't one.`);
-    }
-    if (!isSpatialLiteral(second)) return this.notInProfile(second, `${path}/args/1`, `The second argument of ${what}`);
-    const kind = this.spatialLiteral(second, `${path}/args/1`);
-    if (kind === undefined) return;
+    if (!valid) return;
     const conformance = op !== "s_intersects" ? CONFORMANCE.spatial
-      : kind === "point-or-box" ? CONFORMANCE.basicSpatial : CONFORMANCE.basicSpatialPlus;
+      : kinds.every((k) => k === "point-or-box") ? CONFORMANCE.basicSpatial : CONFORMANCE.basicSpatialPlus;
     this.uses(conformance, path, what);
   }
 
@@ -674,6 +754,16 @@ export function filterProperties(filter: Cql2Filter): string[] {
   return [...names];
 }
 
+/** Whether a comparison, LIKE, BETWEEN or IN has a literal on the left or a property on the right. */
+function isPropertyProperty(x: Json): boolean {
+  const op = x.op as string;
+  if (!(COMPARISON.has(op) || op === "like" || op === "between" || op === "in") || !Array.isArray(x.args)) return false;
+  const [left, ...rest] = x.args as unknown[];
+  const right = op === "in" && Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
+  const reads = (y: unknown) => isPropertyRef(y) || foldsProperty(y);
+  return !reads(left) || right.some(reads);
+}
+
 /**
  * The profile's conformance classes a valid filter uses, in the order of {@link CONFORMANCE}, to compare with what a
  * server declares. Basic CQL2 is always among them.
@@ -686,10 +776,12 @@ export function requiredConformance(filter: Cql2Filter): string[] {
     if (x.op === "like" || x.op === "between" || x.op === "in") used.add(CONFORMANCE.advancedComparison);
     if (x.op === "casei") used.add(CONFORMANCE.caseInsensitive);
     if (x.op === "accenti") used.add(CONFORMANCE.accentInsensitive);
+    if (isPropertyProperty(x)) used.add(CONFORMANCE.propertyProperty);
     if (typeof x.op === "string" && SPATIAL.has(x.op) && Array.isArray(x.args)) {
-      const literal = x.args[1];
-      const pointOrBox = isObject(literal) && (literal.type === "Point" || !("type" in literal));
+      const literals = x.args.filter((a) => isObject(a) && !isPropertyRef(a)) as Json[];
+      const pointOrBox = literals.every((l) => l.type === "Point" || !("type" in l));
       used.add(x.op !== "s_intersects" ? CONFORMANCE.spatial : pointOrBox ? CONFORMANCE.basicSpatial : CONFORMANCE.basicSpatialPlus);
+      if (!isPropertyRef(x.args[0]) || isPropertyRef(x.args[1])) used.add(CONFORMANCE.propertyProperty);
       return; // a geometry literal holds no other class
     }
     if (Array.isArray(x.args)) walk(x.args);

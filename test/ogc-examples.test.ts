@@ -34,13 +34,9 @@ const IN_PROFILE = new Set([
   // The spatial classes, since 0.6.0: those with the property first.
   "clause7_07", "clause7_10", "example07", "example08", "example23", "example24", "example25", "example45",
   "example47", "example48", "example50", "example51", "example52",
+  // Property-Property Comparisons, since 1.1.0: the geometry literal first, which Permission 6 let a server refuse.
+  "clause7_16", "example46", "example49", "example83", "example84",
 ]);
-
-/**
- * Spatial examples with the geometry literal first. Permission 6 (`/per/basic-spatial-functions/spatial-predicates`)
- * lets a server refuse that, so the profile does, without naming a class: no class makes a server accept it.
- */
-const LITERAL_FIRST = new Set(["clause7_16", "example46", "example49", "example83", "example84"]);
 
 /**
  * cql2-rs 0.5.6 reads a geometry's Z coordinates as dropped and BBOX(…) as a function call (measured), so for the
@@ -102,14 +98,13 @@ describe("the standard's examples", () => {
     if (!CQL2RS_MISREADS.has(name)) expect(readWithCql2rs(standardText)).toBe(expected);
   });
 
-  it.each(examples.filter(([name]) => !IN_PROFILE.has(name)))("%s is refused only as outside the profile", (name, filter) => {
+  it.each(examples.filter(([name]) => !IN_PROFILE.has(name)))("%s is refused only as outside the profile", (_, filter) => {
     const result = validate(filter);
     expect(result.valid).toBe(false);
     if (result.valid) return;
     for (const problem of result.problems) {
       expect(["outside-profile", "unknown-operator"]).toContain(problem.code);
-      if (LITERAL_FIRST.has(name)) expect(problem.message).toMatch(/takes the property first/);
-      else expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
+      expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
     }
   });
 });
@@ -148,10 +143,12 @@ describe("the standard's text examples, read", () => {
 
   it.for(texts.filter(([name]) => IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s comes out of fromText, and reads back through toText", ([, text, json]) => {
     expect(fromText(text)).toEqual(json);
-    expect(readText(toText(fromText(text)))).toEqual(json);
+    // toText writes -0 (the standard's "-0.0") as 0, the same coordinate: compared as JSON, where they are one value.
+    const asJson = (x: unknown) => JSON.parse(JSON.stringify(x)) as unknown;
+    expect(asJson(readText(toText(fromText(text))))).toEqual(asJson(json));
   });
 
-  it.for(texts.filter(([name]) => !IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s is refused by fromText only as outside the profile", ([name, text]) => {
+  it.for(texts.filter(([name]) => !IN_PROFILE.has(name.replace(/-alt01$/, ""))))("%s is refused by fromText only as outside the profile", ([, text]) => {
     let error: { code?: string; details?: { problems?: { code: string; conformance?: string; message: string }[] } } = {};
     try {
       fromText(text);
@@ -161,8 +158,7 @@ describe("the standard's text examples, read", () => {
     expect(error.code).toBe("invalid-filter");
     for (const problem of error.details!.problems!) {
       expect(["outside-profile", "unknown-operator"]).toContain(problem.code);
-      if (LITERAL_FIRST.has(name.replace(/-alt01$/, ""))) expect(problem.message).toMatch(/takes the property first/);
-      else expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
+      expect(problem.conformance).toMatch(/^http:\/\/www\.opengis\.net\/spec\/cql2\/1\.0\/conf\//);
     }
   });
 });

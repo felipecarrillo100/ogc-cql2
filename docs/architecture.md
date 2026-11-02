@@ -37,6 +37,12 @@ only a property on the left and a literal on the right (`/per/basic-cql2/cql2fil
 - `isNull(property)`;
 - `and` / `or` of two or more filters, `not` of one; `true`, `false`.
 
+Since 1.1.0, Property-Property Comparisons too: a property or a literal on either side of a comparison, as the bounds
+of `between`, among the items of `in`, on the left of `like` (whose pattern stays a literal), and in either place of a
+spatial function. A literal on the left is the property on the left, the operator mirrored, and a literal first in a
+spatial function the converse relation, so every engine writes them as the portable form; two literals are decided
+once. Two properties compare as their queryables say (`evaluate`'s `queryables` option, `toSql`'s columns).
+
 ## Entry points
 
 Each part is its own entry point, with its own folder under `src/`. A part imports only what it needs, so a bundler
@@ -565,7 +571,8 @@ checks that they agree.
 | 0.12.0 | **Before the freeze:** Node 22 or later (Node 20's end of life); `CQL2_CONFORMANCE` (all twelve filter classes, fixed) in place of `OTHER_CONFORMANCE`; the stability policy (README, "Versioning and stability") |
 | 1.0.0 | **The API freeze:** 0.12.0's API, kept stable under the README's "Versioning and stability"; CI (GitHub Actions) runs the proof routine on every push, and the newest DuckDB engines weekly |
 | after 1.0.0 (demo only, not published) | GeoParquet files (made by GDAL) and a DuckDB store in `demo-server`, the kitchen sink giving the same features from four stores; the same files filtered in the playground by DuckDB-WASM, with the store's own SQL, on desktop and on phones |
-| 1.x.x | **Property-Property Comparisons** (a property on both sides); **more SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
+| 1.1.0 | **Property-Property Comparisons:** a property or a literal on either side, in every part and engine, spatial included; `evaluate`'s `queryables` option; `duckdbFunctions.cql2_compare`, `sqliteFunctions.cql2_intersects_pair`; the standard's Table 16 on its test data; NaN ordered as PostgreSQL and DuckDB order it |
+| 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes (temporal, arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
 ### 1.x.x: Oracle and SQL Server

@@ -7,15 +7,21 @@
  * The differential test runs every spatial filter of spatial-cases.ts on a `GEOMETRY` and a `BLOB` (WKB) column, each
  * without and with GeoParquet's bbox covering (`DOUBLE` and `FLOAT` fields), against `evaluate` on the same values.
  * The canaries state what the dialect relies on in DuckDB; each fails when a DuckDB release changes it, and says what
- * to update (docs/architecture.md, "DuckDB: what we rely on").
+ * to update (docs/architecture.md, "DuckDB: what we rely on"). And the standard's Table 16 (Property-Property
+ * Comparisons) on its test data, in each engine.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
+import { fromText } from "ogc-cql2/parse";
 import { toSql, type SqlColumn } from "ogc-cql2/sql";
-import { ALL, asGeoJson, differences, FILTERS, leaf, RELATION_FILTERS, RELATIONS, STORAGES, stored, VALUES, wkb, type G } from "./spatial-cases.ts";
+import { PLACES_QUERYABLES, places, sqlLiteral, TABLE_16 } from "./table16.ts";
+import {
+  ALL, asGeoJson, differences, FILTERS, leaf, LITERAL_FIRST, LITERAL_PAIRS, pairDifferences, PAIR_FILTERS, pairsOf, RELATION_FILTERS,
+  RELATIONS, STORAGES, stored, VALUES, wkb, type G,
+} from "./spatial-cases.ts";
 
 /** What the tests use of `@duckdb/node-api`, the same in both versions. */
 interface Connection {
@@ -144,6 +150,38 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
       expect(differences(await all(table, column, RELATION_FILTERS), values, RELATION_FILTERS)).toBe("");
     });
 
+    // Property-Property Comparisons: a literal first, two geometry columns, two literals.
+    it.for([["w", "BLOB"], ["g", "GEOMETRY"]] as const)(`the literal first, %s (%s): ${LITERAL_FIRST.length} filters`, async ([table, type], context) => {
+      if (spatial) return context.skip(spatial);
+      if (type === "BLOB") await blobs();
+      else await geometryTables();
+      const values = type === "BLOB" ? ALL.map(asGeoJson) : GEOMETRIES.map(asGeoJson);
+      expect(differences(await all(table, { sqlType: type, column: "geom" }, LITERAL_FIRST), values, LITERAL_FIRST)).toBe("");
+    });
+
+    it.for(["BLOB", "GEOMETRY"] as const)(`two geometry columns (%s), every relation, and two literals`, { timeout: 120_000 }, async (type, context) => {
+      if (spatial) return context.skip(spatial);
+      const values = type === "BLOB" ? ALL : GEOMETRIES;
+      const pairs = pairsOf<unknown>(values);
+      await duck.run(`CREATE OR REPLACE TABLE pr (id INTEGER, geom ${type}, geom2 ${type})`);
+      const sqlOf = (v: unknown) => {
+        if (v === null) return "NULL";
+        if (type === "GEOMETRY") return `ST_GeomFromWKB(from_hex('${hex(wkb(v as G | "empty"))}'))`;
+        const value = stored(v as never, STORAGES.WKB!);
+        return `from_hex('${hex(typeof value === "string" ? new TextEncoder().encode(value) : (value as Uint8Array))}')`;
+      };
+      for (const [i, [a, b]] of pairs.entries()) await duck.run(`INSERT INTO pr VALUES (${i + 1}, ${sqlOf(a)}, ${sqlOf(b)})`);
+      const columns = { geometry: { sqlType: type, column: "geom" }, other: { sqlType: type, column: "geom2" } };
+      const results = new Map<string, number[]>();
+      for (const filter of [...PAIR_FILTERS, ...LITERAL_PAIRS]) {
+        const { where, params } = toSql(filter, { dialect: "duckdb", columns });
+        results.set(JSON.stringify(filter), (await rows(`SELECT id FROM pr WHERE ${where} ORDER BY id`, params)).map((r) => r[0] as number));
+      }
+      const run = (filter: Cql2Filter) => results.get(JSON.stringify(filter))!;
+      const asPairs = pairs.map(([a, b]): [unknown, unknown] => [asGeoJson(a as never), asGeoJson(b as never)]);
+      expect(pairDifferences(run, asPairs, [...PAIR_FILTERS, ...LITERAL_PAIRS])).toBe("");
+    });
+
     it("the R-tree index is used for every relation but S_DISJOINT", async (context) => {
       if (spatial) return context.skip(spatial);
       await duck.run("SELECT setseed(0.1)");
@@ -240,6 +278,22 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
       if (process.env.CQL2_CANARY_TIMING === "1") {
         expect(plain / paired, "The gap closed: plain ST_Intersects is now as fast, and no engine option is needed (docs/architecture.md)").toBeGreaterThan(3);
       }
+    });
+  });
+
+  describe(`${name}: the standard's Table 16 (Property-Property Comparisons), on its test data`, () => {
+    const columns = Object.fromEntries(Object.entries(PLACES_QUERYABLES).map(([n, q]) => [
+      n, { ...q, sqlType: "format" in q ? "TIMESTAMP WITH TIME ZONE" : q.type === "integer" ? "INTEGER" : "VARCHAR" },
+    ])) as Record<string, SqlColumn>;
+    beforeAll(async () => {
+      const names = Object.keys(columns);
+      await duck.run(`CREATE TABLE places (id INTEGER, ${names.map((n) => `"${n}" ${columns[n]!.sqlType}`).join(", ")})`);
+      await duck.run(`INSERT INTO places VALUES ${places.map((f) => `(${[f.id, ...names.map((n) => f.properties[n])].map(sqlLiteral).join(", ")})`).join(", ")}`);
+    });
+
+    it.for(TABLE_16)("%s: %i", async ([text, expected]) => {
+      const { where, params } = toSql(fromText(text), { dialect: "duckdb", columns });
+      expect(Number((await rows(`SELECT count(*) FROM places WHERE ${where}`, params))[0]![0])).toBe(expected);
     });
   });
 }

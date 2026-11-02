@@ -22,7 +22,7 @@ import type { MatrixRelation } from "../../core/relate.js";
 import { literalParts } from "../../evaluate/spatial.js";
 import { caseiKey, compareCodePoints, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
 import type { SpatialLiteral } from "../../core/types.js";
-import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 import { bareType, likePattern, queryableClass } from "./postgres.js";
 import { cachedLike } from "./sqlite.js";
 
@@ -102,7 +102,9 @@ function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
   const text = servedText(sql, cls);
   switch (kind) {
     case "text":
-      return text ? { sql: `${cls === "text" ? `nfc_normalize(${text})` : text} COLLATE "binary"`, cast: "::VARCHAR" } : undefined;
+      return text
+        ? { sql: `${cls === "text" ? `nfc_normalize(${text})` : text} COLLATE "binary"`, cast: "::VARCHAR", folded: { text, folds: [] } }
+        : undefined;
     case "fold":
       if (!text) return undefined;
       // CASEI alone keeps its own functions, so its SQL is unchanged since 0.2.0.
@@ -110,6 +112,7 @@ function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
         return {
           sql: text,
           cast: "::VARCHAR",
+          folded: { text, folds },
           compare: (op, param) => `cql2_casei_cmp(${text}, ${param}) ${op} 0`,
           like: (pattern, param) => `cql2_casei_like(${text}, ${param(pattern)}::VARCHAR) = 1`,
         };
@@ -117,6 +120,7 @@ function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
       return {
         sql: text,
         cast: "::VARCHAR",
+        folded: { text, folds },
         compare: (op, param) => `cql2_fold_cmp(${text}, ${param}, ${foldsText(folds)}) ${op} 0`,
         like: (pattern, param) => `cql2_fold_like(${text}, ${param(pattern)}::VARCHAR, ${foldsText(folds)}) = 1`,
       };
@@ -126,7 +130,8 @@ function duckdbView(sql: string, kind: Kind, column: SqlColumn, _fn: (name: stri
     case "boolean":
       return cls === "boolean" ? { sql, cast: "::BOOLEAN" } : undefined;
     case "day":
-      if (cls === "date") return { sql, cast: "::DATE" };
+      // Against another column, a date compares as days since 1970-01-01, the form cql2_day gives dates held as text.
+      if (cls === "date") return { sql, cast: "::DATE", pair: `(${sql} - DATE '1970-01-01')` };
       return cls === "text" ? { sql: `cql2_day(${sql})`, cast: "::INTEGER", value: (day) => dayNumber(day as string) } : undefined;
     case "instant":
       if (cls === "timestamptz") return { sql: millisecondsOf(sql), cast: "::DOUBLE" };
@@ -157,6 +162,7 @@ export const duckdbFunctions: {
   readonly cql2_casei_like: DuckdbFunction;
   readonly cql2_fold_cmp: DuckdbFunction;
   readonly cql2_fold_like: DuckdbFunction;
+  readonly cql2_compare: DuckdbFunction;
   readonly cql2_day: DuckdbFunction;
   readonly cql2_instant_day: DuckdbFunction;
   readonly cql2_instant_ms: DuckdbFunction;
@@ -189,6 +195,18 @@ export const duckdbFunctions: {
     returns: "INTEGER",
     call: (value, pattern, folds) =>
       value === null || pattern === null || folds === null ? null : cachedLike(pattern).test(foldKey(value, foldsOf(folds))) ? 1 : 0,
+  },
+  /**
+   * The sign of comparing two values, each folded as it says (`""`, `"casei"`, `"accenti,casei"`…, innermost first):
+   * two properties compared with each other (Property-Property Comparisons) under CASEI or ACCENTI.
+   */
+  cql2_compare: {
+    parameters: ["VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR"],
+    returns: "INTEGER",
+    call: (a, foldsA, b, foldsB) =>
+      a === null || b === null || foldsA === null || foldsB === null
+        ? null
+        : Math.sign(compareCodePoints(foldKey(a, foldsA === "" ? [] : foldsOf(foldsA)), foldKey(b, foldsB === "" ? [] : foldsOf(foldsB)))),
   },
   /** A `YYYY-MM-DD` text that exists, as days since 1970-01-01. */
   cql2_day: {
@@ -258,31 +276,51 @@ function duckdbIntersects(sql: string, column: SqlColumn, literal: SpatialLitera
  * necessary condition for all of them.
  */
 function duckdbRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean): string | undefined {
-  const fn = { s_equals: "ST_Equals", s_touches: "ST_Touches", s_within: "ST_Within", s_overlaps: "ST_Overlaps", s_crosses: "ST_Crosses", s_contains: "ST_Contains" }[relation];
-  return spatial(sql, column, literal, param, positive, (g, l) => `${fn}(${g}, ${l})`);
+  return spatial(sql, column, literal, param, positive, (g, l) => `${ST[relation]}(${g}, ${l})`);
+}
+
+const ST = { s_intersects: "ST_Intersects", s_equals: "ST_Equals", s_touches: "ST_Touches", s_within: "ST_Within", s_overlaps: "ST_Overlaps", s_crosses: "ST_Crosses", s_contains: "ST_Contains" } as const;
+
+/** A column as a geometry: a GEOMETRY column as it is, WKB in a BLOB read with TRY(…); `undefined` for neither. */
+function columnGeometry(sql: string, column: SqlColumn): string | undefined {
+  const t = column.sqlType === undefined ? undefined : bareType(column.sqlType);
+  const geometry = t === undefined ? typeof column.format === "string" && column.format.startsWith("geometry-") : /^geometry\b/.test(t);
+  const wkb = ["blob", "bytea", "binary", "varbinary"].includes(t ?? "");
+  return geometry ? sql : wkb ? `TRY(ST_GeomFromWKB(${sql}))` : undefined;
+}
+
+/** A literal as a geometry, a parameter: a box as an envelope (across the antimeridian the union of two), its boxes. */
+function literalGeometrySql(literal: SpatialLiteral, param: (value: SqlValue) => string): { readonly l: string; readonly boxes: number[][] | undefined } {
+  const number = (x: number) => `${param(String(x))}::DOUBLE`; // as text, as the number views bind it
+  const envelope = (w: number, s: number, e: number, n: number) => `ST_MakeEnvelope(${number(w)}, ${number(s)}, ${number(e)}, ${number(n)})`;
+  if ("bbox" in literal && !("type" in literal)) {
+    const b = literal.bbox;
+    const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
+    const boxes = west > east ? [[west, south, 180, north], [-180, south, east, north]] : [[west, south, east, north]];
+    return { l: boxes.length === 1 ? envelope(west, south, east, north) : `ST_Union(${envelope(west, south, 180, north)}, ${envelope(-180, south, east, north)})`, boxes };
+  }
+  const box = literalParts(literal).box;
+  return { l: `ST_GeomFromGeoJSON(${param(JSON.stringify(literal))})`, boxes: box && [box] };
+}
+
+/**
+ * A relation of two geometries, each a column or a literal (Property-Property Comparisons): `ST_…(a, b)`. S_EQUALS
+ * also needs the two not both empty: DuckDB's `ST_Equals` holds for two empty geometries, GEOS's DE-9IM matrix
+ * doesn't (a literal is never empty; two columns can be). Written so that a NULL side stays NULL.
+ */
+function duckdbPair(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string): string | undefined {
+  const g = (side: PairSide) => ("literal" in side ? literalGeometrySql(side.literal, param).l : columnGeometry(side.sql, side.column));
+  const [ga, gb] = [g(a), g(b)];
+  if (ga === undefined || gb === undefined) return undefined;
+  return relation === "s_equals" ? `(ST_Equals(${ga}, ${gb}) AND NOT (ST_IsEmpty(${ga}) AND ST_IsEmpty(${gb})))` : `${ST[relation]}(${ga}, ${gb})`;
 }
 
 /** A spatial test `exact(geometry, literal)`, with the covering's comparisons first where they apply. */
 function spatial(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, exact: (g: string, l: string) => string): string | undefined {
-  const t = column.sqlType === undefined ? undefined : bareType(column.sqlType);
-  const geometry = t === undefined ? typeof column.format === "string" && column.format.startsWith("geometry-") : /^geometry\b/.test(t);
-  const wkb = ["blob", "bytea", "binary", "varbinary"].includes(t ?? "");
-  if (!geometry && !wkb) return undefined;
-  const g = wkb ? `TRY(ST_GeomFromWKB(${sql}))` : sql;
+  const g = columnGeometry(sql, column);
+  if (g === undefined) return undefined;
   const number = (x: number) => `${param(String(x))}::DOUBLE`; // as text, as the number views bind it
-  const envelope = (w: number, s: number, e: number, n: number) => `ST_MakeEnvelope(${number(w)}, ${number(s)}, ${number(e)}, ${number(n)})`;
-  let boxes: number[][] | undefined;
-  let l: string;
-  if ("bbox" in literal && !("type" in literal)) {
-    const b = literal.bbox;
-    const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
-    boxes = west > east ? [[west, south, 180, north], [-180, south, east, north]] : [[west, south, east, north]];
-    l = boxes.length === 1 ? envelope(west, south, east, north) : `ST_Union(${envelope(west, south, 180, north)}, ${envelope(-180, south, east, north)})`;
-  } else {
-    l = `ST_GeomFromGeoJSON(${param(JSON.stringify(literal))})`;
-    const box = literalParts(literal).box;
-    boxes = box && [box];
-  }
+  const { l, boxes } = literalGeometrySql(literal, param);
   const test = exact(g, l);
   const c = column.covering?.bbox;
   for (const k of ["xmin", "ymin", "xmax", "ymax"] as const) {
@@ -307,6 +345,12 @@ export const duckdb: Dialect = {
   instant: (ms) => ms,
   view: duckdbView,
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))} ESCAPE '\\'`,
+  // Two columns under CASEI / ACCENTI: compared in a function, since DuckDB-WASM's functions return no text.
+  compareViews: (a, op, b) =>
+    a.folded && b.folded && (a.folded.folds.length > 0 || b.folded.folds.length > 0)
+      ? `cql2_compare(${a.folded.text}, ${foldsText(a.folded.folds)}, ${b.folded.text}, ${foldsText(b.folded.folds)}) ${op} 0`
+      : undefined,
   intersects: duckdbIntersects,
   relate: duckdbRelate,
+  spatialPair: duckdbPair,
 };

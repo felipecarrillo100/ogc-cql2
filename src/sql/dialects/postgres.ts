@@ -13,7 +13,7 @@ import type { Fold } from "../../core/folds.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
 import type { MatrixRelation } from "../../core/relate.js";
 import type { BboxLiteral, Geometry, SpatialLiteral } from "../../core/types.js";
-import { quote, type Dialect, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "geometry" | "geography" | "other";
 
@@ -94,7 +94,8 @@ function postgresView(sql: string, kind: Kind, column: SqlColumn, fn: (name: str
     case "boolean":
       return cls === "boolean" ? { sql, cast: "::boolean" } : undefined;
     case "day":
-      if (cls === "date") return { sql, cast: "::date" };
+      // Against another column, a date compares as its YYYY-MM-DD text, the form cql2_day gives dates held as text.
+      if (cls === "date") return { sql, cast: "::date", pair: `${pgText(sql, cls)} COLLATE "C"` };
       return cls === "text" ? { sql: `${fn("cql2_day")}(${sql}::text) COLLATE "C"`, cast: "" } : undefined;
     case "instant":
       if (cls === "timestamptz") return { sql: `date_trunc('milliseconds', ${sql})`, cast: "::timestamptz" };
@@ -256,12 +257,18 @@ function boxes(literal: BboxLiteral, param: (value: SqlValue) => string): string
  */
 function postgresRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
   const g = geometryOf(sql, column);
-  if (g === undefined) return undefined;
-  let l: string;
-  if ("bbox" in literal && !("type" in literal)) {
-    const parts = boxes(literal, param);
-    l = parts.length === 1 ? parts[0]! : `ST_Collect(${parts.join(", ")})`;
-  } else l = geojson(literal as Geometry, param);
+  return g === undefined ? undefined : relationSql(relation, g, relateLiteral(literal, param));
+}
+
+/** A literal as one geometry, for the relations: a box across the antimeridian is its two halves collected. */
+function relateLiteral(literal: SpatialLiteral, param: (value: SqlValue) => string): string {
+  if (!("bbox" in literal) || "type" in literal) return geojson(literal as Geometry, param);
+  const parts = boxes(literal, param);
+  return parts.length === 1 ? parts[0]! : `ST_Collect(${parts.join(", ")})`;
+}
+
+/** A relation of two geometries (see {@link postgresRelate}). */
+function relationSql(relation: MatrixRelation, g: string, l: string): string {
   switch (relation) {
     case "s_equals":
       return `ST_Equals(${g}, ${l})`;
@@ -278,6 +285,20 @@ function postgresRelate(relation: MatrixRelation, sql: string, column: SqlColumn
   }
 }
 
+/**
+ * A relation of two geometries, each a column or a literal (Property-Property Comparisons), as for a column and a
+ * literal: S_INTERSECTS as `&& AND NOT ST_Relate(…, 'FF*FF****')`, the others as {@link postgresRelate} writes them.
+ * S_EQUALS also needs the two not both empty: PostGIS's `ST_Equals` holds for two empty geometries, GEOS's DE-9IM
+ * matrix doesn't (a literal is never empty; two columns can be). Written so that a NULL side stays NULL.
+ */
+function postgresPair(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string): string | undefined {
+  const g = (side: PairSide) => ("literal" in side ? relateLiteral(side.literal, param) : geometryOf(side.sql, side.column));
+  const [ga, gb] = [g(a), g(b)];
+  if (ga === undefined || gb === undefined) return undefined;
+  if (relation === "s_intersects") return `(${ga} && ${gb} AND NOT ST_Relate(${ga}, ${gb}, 'FF*FF****'))`;
+  return relation === "s_equals" ? `(ST_Equals(${ga}, ${gb}) AND NOT (ST_IsEmpty(${ga}) AND ST_IsEmpty(${gb})))` : relationSql(relation, ga, gb);
+}
+
 export const postgres: Dialect = {
   placeholder: (n) => `$${n}`,
   true: "TRUE",
@@ -289,4 +310,5 @@ export const postgres: Dialect = {
   like: (v, pattern, param) => `${v.sql} LIKE ${param(likePattern(pattern))}`,
   intersects: postgresIntersects,
   relate: postgresRelate,
+  spatialPair: postgresPair,
 };
