@@ -5,6 +5,43 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.2.0] - 2026-11-02
+
+The Arithmetic Expressions class: numbers computed from numbers and number properties, in every part and every
+engine, for scaling and ratios (`area > population * 0.001`). A minor version: every filter valid in 1.1.0 gives the
+same SQL, the same text and the same answers.
+
+### Added
+
+- **Arithmetic Expressions** (OGC 21-065r2 §7.12, Requirement 19), in `validate`, `toText`, `fromText`, `evaluate`
+  and every `toSql` dialect: `+ - * / % div ^` wherever a number goes (comparisons, `between`, `in`), nested.
+  - New `Cql2Filter` members: `ArithmeticExpression`, `ArithmeticComparison`, `ArithmeticBetween`, `ArithmeticIn`
+    (the 1.1 interfaces are unchanged); `CONFORMANCE.arithmetic`.
+  - What CQL2 leaves open, decided the same everywhere: numbers are doubles (`5 / 2` is 2.5); `div` rounds toward
+    zero and `%` is its remainder; a result that isn't a finite number is NULL, never an error; an expression of
+    literals is computed once.
+  - An expression on the left, or a property in one on the right, also needs Property-Property Comparisons.
+- `sqliteFunctions.cql2_arithmetic`, and `cql2_arithmetic` in `postgresFunctions`: run it again after upgrading.
+  PostgreSQL's own errors (division by zero, a power outside its domain, overflow, underflow) become those results.
+
+### Changed
+
+- The standard's arithmetic examples (`clause6_02c`, `clause7_19`, `example72`–`example78`, `example85`) are now
+  valid by default, where 1.1 refused them as `outside-profile`.
+
+### Documented
+
+- `^` is exact when the power is; otherwise each engine's own `pow`, which differ in the last bit (measured: about one
+  case in five hundred), so a comparison exactly on such a value may differ by engine.
+
+### Tested
+
+- The standard's own test, Table 17 (Annex A.14, conformance test 53), on its test data: all 13 rows in `evaluate`,
+  SQLite and DuckDB 2.0 and 1.4.3; test 54.
+- Generated expressions against `evaluate` (zero divisors, signs, fractions, NaN, ±Infinity, overflow and underflow):
+  SQLite, DuckDB (also with a `nocase` collation and another time zone), DuckDB 1.4.3, DuckDB-WASM, PostgreSQL 17 and
+  18 agree; the kitchen sink gives the same features from all four of demo-server's stores.
+
 ## [1.1.0] - 2026-11-02
 
 The Property-Property Comparisons class: a property or a literal on either side, in every part and every engine. A
@@ -450,6 +487,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[1.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.12.0...v1.0.0
 [0.12.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.11.0...v0.12.0

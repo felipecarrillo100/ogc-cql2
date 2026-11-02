@@ -134,6 +134,33 @@ describe("Property-Property Comparisons in the postgres dialect", () => {
   });
 });
 
+describe("Arithmetic Expressions in the postgres dialect", () => {
+  const op = (o: string, a: unknown, b: unknown) => ({ op: o, args: [a, b] });
+
+  it("through cql2_arithmetic, doubles, schema-qualified on request; an expression of literals computed here", () => {
+    expect(sql({ op: ">", args: [p("n"), op("*", p("amount"), 0.001)] })).toEqual({
+      where: `"n"::double precision > cql2_arithmetic('*', "amount"::double precision, $1::double precision)`,
+      params: [0.001],
+    });
+    expect(sql({ op: ">", args: [p("n"), op("div", p("n"), 2)] }, "cql2demo").where).toBe(
+      `"n"::double precision > "cql2demo".cql2_arithmetic('div', "n"::double precision, $1::double precision)`,
+    );
+    expect(sql({ op: ">", args: [p("n"), op("+", 1038290, op("^", 2, 3))] })).toEqual({ where: `"n"::double precision > $1::double precision`, params: [1038298] });
+    expect(sql({ op: ">", args: [p("n"), op("/", 1, 0)] }).where).toBe("NULL::boolean"); // a NULL, computed here
+  });
+
+  it("a column that holds no number makes the expression NULL", () => {
+    expect(sql({ op: ">", args: [p("n"), op("+", p("name"), 1)] }).where).toBe("NULL::boolean");
+  });
+
+  it("postgresFunctions creates cql2_arithmetic, which turns PostgreSQL's range and domain errors into evaluate's results", () => {
+    const text = postgresFunctions("cql2demo");
+    expect(text).toContain(`CREATE OR REPLACE FUNCTION "cql2demo".cql2_arithmetic(op text, a double precision, b double precision)`);
+    expect(text).toContain("WHEN division_by_zero OR invalid_argument_for_power_function THEN");
+    expect(text).toContain("WHEN numeric_value_out_of_range THEN");
+  });
+});
+
 describe("postgresValue: what the application selects, so it serves what the SQL compares", () => {
   it.each([
     ["name", `"name"`],

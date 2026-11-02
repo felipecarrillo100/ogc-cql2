@@ -64,14 +64,15 @@ export async function openPostgres(
   const stores: { id: string; store: Store }[] = [];
   if (source.functionSchema) {
     const s = quote(source.functionSchema);
-    const { rows } = await pool.query("SELECT to_regprocedure($1) IS NOT NULL AS casei, to_regprocedure($2) IS NOT NULL AS accenti", [
-      `${s}.cql2_casei(text)`,
-      `${s}.cql2_accenti(text)`,
-    ]);
+    const { rows } = await pool.query(
+      "SELECT to_regprocedure($1) IS NOT NULL AS casei, to_regprocedure($2) IS NOT NULL AS accenti, to_regprocedure($3) IS NOT NULL AS arithmetic",
+      [`${s}.cql2_casei(text)`, `${s}.cql2_accenti(text)`, `${s}.cql2_arithmetic(text, double precision, double precision)`],
+    );
     const where = `schema "${source.functionSchema}"`;
-    const fix = "filters using CASEI or ACCENTI, or dates in text, will fail. Run postgresFunctions there (load-postgres.sh does).";
+    const fix = "filters using CASEI, ACCENTI or arithmetic, or dates in text, will fail. Run postgresFunctions there (load-postgres.sh does).";
     if (!rows[0].casei) warnings.push(`The cql2_* functions aren't in ${where}: ${fix}`);
     else if (!rows[0].accenti) warnings.push(`The cql2_* functions in ${where} lack cql2_accenti (added in ogc-cql2 0.5.0): ${fix}`);
+    else if (!rows[0].arithmetic) warnings.push(`The cql2_* functions in ${where} lack cql2_arithmetic (added in ogc-cql2 1.2.0): ${fix}`);
   }
   for (const entry of source.tables) {
     const name = entry.table.split(".").pop()!;

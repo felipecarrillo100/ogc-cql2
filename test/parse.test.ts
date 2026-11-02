@@ -352,8 +352,8 @@ describe("fromText: the profile check after the reading", () => {
     expect(() => fromText("T_AFTER(t, DATE('2020-01-01'))")).toThrow(
       expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.temporal })] } }),
     );
-    expect(() => fromText("x + 1 > 2")).toThrow(
-      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.arithmetic })] } }),
+    expect(() => fromText("A_CONTAINS(tags, ('a', 'b'))")).toThrow(
+      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.arrays })] } }),
     );
   });
 

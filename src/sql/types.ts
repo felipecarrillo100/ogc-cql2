@@ -5,7 +5,7 @@
 
 import type { Fold } from "../core/folds.js";
 import type { MatrixRelation } from "../core/relate.js";
-import type { Queryable, SpatialLiteral } from "../core/types.js";
+import type { ArithmeticOperator, Queryable, SpatialLiteral } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb";
 
@@ -116,6 +116,13 @@ export interface Dialect {
   view(sql: string, kind: Kind, column: SqlColumn, fn: (name: string) => string, folds: readonly Fold[]): View | undefined;
   /** `view LIKE pattern`, the pattern keyed as `evaluate` keys it; `param` adds a parameter. */
   like(view: View, pattern: string, param: (value: SqlValue) => string): string;
+  /** A number literal as a double, for arithmetic (Arithmetic Expressions); `param` adds a parameter. */
+  number(value: number, param: (value: SqlValue) => string): string;
+  /**
+   * `a op b` of two doubles, exactly as `evaluate` computes it (`ogc-cql2`'s rules: `div` toward zero, `%` its
+   * remainder, NULL for a result that isn't a finite number), and never an error.
+   */
+  arithmetic(op: ArithmeticOperator, a: string, b: string, fn: (name: string) => string): string;
   /** `a op b` for two columns' views of one kind, when it isn't `a.pair ?? a.sql op b.pair ?? b.sql`. */
   compareViews?(a: View, op: string, b: View): string | undefined;
   /**
