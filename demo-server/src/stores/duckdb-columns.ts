@@ -4,8 +4,8 @@
  * itself, so that demo-server's store (Node) and the playground's DuckDB-WASM worker read files the same way: each
  * runs the SQL given here on its own connection.
  */
-import type { Cql2Filter } from "ogc-cql2";
-import { duckdbValue, toSql, type SqlColumn } from "ogc-cql2/sql";
+import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
+import { duckdbValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
 import type { Feature, Queryable } from "./types.ts";
 
@@ -76,6 +76,15 @@ const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const literal = (text: string): string => `'${text.replaceAll("'", "''")}'`;
 
 /** What to read from a file first: its columns (`column_name`, `column_type`), and its `geo` metadata (`geo`). */
+/**
+ * The classes a DuckDB table serves: the dialect's, without the spatial ones when DuckDB's spatial extension isn't
+ * loaded (which the package can't know).
+ */
+export const duckdbConformance = (spatial: boolean): string[] => {
+  const none = [CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial];
+  return sqlConformance({ dialect: "duckdb" }).filter((c) => spatial || !none.includes(c));
+};
+
 export const describeSql = (file: string): string => `DESCRIBE SELECT * FROM read_parquet(${literal(file)})`;
 export const geoSql = (file: string): string =>
   `SELECT decode(value) AS geo FROM parquet_kv_metadata(${literal(file)}) WHERE decode(key) = 'geo'`;

@@ -5,7 +5,9 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { CONFORMANCE } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
+import { sqlConformance } from "ogc-cql2/sql";
 import { closeStores, createApp, loadStores } from "../src/server.ts";
 import { createGeoJsonStore } from "../src/stores/geojson.ts";
 import { loadSpatialite } from "../src/stores/geopackage.ts";
@@ -57,6 +59,23 @@ describe("collections", () => {
     );
     assert.match(files[7].warnings[0], /Dropped 1 feature/);
     assert.ok(log.includes(`states: 51 features from ${fileURLToPath(new URL("../data/states.geojson", import.meta.url))}`));
+  });
+
+  it("each with the classes its store evaluates, as ogc-cql2's engines report them", async () => {
+    const all = Object.values(CONFORMANCE);
+    const spatial = [CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial];
+    const { DatabaseSync } = await import("node:sqlite");
+    const spatialite = loadSpatialite(new DatabaseSync(":memory:", { allowExtension: true }));
+    const { collections } = await read(fetch(`${base}/collections`));
+    for (const c of collections as { id: string; source: string; conformance: string[] }[]) {
+      const expected =
+        c.source === "geopackage" ? sqlConformance({ dialect: "sqlite", spatialite })
+        // DuckDB's spatial extension can fail to install (offline): then no spatial class.
+        : c.source === "geoparquet" ? (c.conformance.includes(CONFORMANCE.spatial) ? all : all.filter((x) => !spatial.includes(x)))
+        : all; // GeoJSON with GEOS, and PostGIS
+      assert.deepEqual(c.conformance, expected, c.id);
+    }
+    assert.deepEqual((await read(fetch(`${base}/collections/states`))).conformance, all);
   });
 
   it("describes one, and its queryables as a JSON Schema", async () => {

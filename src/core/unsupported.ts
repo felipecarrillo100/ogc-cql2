@@ -1,33 +1,39 @@
 /**
- * Refusing a valid filter of a class a part doesn't evaluate (yet): the spatial ones, whose engines come in phases.
+ * Refusing a valid filter of a class an engine doesn't evaluate with the options it was given (Spatial Functions
+ * without a geometry engine, in `evaluate` and in SQLite without SpatiaLite). The engines' own lists
+ * (`evaluateConformance`, `sqlConformance`) decide, so a filter valid against a list is never refused here.
  * Internal to the package.
  */
 import { CONFORMANCE } from "./conformance.js";
 import { Cql2Error } from "./errors.js";
 
 const NAMES: ReadonlyMap<string, string> = new Map([
+  [CONFORMANCE.basic, "Basic CQL2"],
+  [CONFORMANCE.advancedComparison, "Advanced Comparison Operators"],
+  [CONFORMANCE.caseInsensitive, "Case-insensitive Comparison"],
+  [CONFORMANCE.accentInsensitive, "Accent-insensitive Comparison"],
   [CONFORMANCE.basicSpatial, "Basic Spatial Functions"],
   [CONFORMANCE.basicSpatialPlus, "Basic Spatial Functions with additional Spatial Literals"],
   [CONFORMANCE.spatial, "Spatial Functions"],
+  [CONFORMANCE.propertyProperty, "Property-Property Comparisons"],
+  [CONFORMANCE.arithmetic, "Arithmetic Expressions"],
   [CONFORMANCE.temporal, "Temporal Functions"],
 ]);
 
-/** The spatial classes `evaluate` evaluates only with an engine plugged in (`spatialEngine`): Spatial Functions. */
-export const NOT_IN_EVALUATE: readonly string[] = [CONFORMANCE.spatial];
-
-/** The spatial classes the SQL dialects don't translate yet: all three. */
-export const NOT_IN_SQL: readonly string[] = [CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial];
+/** Every class the package implements, but `except`: in `CONFORMANCE`'s order, a new array each time. */
+export const implementedBut = (except: readonly string[]): string[] =>
+  Object.values(CONFORMANCE).filter((c) => !except.includes(c));
 
 /**
- * @throws Cql2Error `unsupported` when `classes` (a filter's `requiredConformance`) holds one of `notEvaluated`, with
+ * @throws Cql2Error `unsupported` when `classes` (a filter's `requiredConformance`) holds one not in `supported`, with
  * `details.conformance`.
  */
-export function refuseUnsupported(classes: readonly string[], notEvaluated: readonly string[], what: string): void {
-  const missing = classes.find((c) => notEvaluated.includes(c));
+export function refuseUnsupported(classes: readonly string[], supported: readonly string[], what: string): void {
+  const missing = classes.find((c) => !supported.includes(c));
   if (missing === undefined) return;
   throw new Cql2Error(
     "unsupported",
-    `${what} doesn't evaluate ${NAMES.get(missing)} yet; validate and toText accept them, to send to a server.`,
+    `${what} doesn't evaluate ${NAMES.get(missing) ?? missing}; validate and toText accept it, to send to a server.`,
     "",
     { conformance: missing },
   );

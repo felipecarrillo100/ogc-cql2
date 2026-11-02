@@ -62,8 +62,8 @@ drops the rest.
 | `ogc-cql2` | `src/` + `src/core/` | The profile's types (`Cql2Filter` …); `Cql2Error`; `CQL2_CONFORMANCE` (all of CQL2 1.0's filter classes, fixed) and `CONFORMANCE` (the ones implemented, a subset that only grows); `CQL2_VERSION` | 0.1.0 |
 | `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
-| `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate` | 0.1.0 |
-| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb` |
+| `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate`; `evaluateConformance` (the classes it supports with its options) | 0.1.0; 1.4.0: `evaluateConformance` |
+| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqlConformance` (the classes a dialect supports with its options), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb`; 1.4.0: `sqlConformance` |
 | `ogc-cql2/parse` | `src/parse/` | `fromText` (CQL2-text → CQL2-JSON, then the profile check), for a server that receives text | 0.11.0 |
 
 `text`, `parse`, `evaluate` and `sql` validate their input (or their result) first, so they load `validate` too.
@@ -187,7 +187,8 @@ as it is in CQL2-JSON: `invalid-filter`, naming the class. Text that isn't CQL2-
   checked identical to the original on 1,000,000 inputs. A box across the antimeridian is two boxes. Each feature
   geometry's bounding box is computed once (cached per object) and tested first. `S_DISJOINT` is its negation.
 - **The other relations (Spatial Functions, since 0.10.0)** need an engine the application plugs in
-  (`spatialEngine`); without one they are `unsupported`. The engine only computes DE-9IM matrices (`prepare(literal)`
+  (`spatialEngine`); without one the class is `unsupported`, `S_DISJOINT` included (with one, it stays the negation of
+  the package's own `S_INTERSECTS`). The engine only computes DE-9IM matrices (`prepare(literal)`
   once per filter, then `relate(geometry)` per feature, the literal first). Their meaning lives in one place,
   `src/core/relate.ts`:
   - Simple Features' patterns (CQL2's Table 4 has a typo in S_TOUCHES' second matrix);
@@ -448,6 +449,11 @@ filter selects). The server never knows which store it talks to.
   The file's bbox covering (GeoParquet 1.1) goes to `toSql`. Spatial filters need DuckDB's spatial extension; without
   it the spatial classes aren't declared. The files are made by GDAL (`data/make-parquet.sh`), which keeps every
   value of the kitchen sink.
+- Each store declares the classes its engine reports: `evaluateConformance({ spatialEngine })` with GEOS for a GeoJSON
+  file, `sqlConformance` with the dialect's options for the others (a GeoPackage with SpatiaLite or without; DuckDB
+  without the spatial classes when its extension didn't load, a rule its worker in the playground shares,
+  `duckdbConformance` in `duckdb-columns.ts`). They are listed with each collection (`conformance`, a demo field), and
+  the playground ticks them as the source's classes.
 - Every store answers GeoJSON features. A GeoJSON file's ids are kept when unique; missing ones are generated
   deterministically (the position in the file, or after the largest numeric id); a duplicate id drops the later
   feature, which is reported.
@@ -497,6 +503,9 @@ filter selects). The server never knows which store it talks to.
     (when the database is set up; skipped otherwise), and so do the spatial literals and the seven other relations;
   - `test/naturalearth.test.ts`: the standard's own acceptance test for Basic Spatial Functions (Table 12, conformance
     test 26) on Natural Earth 1:110m (public domain, `test/fixtures/naturalearth/`): all eight counts;
+  - `test/engine-conformance.test.ts` (1.4.0): `evaluateConformance` and `sqlConformance` for each option set, and
+    their promise on 6,525 filters (the standard's examples, spatial literals under every relation, the corpora): each
+    filter compiles exactly when it validates against the list, and is otherwise refused as `unsupported`;
   - `test/temporal.test.ts` (1.3.0): the standard's 72 temporal rows (Annex A's, and Table 16's) on its test data, in
     `evaluate` and SQLite, and in `test/duckdb-spatial.ts` on DuckDB 2.0 and 1.4.3; 17,394 generated temporal filters
     against `evaluate` in `test/sql.test.ts` and `test/sql-duckdb.test.ts` (rows of ±infinity in DuckDB), and on the
@@ -588,6 +597,7 @@ checks that they agree.
 | 1.1.0 | **Property-Property Comparisons:** a property or a literal on either side, in every part and engine, spatial included; `evaluate`'s `queryables` option; `duckdbFunctions.cql2_compare`, `sqliteFunctions.cql2_intersects_pair`; the standard's Table 16 on its test data; NaN ordered as PostgreSQL and DuckDB order it |
 | 1.2.0 | **Arithmetic Expressions:** `+ - * / % div ^` wherever a number goes, in every part and engine; doubles, `div` toward zero and `%` its remainder, a non-finite result NULL; `sqliteFunctions.cql2_arithmetic`, PostgreSQL's `cql2_arithmetic` (in `postgresFunctions`); the standard's Table 17 on its test data |
 | 1.3.0 | **Temporal Functions:** the fifteen relations of instants and intervals (OWL-Time, closed intervals, `'..'` open), in every part and engine; an instant refused where intervals only go; dates and timestamps never converted; the standard's 72 temporal rows on its test data. Fixed: infinite dates and timestamps NULL in every engine; DuckDB instants bound as text (node-api 1.4) |
+| 1.4.0 | **The classes each engine supports:** `evaluateConformance` and `sqlConformance`, the lists `toEvaluator` and `toSql` refuse by, so a filter valid against them is never `unsupported`; the **developer guide** (`docs/guide/`) and a short README; demo-server and the playground use the lists. Fixed: `filterProperties` on INTERVAL ends; the `s_disjoint` documentation |
 | 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
 | later | more conformance classes (arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
