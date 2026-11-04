@@ -8,7 +8,10 @@
  * One walker (`toSql`) for every dialect; what differs per database is in `dialects/`, one file each:
  * - `sqlite`, following GeoPackage: typed views, and registered functions ({@link sqliteFunctions});
  * - `postgres`, for PostgreSQL and PostGIS tables: {@link postgresValue}, {@link postgresFunctions};
- * - `duckdb`, for DuckDB in Node and in the browser: {@link duckdbValue}, {@link duckdbFunctions}.
+ * - `duckdb`, for DuckDB in Node and in the browser: {@link duckdbValue}, {@link duckdbFunctions};
+ * - `oracle`, for Oracle Database 23ai and later (Oracle Spatial): {@link oracleValue}, {@link oracleFunctions};
+ * - `sqlserver`, for SQL Server 2022 and later, with Basic Spatial Functions: {@link sqlserverValue},
+ *   {@link sqlserverFunctions}.
  *
  * The typed views and functions keep the results exact, at a cost: the database can't use a plain index for those
  * predicates.
@@ -30,6 +33,8 @@ import { compute, isArithmetic, readsProperty } from "../core/arithmetic.js";
 import { CONFORMANCE } from "../core/conformance.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
 import { duckdb } from "./dialects/duckdb.js";
+import { oracle } from "./dialects/oracle.js";
+import { sqlserver } from "./dialects/sqlserver.js";
 import { postgres } from "./dialects/postgres.js";
 import { sqlite } from "./dialects/sqlite.js";
 import {
@@ -40,8 +45,10 @@ export type { SqlColumn, SqlDialect, SqlOptions, SqlValue, SqlWhere } from "./ty
 export { sqliteFunctions } from "./dialects/sqlite.js";
 export { postgresFunctions, postgresValue } from "./dialects/postgres.js";
 export { duckdbFunctions, duckdbValue, type DuckdbFunction } from "./dialects/duckdb.js";
+export { oracleFunctions, oracleValue } from "./dialects/oracle.js";
+export { sqlserverFunctions, sqlserverValue } from "./dialects/sqlserver.js";
 
-const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, postgres, duckdb };
+const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, postgres, duckdb, oracle, sqlserver };
 
 /** `a op b` is `b MIRROR[op] a`. */
 const MIRROR: Readonly<Record<string, string>> = { "=": "=", "<>": "<>", "<": ">", ">": "<", "<=": ">=", ">=": "<=" };
@@ -78,11 +85,12 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
 
 /**
  * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
- * package implements on `postgres` and `duckdb`, and on `sqlite` all but Spatial Functions unless `spatialite` is
- * `true`. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what `toSql` would
- * refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the database has:
- * the spatial classes also need PostGIS, or DuckDB's spatial extension, and the package's functions installed
- * (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`). A new array, in `CONFORMANCE`'s order, to change at will.
+ * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite`
+ * is `true`, and on `sqlserver` all but Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
+ * `toSql` would refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the
+ * database has: the spatial classes also need PostGIS, DuckDB's spatial extension or Oracle Spatial, and the package's
+ * functions installed (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`, `oracleFunctions`). A new array, in
+ * `CONFORMANCE`'s order, to change at will.
  */
 export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pick<SqlOptions, "columns">>): string[] {
   // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
@@ -108,7 +116,8 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     params.push(value);
     return `${dialect.placeholder(params.length)}${cast}`;
   };
-  const fn = (name: string): string => (options.functionSchema ? `${quote(options.functionSchema)}.${name}` : name);
+  const schema = options.functionSchema ?? dialect.functionSchema;
+  const fn = (name: string): string => (schema ? `${quote(schema)}.${name}` : name);
 
   const columnOf = (ref: PropertyRef, path: string): { column: SqlColumn; sql: string } => {
     const column = Object.hasOwn(options.columns, ref.property) ? options.columns[ref.property] : undefined;
@@ -143,8 +152,26 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     return { kind: "instant", value: dialect.instant(instantOf(x.timestamp)!) }; // validate has checked it is one
   };
 
+  /**
+   * Conditions as values: `CASE WHEN guard THEN condition END`, and the first of several that isn't NULL. A database
+   * without boolean values (Dialect.truth) writes them as 1 / 0 / NULL, compared with 1.
+   */
+  const caseWhen = (guard: string, condition: string): string =>
+    dialect.truth ? `CASE WHEN ${guard} THEN ${dialect.truth(condition)} END = 1` : `CASE WHEN ${guard} THEN ${condition} END`;
+  const coalesce = (conditions: readonly string[]): string =>
+    dialect.truth ? `COALESCE(${conditions.map(dialect.truth).join(", ")}) = 1` : `COALESCE(${conditions.join(", ")})`;
+
   /** A literal's value as a parameter of the view. */
-  const valueParam = (v: View, value: SqlValue): string => param(v.value ? v.value(value) : value, v.cast);
+  const valueParam = (v: View, value: SqlValue): string => {
+    const p = param(v.value ? v.value(value) : value, v.cast);
+    return v.wrap ? v.wrap(p, value) : p;
+  };
+  /**
+   * `view op ''` where the database reads `''` as NULL (Dialect.emptyStringIsNull): no value is `''`, so it is
+   * FALSE (`= < <=`) or TRUE (`<> > >=`) for a value, NULL for none, with no parameter.
+   */
+  const emptyString = (v: View, op: string): string => `${v.sql} ${op === "=" || op === "<" || op === "<=" ? "<>" : "="} ${v.sql}`;
+  const isEmptyString = (value: SqlValue): boolean => value === "" && dialect.emptyStringIsNull === true;
   const compare = (v: View, op: string, p: string): string => (v.compare ? v.compare(op, p) : `${v.sql} ${op} ${p}`);
   /**
    * A view's condition on literals, an infinite value (`View.finite`) taken as NULL, as `evaluate` takes it. Under an
@@ -202,7 +229,8 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     if (!reads(b)) {
       const lit = literal(b);
       const v = subject(a, viewKind(lit.kind), pathA);
-      return v === undefined ? dialect.never : bounded(v, compare(v, op, valueParam(v, lit.value)), positive);
+      if (v === undefined) return dialect.never;
+      return isEmptyString(lit.value) ? emptyString(v, op) : bounded(v, compare(v, op, valueParam(v, lit.value)), positive);
     }
     return properties(a, op, b, pathA, pathB);
   };
@@ -234,19 +262,19 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       const [va, vb] = [view(ua, ca, kind), view(ub, cb, kind)];
       return va && vb ? [dialect.compareViews?.(va, op, vb) ?? `${va.pair ?? va.sql} ${op} ${vb.pair ?? vb.sql}`] : [];
     });
-    return parts.length === 0 ? dialect.never : parts.length === 1 ? parts[0]! : `COALESCE(${parts.join(", ")})`;
+    return parts.length === 0 ? dialect.never : parts.length === 1 ? parts[0]! : coalesce(parts);
   };
 
   /** `op(property, literal)`, the property at `refPath`. */
   const spatialLeaf = (op: SpatialOperator, ref: PropertyRef, refPath: string, literal: SpatialLiteral, positive: boolean): string => {
     const { column, sql } = columnOf(ref, refPath);
-    if (op === "s_intersects") return dialect.intersects!(sql, column, literal, param, positive) ?? dialect.never;
+    if (op === "s_intersects") return dialect.intersects!(sql, column, literal, param, positive, fn) ?? dialect.never;
     if (op === "s_disjoint") {
       // NOT S_INTERSECTS, the leaf's polarity flipped: the same NULLs, and a prefilter only where it is exact.
-      const intersects = dialect.intersects!(sql, column, literal, param, !positive);
+      const intersects = dialect.intersects!(sql, column, literal, param, !positive, fn);
       return intersects === undefined ? dialect.never : `NOT (${intersects})`;
     }
-    return dialect.relate!(op, sql, column, literal, param, positive) ?? dialect.never;
+    return dialect.relate!(op, sql, column, literal, param, positive, fn) ?? dialect.never;
   };
 
   /**
@@ -265,10 +293,10 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     const side = (x: PropertyRef | SpatialLiteral, at: string): PairSide => (isRef(x) ? columnOf(x, at) : { literal: x });
     const [sa, sb] = [side(a, `${path}/args/0`), side(b, `${path}/args/1`)];
     if (op === "s_disjoint") {
-      const intersects = dialect.spatialPair!("s_intersects", sa, sb, param);
+      const intersects = dialect.spatialPair!("s_intersects", sa, sb, param, fn);
       return intersects === undefined ? dialect.never : `NOT (${intersects})`;
     }
-    return dialect.spatialPair!(op, sa, sb, param) ?? dialect.never;
+    return dialect.spatialPair!(op, sa, sb, param, fn) ?? dialect.never;
   };
 
   /** An end of a temporal function's operand: a constant (a literal's day or instant, ±Infinity for ".."), or a property. */
@@ -357,9 +385,9 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         bounds,
       ]);
       const when = sql(guard); // before the relation: its parameters come first
-      return `CASE WHEN ${when} THEN ${sql(relation)} END`;
+      return caseWhen(when, sql(relation));
     });
-    return parts.length === 0 ? dialect.never : parts.length === 1 ? parts[0]! : `COALESCE(${parts.join(", ")})`;
+    return parts.length === 0 ? dialect.never : parts.length === 1 ? parts[0]! : coalesce(parts);
   };
 
   /** `positive`: under an even number of NOTs, where a NULL and FALSE select the same rows (see Dialect.intersects). */
@@ -380,6 +408,7 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
         const text = foldKey(p.inner, p.folds);
         const v = subject(s, "text", `${path}/args/0`);
         if (v === undefined) return dialect.never;
+        if (isEmptyString(text)) return emptyString(v, "="); // LIKE '' matches '' only
         return v.like ? v.like(text, param) : dialect.like(v, text, param);
       }
       case "between": {
@@ -409,9 +438,11 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
           const parts = list.map((item, i) => `(${comparison(s, "=", item, `${path}/args/0`, `${path}/args/1/${i}`, positive)})`);
           return `(${parts.join(" OR ")})`;
         }
-        const items = (list as readonly (ScalarLiteral | FoldedString)[]).map(literal);
-        const v = subject(s, viewKind(items[0]!.kind), `${path}/args/0`);
+        const literals = (list as readonly (ScalarLiteral | FoldedString)[]).map(literal);
+        const v = subject(s, viewKind(literals[0]!.kind), `${path}/args/0`);
         if (v === undefined) return dialect.never;
+        const items = literals.filter((item) => !isEmptyString(item.value)); // = '' is FALSE for a value, NULL for none
+        if (items.length === 0) return emptyString(v, "=");
         const ps = items.map((item) => valueParam(v, item.value));
         return bounded(v, v.compare ? `(${ps.map((p) => compare(v, "=", p)).join(" OR ")})` : `${v.sql} IN (${ps.join(", ")})`, positive);
       }

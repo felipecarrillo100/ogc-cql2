@@ -206,8 +206,8 @@ as it is in CQL2-JSON: `invalid-filter`, naming the class. Text that isn't CQL2-
 `toSql(filter, { dialect, columns })` returns `{ where, params }`: text and values only, no driver. The rule: the SQL
 selects exactly the rows `evaluate` selects from the same values.
 
-- **Always parameterized:** values are placeholders (`?` for `sqlite`, `$1`, `$2` … for `postgres` and `duckdb`), never
-  text inside the query.
+- **Always parameterized:** values are placeholders (`?` for `sqlite`, `$1`, `$2` … for `postgres` and `duckdb`, `:1`,
+  `:2` … for `oracle`, `@p1`, `@p2` … for `sqlserver`), never text inside the query.
 - **Property names are checked** against `columns` (the table's queryables), then quoted; anything else is
   `unknown-property`. A property can map to a column of another name.
 - **CQL2's three-valued logic maps directly** onto SQL's NULL (`AND`, `OR`, `NOT`).
@@ -216,8 +216,13 @@ selects exactly the rows `evaluate` selects from the same values.
 - **One walker, one file per dialect:** `toSql` (`src/sql/index.ts`) walks the filter; what differs per database is
   a `Dialect` (`src/sql/types.ts`), one file each in `src/sql/dialects/`: the placeholders, the boolean constants and
   the "no value can match" constant, the column's **view** for each kind of value (text, CASEI, number, boolean,
-  day, instant), LIKE, and how boolean and instant literals are passed. A view can also convert the literal's value
-  and replace `view op param` with its own condition, which DuckDB's CASEI needs.
+  day, instant), LIKE, and how boolean and instant literals are passed. A view can also convert the literal's value,
+  wrap its parameter in an expression (`View.wrap`: Oracle's TO_BINARY_DOUBLE, SQL Server's scaled subnormals) and
+  replace `view op param` with its own condition, which DuckDB's CASEI needs. Since 1.5.0 a dialect can also say that
+  the database reads `''` as NULL (`emptyStringIsNull`: Oracle; the walker then decides comparisons with `''`), that it
+  has no boolean values (`truth`: SQL Server, where a condition used as a value is written as 1 / 0 / NULL), and the
+  default schema of its functions (`functionSchema`: SQL Server calls them by two-part name). The spatial hooks receive
+  the function namer too.
 
 The `sqlite` dialect follows **GeoPackage** (OGC 12-128r19, version 1.4): its declared types (Table 1, Req 5), its
 BOOLEAN as INTEGER 0 / 1, DATE as `YYYY-MM-DD`, DATETIME as `YYYY-MM-DDTHH:MM[:SS.SSS]Z`, and its note that readers
@@ -377,6 +382,35 @@ canary on the covering can't tell there. Measured on 2026-11-01: with a covering
 1.5.4, 1.5.6 and DuckDB-WASM 1.33.1-dev57.0 select what `evaluate` selects for every spatial filter, still through the
 index; 2.0.0 still fails. The canary expects the failure from DuckDB 2.0 on only.
 
+The `oracle` dialect (since 1.5.0), for Oracle Database 23ai and later (it needs SQL's BOOLEAN), with Oracle Spatial:
+
+| CQL2 | Oracle |
+|---|---|
+| `true` / `false`, no value can match | `TRUE` / `FALSE`, `CAST(NULL AS BOOLEAN)` |
+| text | the column as it is, the parameter `COLLATE BINARY` (code point order whatever `NLS_COMP` / `NLS_SORT`, and the index kept); NVARCHAR2 through `TO_CHAR` |
+| a comparison with `''` | decided when the SQL is built (`v <> v` or `v = v`): Oracle reads `''` as NULL, so no column holds it |
+| numbers | `TO_BINARY_DOUBLE(c)` against `TO_BINARY_DOUBLE(:n, '9D…EEEE', 'NLS_NUMERIC_CHARACTERS=''.,''')`, the literal as `toExponential()` text |
+| `like` | `c LIKE :n COLLATE BINARY ESCAPE '\'`, the pattern rewritten (Oracle refuses an escape before anything but `%`, `_`, `\`) |
+| `casei`, `accenti` | `cql2_casei`, `cql2_accenti` (PL/SQL, `oracleFunctions`): NFD, fold or remove, NFC, with the package's tables, not Oracle's `COMPOSE` (which never composes across a mark) or `DECOMPOSE` alone (which leaves marks above U+FFFF out of order) |
+| `{date}` | a DATE with `format: "date"` as `TO_CHAR(c, 'YYYY-MM-DD')`, a year before 1 NULL (`View.finite`); text through `cql2_day` |
+| `{timestamp}` | a TIMESTAMP WITH (LOCAL) TIME ZONE as UTC text truncated to milliseconds (Oracle's date arithmetic is Julian before 1582; the text orders right in both calendars); text through `cql2_instant` |
+| arithmetic | `+ - * / div` in BINARY_DOUBLE, a NaN or infinite result NULL; `%` and `^` through `cql2_arithmetic` (written inline, they would repeat their operands, and Oracle binds each placeholder it reads) |
+| the spatial relations | `cql2_relate(rel, column, literal) = 1`: one `SDO_GEOM.RELATE(…, 'DETERMINE', …)` with SRID NULL and tolerance 1e-10, then the dimensions (for two lines, of their intersection); the literal built exactly by `cql2_geometry` (Oracle's GeoJSON keeps 15 digits). With `spatialIndex`, outside a NOT: `SDO_FILTER(cql2_planar(column), literal)` first, a planar function-based index (the 4326 index is geodetic, and loses planar candidates) |
+
+The `sqlserver` dialect (since 1.5.0), for SQL Server 2022 and later, with Basic Spatial Functions:
+
+| CQL2 | SQL Server |
+|---|---|
+| `true` / `false`, no value can match | `1 = 1` / `1 = 0`, `1 = NULL`; a condition used as a value: `CASE WHEN c THEN 1 WHEN NOT (c) THEN 0 END`, compared with 1 |
+| text | `CAST(CONVERT(varchar(max), x COLLATE Latin1_General_100_BIN2_UTF8) AS varbinary(max))` on both sides: code point order without blank padding (SQL Server compares `'a' = 'a '` as TRUE); the index lost |
+| numbers | `CAST(c AS float)` against `CAST(@p AS float)`, the literal as text; a subnormal one bound ×2^54 and scaled back (SQL Server reads its text as 0) |
+| `like` | without `_`: `CONVERT(varchar(max), (c + N'\|') …) LIKE CONVERT(varchar(max), (@p + N'\|') …) ESCAPE '\'` (`[` escaped; the `\|` keeps the trailing blanks LIKE ignores); with `_`: `cql2_like` (SQL Server's `_` isn't one code point) |
+| `casei`, `accenti` | `cql2_casei`, `cql2_accenti` (T-SQL, `sqlserverFunctions`): the package's own NFD, reordering, fold or removal and NFC, set-based on code points |
+| `{date}` | a `date` as a date (`CAST(@p AS date)`, the index kept); text through `cql2_day` |
+| `{timestamp}` | a `datetimeoffset` as `DATEDIFF_BIG(millisecond, …)` in UTC (truncated); text through `cql2_instant` |
+| arithmetic | `cql2_arithmetic`: overflow decided from the operands' exponents (the float's bits) before any operation, since SQL Server would fail the whole query |
+| `s_intersects` | `(c.STIsEmpty() = 0 AND c.STDistance(L) <= 0)`, `L` from WKB in the column's SRID; the spatial index applies. The other relations aren't translated: SQL Server's grid differs from GEOS on boundaries |
+
 ### Errors
 
 - **Every refusal throws a `Cql2Error`:** `invalid-filter` (from `assertValid`, and from `text` and `evaluate` for an
@@ -436,6 +470,8 @@ filter selects). The server never knows which store it talks to.
 | GeoPackage (SQLite) | the `features` and `attributes` tables a GeoPackage lists in `gpkg_contents` (Node's built-in `node:sqlite`, read-only) | `ogc-cql2/sql` | 0.1.0 |
 | PostgreSQL / PostGIS | the tables `collections.json` lists (never discovered); the connection in a git-ignored `.env` | `ogc-cql2/sql`, `postgres` dialect | 0.1.0 |
 | GeoParquet (DuckDB) | the Parquet files `collections.json` lists, read in place with `@duckdb/node-api` | `ogc-cql2/sql`, `duckdb` dialect | after 1.0.0 |
+| Oracle | the tables `collections.json` lists; the connection in `.env` (`oracledb`, thin mode) | `ogc-cql2/sql`, `oracle` dialect | 1.5.0 |
+| SQL Server | the tables `collections.json` lists; the connection in `.env` (`mssql`) | `ogc-cql2/sql`, `sqlserver` dialect | 1.5.0 |
 
 - A GeoPackage table: the id is its INTEGER primary key (Req 29, 119), the queryables come from its declared types
   (Table 1), BOOLEAN 0 / 1 is served as `false` / `true`, and geometry is decoded from GeoPackageBinary (the `GP`
@@ -567,6 +603,7 @@ filter selects). The server never knows which store it talks to.
 | Tests | Vitest, with ajv and the official JSON Schema (development only) |
 | Demo | Vite: the playground, importing the package by name, aliased to `src/` |
 | Case folding | `node scripts/gen-case-folding.mjs <CaseFolding-15.0.0.txt>`, run when the Unicode version changes |
+| Normalization, for the `oracle` and `sqlserver` CASEI and ACCENTI (since 1.5.0) | `node scripts/gen-composition.mjs <UnicodeData.txt> <CompositionExclusions.txt>` (Unicode 15.0.0): `src/sql/dialects/composition.ts`, the primary composites, the combining classes and the canonical decompositions |
 | `check:imports` | fails if `package.json` declares a runtime dependency, or a file in `dist/` imports anything but the package's own files |
 | `check:bundle` | bundles a page that imports only `ogc-cql2/evaluate` and fails unless the bundle holds evaluate alone: no CQL2-text code, no SQL code, nothing Node-specific |
 | `prepublishOnly` | typecheck, tests, build, `check:imports`, `check:bundle` |
@@ -598,21 +635,24 @@ checks that they agree.
 | 1.2.0 | **Arithmetic Expressions:** `+ - * / % div ^` wherever a number goes, in every part and engine; doubles, `div` toward zero and `%` its remainder, a non-finite result NULL; `sqliteFunctions.cql2_arithmetic`, PostgreSQL's `cql2_arithmetic` (in `postgresFunctions`); the standard's Table 17 on its test data |
 | 1.3.0 | **Temporal Functions:** the fifteen relations of instants and intervals (OWL-Time, closed intervals, `'..'` open), in every part and engine; an instant refused where intervals only go; dates and timestamps never converted; the standard's 72 temporal rows on its test data. Fixed: infinite dates and timestamps NULL in every engine; DuckDB instants bound as text (node-api 1.4) |
 | 1.4.0 | **The classes each engine supports:** `evaluateConformance` and `sqlConformance`, the lists `toEvaluator` and `toSql` refuse by, so a filter valid against them is never `unsupported`; the **developer guide** (`docs/guide/`) and a short README; demo-server and the playground use the lists. Fixed: `filterProperties` on INTERVAL ends; the `s_disjoint` documentation |
-| 1.x.x | **More SQL databases, for enterprise GIS:** **Oracle** (Oracle Spatial), then **SQL Server** (spatial types), on the dialect interface. Details below |
+| 1.5.0 | **Oracle and SQL Server, for enterprise GIS:** the `oracle` dialect (every class, Oracle Spatial) and the `sqlserver` dialect (every class but Spatial Functions), on the dialect interface, tested live against each database (not in CI); `oracleFunctions` / `oracleValue`, `sqlserverFunctions` / `sqlserverValue`, `SqlColumn.spatialIndex`. Details below |
 | later | more conformance classes (arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
 
-### 1.x.x: Oracle and SQL Server
+### 1.5.0: Oracle and SQL Server
 
 Chosen for geospatial users: both are common under enterprise GIS (national mapping agencies, utilities, defence;
-Esri enterprise geodatabases; Luciad / Fusion; GeoServer and QGIS support both), and both have full DE-9IM spatial
-relations for the spatial classes later. Each new dialect meets the same rule as the others: every generated filter
-selects exactly what `evaluate` selects, checked on the kitchen sink loaded into that database.
+Esri enterprise geodatabases; Luciad / Fusion; GeoServer and QGIS support both). Each dialect meets the same rule as the
+others: every generated filter selects exactly what `evaluate` selects, checked on the kitchen sink loaded into that
+database, the spatial ones against GEOS on the US states. The rules each dialect documents are in its guide page.
 
-| Step | What | Known questions |
+| Question | Oracle | SQL Server |
 |---|---|---|
-| 1 | The dialect interface; SQLite and PostgreSQL moved onto it, unchanged | done in 0.2.0, with DuckDB |
-| 2 | **Oracle**: `:1` placeholders, binary ordering (`NLSSORT(…, 'NLS_SORT=BINARY')`), NFC with `COMPOSE`, case folding and instant reading in PL/SQL (as `postgresFunctions` does), BOOLEAN from 23ai (else `NUMBER(1)`) | **Oracle stores `''` as NULL**, so "equals the empty string" can never match there: a documented deviation, to be decided |
-| 3 | **SQL Server**: `@p1` placeholders, a `…_BIN2_UTF8` collation for code point order, `bit` booleans, `datetimeoffset` instants, `[` `]` escaped in LIKE patterns | **No NFC in T-SQL** (only through CLR functions, unavailable in Azure SQL): either a documented "store text in NFC" rule, or a server-side function, to be decided |
+| `''` | stored as NULL: comparisons with `''` decided at build time | a value, compared as it is |
+| NFC | a documented rule (stored text in NFC); CASEI / ACCENTI normalize with the package's tables | the same |
+| Text order | `COLLATE BINARY` on the parameter | UTF-8 bytes as varbinary (no blank padding) |
+| Spatial | every relation, planar, tolerance 1e-10 (points within 1.4e-14° of a boundary may differ) | S_INTERSECTS only, through `STDistance` (points within rounding of a boundary may differ) |
+| Index | a planar function-based index on `cql2_planar(column)` | the column's spatial index |
+| Tested on | Oracle AI Database 26ai Free 23.26.3 | SQL Server 2022 and 2025 |
 
 Testing without a server: both run locally in Docker, free for development and testing, spatial included. The
 containers live outside the repository; the connections go in `demo-server/.env`; the tests skip, with the reason,
@@ -620,8 +660,8 @@ when a database isn't running.
 
 | | Oracle | SQL Server |
 |---|---|---|
-| Edition | Oracle Database Free (23ai) | SQL Server 2022 Developer |
+| Edition | Oracle Database Free (23ai); the full image (the slim one has no Oracle Spatial) | SQL Server 2022 / 2025 Developer |
 | Container | native arm64 and x86 (`gvenzl/oracle-free`, or Oracle's own image) | x86 only: on Apple Silicon, through Docker Desktop's Rosetta emulation |
 | Memory | about 2 GB | at least 2 GB |
 | Node driver (demo-server only) | `oracledb`, thin mode: plain JavaScript, no Oracle client | `mssql` (`tedious`): plain JavaScript |
-| Loading the kitchen sink | a Node script (GDAL's Oracle driver needs Oracle's client libraries) | a Node script (GDAL's driver needs an ODBC driver) |
+| Loading the kitchen sink | `demo-server/data/load-oracle.ts` (GDAL's Oracle driver needs Oracle's client libraries) | `demo-server/data/load-sqlserver.ts` (GDAL's driver needs an ODBC driver) |

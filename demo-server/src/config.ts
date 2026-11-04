@@ -6,13 +6,16 @@
  *   { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" },
  *   { "id": "parquet-states", "title": "US states", "source": "geoparquet", "file": "data/states.parquet" },
  *   { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-", "tables": ["states"] },
- *   { "source": "postgres", "prefix": "pg-", "functionSchema": "cql2demo", "tables": [{ "table": "cql2demo.states" }] }
+ *   { "source": "postgres", "prefix": "pg-", "functionSchema": "cql2demo", "tables": [{ "table": "cql2demo.states" }] },
+ *   { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "KITCHEN_SINK", "days": ["day"] }] },
+ *   { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states" }] }
  * ] }
  * ```
  * A `geojson` entry is one collection, and so is a `geoparquet` entry (a GeoParquet or Parquet file, read in place by
  * DuckDB; its id column is `id` unless `idColumn` names another). A `geopackage` entry is one collection per table the GeoPackage lists (or only
- * `tables`), each with the id `prefix` + table name. A `postgres` entry is one collection per listed table, from the
- * database the environment's `PG*` variables name (`.env`). Files are relative to the directory of `collections.json`.
+ * `tables`), each with the id `prefix` + table name. A `postgres`, `oracle` or `sqlserver` entry is one collection per
+ * listed table, from the database the environment names (`.env`: `PG*`, `ORACLE_*`, `MSSQL_*`); an Oracle table may list
+ * its DATE columns that hold days (`days`). Files are relative to the directory of `collections.json`.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -22,8 +25,8 @@ export type CollectionConfig =
   | { readonly source: "geoparquet"; readonly id: string; readonly title: string; readonly file: string; readonly idColumn?: string }
   | { readonly source: "geopackage"; readonly file: string; readonly prefix?: string; readonly tables?: readonly string[] }
   | {
-      readonly source: "postgres";
-      readonly tables: readonly { readonly table: string; readonly id?: string; readonly title?: string }[];
+      readonly source: "postgres" | "oracle" | "sqlserver";
+      readonly tables: readonly { readonly table: string; readonly id?: string; readonly title?: string; readonly days?: readonly string[] }[];
       readonly prefix?: string;
       readonly functionSchema?: string;
     };
@@ -39,13 +42,15 @@ export function readConfig(path: string): CollectionConfig[] {
   const out: CollectionConfig[] = [];
   json.collections.forEach((entry: Record<string, unknown>, i) => {
     const where = `${path}: collections[${i}]`;
-    if (entry.source === "postgres") {
+    if (entry.source === "postgres" || entry.source === "oracle" || entry.source === "sqlserver") {
       const tables = entry.tables;
+      const days = (t: Record<string, unknown>) =>
+        t.days === undefined || (entry.source === "oracle" && Array.isArray(t.days) && t.days.every((d) => typeof d === "string"));
       const ok = Array.isArray(tables) && tables.length > 0 && tables.every((t: Record<string, unknown>) =>
         typeof t === "object" && t !== null && typeof t.table === "string" &&
-        (t.id === undefined || typeof t.id === "string") && (t.title === undefined || typeof t.title === "string"));
+        (t.id === undefined || typeof t.id === "string") && (t.title === undefined || typeof t.title === "string") && days(t));
       if (!ok) {
-        problems.push(`${where}: "tables" must list { "table": "schema.table", "id"?, "title"? }.`);
+        problems.push(`${where}: "tables" must list { "table": "schema.table", "id"?, "title"?${entry.source === "oracle" ? `, "days"?` : ""} }.`);
         return;
       }
       if (entry.prefix !== undefined && (typeof entry.prefix !== "string" || !/^[A-Za-z0-9_-]*$/.test(entry.prefix))) {
@@ -53,8 +58,8 @@ export function readConfig(path: string): CollectionConfig[] {
         return;
       }
       out.push({
-        source: "postgres",
-        tables: tables as { table: string; id?: string; title?: string }[],
+        source: entry.source,
+        tables: tables as { table: string; id?: string; title?: string; days?: string[] }[],
         ...(entry.prefix !== undefined ? { prefix: entry.prefix as string } : {}),
         ...(typeof entry.functionSchema === "string" ? { functionSchema: entry.functionSchema } : {}),
       });
@@ -96,7 +101,7 @@ export function readConfig(path: string): CollectionConfig[] {
         ...(entry.tables !== undefined ? { tables: entry.tables as string[] } : {}),
       });
     } else {
-      problems.push(`${where}: source "${String(entry.source)}" is not supported; use "geojson", "geoparquet", "geopackage" or "postgres".`);
+      problems.push(`${where}: source "${String(entry.source)}" is not supported; use "geojson", "geoparquet", "geopackage", "postgres", "oracle" or "sqlserver".`);
     }
   });
   if (problems.length > 0) throw new Error(problems.join("\n"));

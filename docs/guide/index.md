@@ -19,7 +19,9 @@ overview; this guide has the details.
   publishing an honest `/conformance`. Then one page per database:
   - [SQLite and GeoPackage](sqlite-geopackage.md);
   - [PostgreSQL and PostGIS](postgresql.md);
-  - [DuckDB](duckdb.md), in Node and in the browser, on tables and on GeoParquet files.
+  - [DuckDB](duckdb.md), in Node and in the browser, on tables and on GeoParquet files;
+  - [Oracle Database](oracle.md), with Oracle Spatial;
+  - [SQL Server](sqlserver.md).
 
 **The classes in detail**
 - [Spatial filters](spatial.md): geometry literals, the classes a server must declare, `s_intersects` in memory, the

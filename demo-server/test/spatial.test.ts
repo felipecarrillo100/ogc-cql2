@@ -16,7 +16,10 @@ import { after, before, describe, it } from "node:test";
 import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import pg from "pg";
+import { distance, fromGeoJSON } from "geos.js";
 import { geosEngine } from "../src/geos-engine.ts";
+import { createOraclePool, openOracle } from "../src/stores/oracle.ts";
+import { createSqlServerPool, openSqlServer } from "../src/stores/sqlserver.ts";
 import { openGeoPackage } from "../src/stores/geopackage.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
 import type { Store } from "../src/stores/types.ts";
@@ -275,6 +278,107 @@ describe("Spatial Functions: evaluate with GEOS plugged in, against PostGIS, on 
       assert.equal(differences.slice(0, 10).join("\n"), "");
     } finally {
       await storePool.end();
+    }
+  });
+});
+
+// --- Oracle: the oracle dialect through the Oracle store, against evaluate with GEOS -----------------------------------
+
+/**
+ * All eight relations through the Oracle store (its planar index first). Oracle decides with a tolerance (1e-10, its
+ * least that holds: see research/oracle), so a geometry within it of a state's boundary may be decided either way: the
+ * dialect's one documented deviation. Every difference must be that: a point literal within 1e-10 of the state's
+ * boundary, by GEOS's distance. Runs when ORACLE_CONNECT names a database with the states loaded (data/load-oracle.ts).
+ */
+describe("Spatial Functions: the oracle dialect, through the Oracle store, against evaluate with GEOS, on the US states", () => {
+  it(`8 relations × ${LITERALS.length} literals: the same states, but for points within the tolerance of a boundary`, async (t) => {
+    if (!process.env.ORACLE_CONNECT) return t.skip("no ORACLE_CONNECT: add Oracle's connection to demo-server's .env (see data/load-oracle.ts)");
+    const oraclePool = await createOraclePool();
+    try {
+      const { stores, warnings } = await openOracle(oraclePool, { tables: [{ table: "STATES" }] });
+      const store = stores[0]?.store;
+      if (!store) return t.skip(`the states aren't loaded in Oracle (${warnings.join(" ")})`);
+      const boundaries = new Map(states.map((f) => {
+        const c = f.geometry.coordinates as number[][][] | number[][][][];
+        const rings = f.geometry.type === "Polygon" ? (c as number[][][]) : (c as number[][][][]).flat();
+        return [f.properties.STATE_NAME, fromGeoJSON({ type: "MultiLineString", coordinates: rings } as never)];
+      }));
+      const differences: string[] = [];
+      let tolerated = 0;
+      let farthest = 0;
+      for (const relation of ["s_intersects", "s_disjoint", ...Object.keys(POSTGIS_RELATION)]) {
+        for (const literal of LITERALS) {
+          const filter = { op: relation, args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter;
+          const ours = states.filter(toPredicate(filter, { spatialEngine: geosEngine })).map((f) => f.properties.STATE_NAME);
+          const { features } = await store.query(filter, { limit: 100, offset: 0 });
+          const theirs = features.map((f) => f.properties.STATE_NAME as string);
+          for (const state of new Set([...ours, ...theirs])) {
+            if (ours.includes(state) === theirs.includes(state)) continue;
+            const d = literal.type === "Point" ? distance(fromGeoJSON(literal as never), boundaries.get(state)!) : Infinity;
+            if (d <= 1e-10) {
+              tolerated++;
+              farthest = Math.max(farthest, d);
+            } else {
+              differences.push(`${relation} ${JSON.stringify(literal).slice(0, 120)} ${state}: evaluate ${ours.includes(state)}, oracle ${theirs.includes(state)}`);
+            }
+          }
+        }
+      }
+      t.diagnostic(`${tolerated} answers differ for points within ${farthest.toExponential(1)}° of a state's boundary (the documented tolerance)`);
+      assert.equal(differences.slice(0, 10).join("\n"), "");
+    } finally {
+      await oraclePool.close(0);
+    }
+  });
+});
+
+// --- SQL Server: the sqlserver dialect through the SQL Server store, against evaluate with GEOS ------------------------
+
+/**
+ * S_INTERSECTS and NOT S_INTERSECTS through the SQL Server store (STDistance <= 0, the spatial index). SQL Server
+ * computes on a grid, so a point within rounding of a state's boundary may be decided either way: the dialect's
+ * documented deviation. Every difference must be that: a point literal within 1e-10 of the state's boundary, by GEOS's
+ * distance. Runs when MSSQL_DATABASE names a database with the states loaded (data/load-sqlserver.ts).
+ */
+describe("Basic Spatial Functions: the sqlserver dialect, through the SQL Server store, against evaluate, on the US states", () => {
+  it(`S_INTERSECTS and NOT S_INTERSECTS × ${LITERALS.length} literals: the same states, but for points within rounding of a boundary`, async (t) => {
+    if (!process.env.MSSQL_DATABASE) return t.skip("no MSSQL_DATABASE: add SQL Server's connection to demo-server's .env (see data/load-sqlserver.ts)");
+    const sqlServerPool = await createSqlServerPool();
+    try {
+      const { stores, warnings } = await openSqlServer(sqlServerPool, { tables: [{ table: "dbo.states" }] });
+      const store = stores[0]?.store;
+      if (!store) return t.skip(`the states aren't loaded in SQL Server (${warnings.join(" ")})`);
+      const boundaries = new Map(states.map((f) => {
+        const c = f.geometry.coordinates as number[][][] | number[][][][];
+        const rings = f.geometry.type === "Polygon" ? (c as number[][][]) : (c as number[][][][]).flat();
+        return [f.properties.STATE_NAME, fromGeoJSON({ type: "MultiLineString", coordinates: rings } as never)];
+      }));
+      const differences: string[] = [];
+      let tolerated = 0;
+      let farthest = 0;
+      for (const negated of [false, true]) {
+        for (const literal of LITERALS) {
+          const leaf = { op: "s_intersects", args: [{ property: "geometry" }, literal] };
+          const filter = (negated ? { op: "not", args: [leaf] } : leaf) as unknown as Cql2Filter;
+          const ours = states.filter(toPredicate(filter)).map((f) => f.properties.STATE_NAME);
+          const { features } = await store.query(filter, { limit: 100, offset: 0 });
+          const theirs = features.map((f) => f.properties.STATE_NAME as string);
+          for (const state of new Set([...ours, ...theirs])) {
+            if (ours.includes(state) === theirs.includes(state)) continue;
+            const d = literal.type === "Point" ? distance(fromGeoJSON(literal as never), boundaries.get(state)!) : Infinity;
+            if (d <= 1e-10) {
+              tolerated++;
+              farthest = Math.max(farthest, d);
+            } else {
+              differences.push(`${negated ? "NOT " : ""}${JSON.stringify(literal).slice(0, 120)} ${state}: evaluate ${ours.includes(state)}, sqlserver ${theirs.includes(state)}`);
+            }
+          }
+        }
+      }
+      t.diagnostic(`${tolerated} answers differ for points within ${farthest.toExponential(1)}° of a state's boundary (the documented rounding)`);
+      assert.equal(differences.slice(0, 10).join("\n"), "");
+    } finally {
+      await sqlServerPool.close();
     }
   });
 });

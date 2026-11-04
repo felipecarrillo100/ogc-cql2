@@ -91,7 +91,8 @@ features.filter(toPredicate(inArea, { spatialEngine: geos }));
 
 ## In SQL
 
-The three dialects give the same answers as `evaluate`, each in its own way: see the spatial sections of
-[SQLite and GeoPackage](sqlite-geopackage.md#spatial-filters), [PostgreSQL and PostGIS](postgresql.md) and
-[DuckDB](duckdb.md). A literal first, and two geometry columns, are in
+The dialects give the same answers as `evaluate`, each in its own way: see the spatial sections of
+[SQLite and GeoPackage](sqlite-geopackage.md#spatial-filters), [PostgreSQL and PostGIS](postgresql.md),
+[DuckDB](duckdb.md), [Oracle Database](oracle.md) (every relation, with a tolerance of 1e-10) and
+[SQL Server](sqlserver.md) (S_INTERSECTS only; points within rounding of a boundary may be decided either way). A literal first, and two geometry columns, are in
 [Comparing two properties](property-property-and-arithmetic.md#comparing-two-properties).

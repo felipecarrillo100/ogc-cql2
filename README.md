@@ -10,9 +10,9 @@ JavaScript and TypeScript. It works on filters in the standard's JSON encoding, 
 - **`ogc-cql2/parse`** reads CQL2-text into CQL2-JSON, for a server that receives it;
 - **`ogc-cql2/evaluate`** tests features against it in memory, with CQL2's three-valued logic, so it selects the
   same features a CQL2 server would;
-- **`ogc-cql2/sql`** turns it into a parameterized `WHERE` clause for SQLite / GeoPackage, PostgreSQL / PostGIS or
-  DuckDB (GeoParquet and other files, in Node and in the browser) that selects exactly what `evaluate` selects. It
-  builds the SQL; your own driver runs it.
+- **`ogc-cql2/sql`** turns it into a parameterized `WHERE` clause for SQLite / GeoPackage, PostgreSQL / PostGIS,
+  DuckDB (GeoParquet and other files, in Node and in the browser), Oracle Database (Oracle Spatial) or SQL Server, that
+  selects exactly what `evaluate` selects. It builds the SQL; your own driver runs it.
 
 It runs in browsers and in Node 22 or later and has no dependencies. Each part is its own entry point, so an
 application loads only what it uses.
@@ -35,15 +35,16 @@ The package implements these conformance classes:
 | Accent-insensitive Comparison | `accenti` | ✅ | ✅ | ✅ |
 | Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | ✅ |
 | Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | ✅ |
-| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB; SQLite with SpatiaLite |
+| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB, Oracle; SQLite with SpatiaLite; not SQL Server |
 | Property-Property Comparisons | a property or a literal on either side: comparisons, `like` (a string on the left), `between`, `in`, the spatial functions | ✅ | ✅ | ✅ |
 | Arithmetic Expressions | `+` `-` `*` `/` `%` `div` `^` wherever a number goes | ✅ | ✅ | ✅ |
 | Temporal Functions | `t_after` `t_before` `t_disjoint` `t_equals` `t_intersects` `t_contains` `t_during` `t_finishedBy` `t_finishes` `t_meets` `t_metBy` `t_overlappedBy` `t_overlaps` `t_startedBy` `t_starts`, `{ "interval" }` literals | ✅ | ✅ | ✅ |
 
 - **Spatial:** `evaluate` tests `s_intersects` in memory, and the Spatial Functions class (`s_disjoint` and the other
   relations) with a geometry engine you plug in (GEOS in WebAssembly, for one); `sql` translates them for PostGIS,
-  DuckDB (with its spatial extension), and SQLite / GeoPackage (`s_intersects` with the package's own functions, the
-  Spatial Functions class with SpatiaLite).
+  DuckDB (with its spatial extension), SQLite / GeoPackage (`s_intersects` with the package's own functions, the
+  Spatial Functions class with SpatiaLite), Oracle Spatial (every relation, with a documented tolerance), and SQL
+  Server (`s_intersects` only).
 - **Property-Property Comparisons:** either side may be a property or a literal (`name = nameascii`,
   `'København' < name`, `S_WITHIN(BBOX(7,50,8,51), geom)`). **Arithmetic:** `area > population * 0.001`.
   **Temporal:** `T_DURING(INTERVAL(start, end), INTERVAL('2023-01-01', '2023-12-31'))`.
@@ -110,6 +111,8 @@ const { where, params } = toSql(filter, { dialect: "sqlite", columns });
 | SQLite, GeoPackage | `sqlite` | `?` placeholders, GeoPackage's types, its R-tree for spatial filters; Spatial Functions with SpatiaLite ([guide](docs/guide/sqlite-geopackage.md)) |
 | PostgreSQL, PostGIS | `postgres` | `$1` placeholders, code point order, PostGIS's GiST index, exact on arm64 too, any SRID ([guide](docs/guide/postgresql.md)) |
 | DuckDB, GeoParquet | `duckdb` | the same SQL in Node and in the browser (DuckDB-WASM), straight on files, GeoParquet's bbox covering ([guide](docs/guide/duckdb.md)) |
+| Oracle Database 23ai+, Oracle Spatial | `oracle` | `:1` placeholders, code point order whatever the session's NLS settings, every spatial relation planar with a planar index ([guide](docs/guide/oracle.md)) |
+| SQL Server 2022+ | `sqlserver` | `@p1` placeholders, code point order without blank padding, S_INTERSECTS on `geometry` with the spatial index; no Spatial Functions ([guide](docs/guide/sqlserver.md)) |
 
 Every refusal is a `Cql2Error` with a stable `code` ([guide](docs/guide/errors.md)).
 
@@ -133,9 +136,11 @@ FeatureCollection file, filtered in memory with `ogc-cql2/evaluate`, or a table 
 format), filtered in the database with `ogc-cql2/sql`: one entry serves every table the GeoPackage lists in
 `gpkg_contents`. A **GeoParquet** (or Parquet) file is read in place by DuckDB (`@duckdb/node-api`), filtered with the
 `duckdb` dialect, its bbox covering used when the file has one. A **PostgreSQL** entry serves the tables it lists, from the database in `demo-server/.env`
-(copy `.env_sample`), filtered with the `postgres` dialect. The samples: the states, the census sub-regions and a
+(copy `.env_sample`), filtered with the `postgres` dialect; **Oracle** and **SQL Server** entries likewise, with the
+`oracle` and `sqlserver` dialects (a database left out of `.env` is reported, and its collections aren't served). The
+samples: the states, the census sub-regions and a
 "kitchen sink" of every type and edge case, the same rows in every source (`demo-server/data/README.md` says how to load
-them into PostgreSQL). Its routes:
+them into PostgreSQL, Oracle and SQL Server). Its routes:
 
 | Route | Answer |
 |---|---|
@@ -191,6 +196,10 @@ Older versions may well work, but haven't been tested.
 | DuckDB, Node (`@duckdb/node-api`) | 2.0.0, 1.5.4, 1.4.3 | 1.5.4 by `npm run check:duckdb`, which tests the newest releases |
 | DuckDB-WASM (`@duckdb/duckdb-wasm`) | 1.32.0 (DuckDB 1.4.3), 1.33.1-dev57.0 (DuckDB 1.5.4) | with the spatial extension |
 | geos.js (as `spatialEngine`) | 0.1.5 (GEOS 3.14.0) | |
+| Oracle Database | 26ai Free 23.26.3 (arm64) | every filter, every spatial relation, against GEOS. Not in CI |
+| `oracledb` | 26.0.0 (thin mode) | |
+| SQL Server | 2022 (16.0.4305.5), 2025 (17.0.5035.5), amd64 (under emulation) | every filter, S_INTERSECTS against GEOS. Not in CI |
+| `mssql` (tedious) | 12.7.13 | |
 
 ## More
 

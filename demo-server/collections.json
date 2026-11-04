@@ -15,6 +15,8 @@
         { "table": "cql2demo.kitchen_sink", "title": "Kitchen sink" },
         { "table": "cql2demo.kitchen_sink_3857", "title": "Kitchen sink (Web Mercator)" }
       ]
-    }
+    },
+    { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "STATES", "title": "US states" }, { "table": "KITCHEN_SINK", "title": "Kitchen sink", "days": ["day"] }] },
+    { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states", "title": "US states" }, { "table": "dbo.kitchen_sink", "title": "Kitchen sink" }] }
   ]
 }

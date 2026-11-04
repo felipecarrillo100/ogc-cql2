@@ -119,6 +119,8 @@ const engineOf = (source: string): string =>
   source === "geopackage" ? "ogc-cql2/sql, in SQLite"
     : source === "postgres" ? "ogc-cql2/sql, in PostgreSQL"
     : source === "geoparquet" ? "ogc-cql2/sql, in DuckDB"
+    : source === "oracle" ? "ogc-cql2/sql, in Oracle"
+    : source === "sqlserver" ? "ogc-cql2/sql, in SQL Server"
     : "ogc-cql2/evaluate";
 
 async function selectSource(id: string): Promise<void> {
