@@ -1,6 +1,8 @@
 /** Each route on a real server, on a free port, over the states file and a small test collection. */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
@@ -8,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { CONFORMANCE } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
 import { sqlConformance } from "ogc-cql2/sql";
+import { readConfig } from "../src/config.ts";
 import { closeStores, createApp, loadStores } from "../src/server.ts";
 import { createGeoJsonStore } from "../src/stores/geojson.ts";
 import { loadSpatialite } from "../src/stores/geopackage.ts";
@@ -49,8 +52,8 @@ const ids = (answer: { features: { id: unknown }[] }) => answer.features.map((f)
 describe("collections", () => {
   it("lists them, with warnings", async () => {
     const answer = await read(fetch(`${base}/collections`));
-    // The PostgreSQL collections depend on a database being there; their own tests check them.
-    const files = answer.collections.filter((c: { source: string }) => c.source !== "postgres");
+    // The database collections depend on a database being there; their own tests check them.
+    const files = answer.collections.filter((c: { source: string }) => !["postgres", "oracle", "sqlserver"].includes(c.source));
     assert.deepEqual(
       files.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
       [["states", "geojson", 51], ["kitchen_sink", "geojson", 24], ["parquet-states", "geoparquet", 51],
@@ -72,7 +75,8 @@ describe("collections", () => {
         c.source === "geopackage" ? sqlConformance({ dialect: "sqlite", spatialite })
         // DuckDB's spatial extension can fail to install (offline): then no spatial class.
         : c.source === "geoparquet" ? (c.conformance.includes(CONFORMANCE.spatial) ? all : all.filter((x) => !spatial.includes(x)))
-        : all; // GeoJSON with GEOS, and PostGIS
+        : c.source === "sqlserver" ? sqlConformance({ dialect: "sqlserver" }) // all but Spatial Functions
+        : all; // GeoJSON with GEOS, PostGIS, Oracle Spatial
       assert.deepEqual(c.conformance, expected, c.id);
     }
     assert.deepEqual((await read(fetch(`${base}/collections/states`))).conformance, all);
@@ -271,5 +275,52 @@ describe("refusals, as application/problem+json", () => {
 
   it("logs each refusal", () => {
     assert.ok(log.includes("POST /collections/states/query → 400 invalid-json"));
+  });
+});
+
+describe("collections.json: the database sources", () => {
+  const withConfig = <T>(collections: unknown[], body: (path: string) => T): T => {
+    const dir = mkdtempSync(join(tmpdir(), "ogc-cql2-config-"));
+    try {
+      const path = join(dir, "collections.json");
+      writeFileSync(path, JSON.stringify({ collections }));
+      return body(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("oracle and sqlserver entries, as postgres ones; days only for Oracle's DATE columns", () => {
+    const config = withConfig([
+      { source: "oracle", prefix: "ora-", functionSchema: "CQL2", tables: [{ table: "KITCHEN_SINK", title: "Kitchen sink", days: ["day"] }] },
+      { source: "sqlserver", prefix: "ms-", tables: [{ table: "dbo.states", id: "id" }] },
+    ], readConfig);
+    assert.deepEqual(config, [
+      { source: "oracle", prefix: "ora-", functionSchema: "CQL2", tables: [{ table: "KITCHEN_SINK", title: "Kitchen sink", days: ["day"] }] },
+      { source: "sqlserver", prefix: "ms-", tables: [{ table: "dbo.states", id: "id" }] },
+    ]);
+    assert.throws(() => withConfig([{ source: "sqlserver", tables: [{ table: "dbo.t", days: ["d"] }] }], readConfig), /"tables" must list/);
+    assert.throws(() => withConfig([{ source: "oracle", tables: [] }], readConfig), /"tables" must list/);
+    assert.throws(() => withConfig([{ source: "mysql", file: "x" }], readConfig), /use "geojson", "geoparquet", "geopackage", "postgres", "oracle" or "sqlserver"/);
+  });
+
+  it("a database that isn't configured is reported, and the other collections are served", async () => {
+    const saved = { oracle: process.env.ORACLE_CONNECT, mssql: process.env.MSSQL_DATABASE };
+    delete process.env.ORACLE_CONNECT;
+    delete process.env.MSSQL_DATABASE;
+    const lines: string[] = [];
+    try {
+      const stores = await withConfig([
+        { source: "oracle", tables: [{ table: "KITCHEN_SINK" }] },
+        { source: "sqlserver", tables: [{ table: "dbo.kitchen_sink" }] },
+        { id: "states", title: "US states", source: "geojson", file: fileURLToPath(new URL("../data/states.geojson", import.meta.url)) },
+      ], (path) => loadStores(path, (line) => lines.push(line)));
+      assert.deepEqual([...stores.keys()], ["states"]);
+      assert.ok(lines.includes("Oracle: NOT SERVED. no ORACLE_CONNECT in the environment (.env)."), lines.join("\n"));
+      assert.ok(lines.includes("SQL Server: NOT SERVED. no MSSQL_DATABASE in the environment (.env)."), lines.join("\n"));
+    } finally {
+      if (saved.oracle !== undefined) process.env.ORACLE_CONNECT = saved.oracle;
+      if (saved.mssql !== undefined) process.env.MSSQL_DATABASE = saved.mssql;
+    }
   });
 });

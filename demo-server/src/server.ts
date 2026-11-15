@@ -32,7 +32,9 @@ import { sendProblem } from "./problems.ts";
 import { openDuckDB, openGeoParquet, type DuckDB } from "./stores/duckdb.ts";
 import { loadGeoJsonStore } from "./stores/geojson.ts";
 import { openGeoPackage } from "./stores/geopackage.ts";
+import { createOraclePool, openOracle } from "./stores/oracle.ts";
 import { createPool, openPostgres } from "./stores/postgres.ts";
+import { createSqlServerPool, openSqlServer } from "./stores/sqlserver.ts";
 import type { Store } from "./stores/types.ts";
 
 const DEFAULT_LIMIT = 50;
@@ -148,6 +150,8 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 /** One pool for the process, made on first use: only when collections.json has a postgres entry. */
 let pool: ReturnType<typeof createPool> | undefined;
 const postgresPool = () => (pool ??= createPool());
+let oraclePool: ReturnType<typeof createOraclePool> | undefined;
+let sqlServerPool: ReturnType<typeof createSqlServerPool> | undefined;
 
 /** One DuckDB database for the process, opened on first use: only when collections.json has a geoparquet entry. */
 let duck: Promise<DuckDB> | undefined;
@@ -156,6 +160,10 @@ let duck: Promise<DuckDB> | undefined;
 export async function closeStores(): Promise<void> {
   await pool?.end();
   pool = undefined;
+  await (await oraclePool?.catch(() => undefined))?.close(0);
+  oraclePool = undefined;
+  await (await sqlServerPool?.catch(() => undefined))?.close();
+  sqlServerPool = undefined;
   (await duck?.catch(() => undefined))?.close();
   duck = undefined;
 }
@@ -171,7 +179,9 @@ export async function loadStores(configPath: string, log: (line: string) => void
     for (const warning of warnings) log(`  warning: ${warning}`);
   };
   for (const collection of readConfig(configPath)) {
-    const origin = collection.source === "geojson" || collection.source === "geoparquet" ? collection.id : collection.source === "geopackage" ? collection.file : "PostgreSQL";
+    const origin = collection.source === "geojson" || collection.source === "geoparquet" ? collection.id
+      : collection.source === "geopackage" ? collection.file
+      : collection.source === "oracle" ? "Oracle" : collection.source === "sqlserver" ? "SQL Server" : "PostgreSQL";
     try {
       if (collection.source === "geojson") {
         add(collection.id, loadGeoJsonStore(collection, collection.file), collection.file);
@@ -185,6 +195,18 @@ export async function loadStores(configPath: string, log: (line: string) => void
         const { stores: tables, warnings } = openGeoPackage(collection);
         for (const { id, store } of tables) add(id, store, collection.file);
         for (const warning of warnings) log(`${collection.file}: ${warning}`);
+      } else if (collection.source === "oracle") {
+        if (!process.env.ORACLE_CONNECT) throw new Error("no ORACLE_CONNECT in the environment (.env).");
+        const { stores: tables, warnings } = await openOracle(await (oraclePool ??= createOraclePool()), collection);
+        const at = `Oracle ${process.env.ORACLE_CONNECT}`;
+        for (const { id, store } of tables) add(id, store, at);
+        for (const warning of warnings) log(`${at}: ${warning}`);
+      } else if (collection.source === "sqlserver") {
+        if (!process.env.MSSQL_DATABASE) throw new Error("no MSSQL_DATABASE in the environment (.env).");
+        const { stores: tables, warnings } = await openSqlServer(await (sqlServerPool ??= createSqlServerPool()), collection);
+        const at = `SQL Server ${process.env.MSSQL_DATABASE}@${process.env.MSSQL_SERVER ?? "localhost"}`;
+        for (const { id, store } of tables) add(id, store, at);
+        for (const warning of warnings) log(`${at}: ${warning}`);
       } else {
         const { stores: tables, warnings } = await openPostgres(postgresPool(), collection);
         const at = `PostgreSQL ${process.env.PGDATABASE ?? ""}@${process.env.PGHOST ?? "localhost"}`;

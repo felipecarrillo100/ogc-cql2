@@ -25,12 +25,14 @@ describe("the lists", () => {
     expect(evaluateConformance({ spatialEngine: engine })).toEqual(ALL);
   });
 
-  it("sql: every class on postgres and duckdb; on sqlite, Spatial Functions only with SpatiaLite", () => {
+  it("sql: every class on postgres, duckdb and oracle; on sqlite, Spatial Functions only with SpatiaLite; on sqlserver, all but Spatial Functions", () => {
     expect(sqlConformance({ dialect: "postgres" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "duckdb" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "sqlite" })).toEqual(BUT_SPATIAL);
     expect(sqlConformance({ dialect: "sqlite", spatialite: false })).toEqual(BUT_SPATIAL);
     expect(sqlConformance({ dialect: "sqlite", spatialite: true })).toEqual(ALL);
+    expect(sqlConformance({ dialect: "oracle" })).toEqual(ALL);
+    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(BUT_SPATIAL);
   });
 
   it("the guard: a class added to CONFORMANCE is in every list that has all of them", () => {
@@ -86,7 +88,7 @@ const codeOf = (compile: () => unknown): string | undefined => {
 const ENGINES: [string, string[], (f: Cql2Filter) => unknown][] = [
   ["evaluate", evaluateConformance(), (f) => toEvaluator(f)],
   ["evaluate with a spatialEngine", evaluateConformance({ spatialEngine: engine }), (f) => toEvaluator(f, { spatialEngine: engine })],
-  ...(["sqlite", "postgres", "duckdb"] as const).flatMap((dialect) =>
+  ...(["sqlite", "postgres", "duckdb", "oracle", "sqlserver"] as const).flatMap((dialect) =>
     [false, true].map((spatialite): [string, string[], (f: Cql2Filter) => unknown] => [
       `${dialect}${spatialite ? " with spatialite" : ""}`,
       sqlConformance({ dialect, spatialite }),

@@ -13,7 +13,9 @@ import { validate } from "ogc-cql2/validate";
 import { openDuckDB, openGeoParquet, type DuckDB } from "../src/stores/duckdb.ts";
 import { createGeoJsonStore } from "../src/stores/geojson.ts";
 import { openGeoPackage } from "../src/stores/geopackage.ts";
+import { createOraclePool, openOracle } from "../src/stores/oracle.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
+import { createSqlServerPool, openSqlServer } from "../src/stores/sqlserver.ts";
 import type { Feature, Store } from "../src/stores/types.ts";
 import { CONFORMANCE } from "ogc-cql2";
 
@@ -28,6 +30,18 @@ let pool: ReturnType<typeof createPool> | undefined;
 let fromPg: Store | undefined;
 let fromPg3857: Store | undefined;
 let pgSkip = "";
+let oraclePool: Awaited<ReturnType<typeof createOraclePool>> | undefined;
+let fromOracle: Store | undefined;
+/** The same rows with neither USER_SDO_GEOM_METADATA nor a spatial index. */
+let fromOraclePlain: Store | undefined;
+/** `evaluate` on the features Oracle serves (its text in NFC, its '' NULL): what the Oracle store must select. */
+let fromOracleServed: Store | undefined;
+let oracleSkip = "";
+let sqlServerPool: Awaited<ReturnType<typeof createSqlServerPool>> | undefined;
+let fromSqlServer: Store | undefined;
+/** `evaluate` on the features SQL Server serves (its text in NFC): what the SQL Server store must select. */
+let fromSqlServerServed: Store | undefined;
+let sqlServerSkip = "";
 
 before(async () => {
   duck = await openDuckDB();
@@ -51,7 +65,50 @@ before(async () => {
     pgSkip = `PostgreSQL isn't reachable: ${(error as Error).message}`;
   }
 });
+before(async () => {
+  if (!process.env.ORACLE_CONNECT) {
+    oracleSkip = "no ORACLE_CONNECT: add Oracle's connection to demo-server's .env (see data/load-oracle.ts)";
+    return;
+  }
+  try {
+    oraclePool = await createOraclePool();
+    const { stores, warnings } = await openOracle(oraclePool, {
+      tables: [{ table: "KITCHEN_SINK", days: ["day"] }, { table: "KITCHEN_SINK_PLAIN", days: ["day"] }],
+    });
+    fromOracle = stores.find((s) => s.id === "kitchen_sink")?.store;
+    fromOraclePlain = stores.find((s) => s.id === "kitchen_sink_plain")?.store;
+    if (!fromOracle || warnings.some((w) => /cql2_\* functions/.test(w))) {
+      oracleSkip = `the kitchen sink isn't loaded in Oracle (${warnings.join(" ")}): run data/load-oracle.ts`;
+      return;
+    }
+    const served = (await fromOracle.query(true, { limit: 1000, offset: 0 })).features;
+    fromOracleServed = createGeoJsonStore({ id: "kitchen_sink", title: "Kitchen sink" }, { type: "FeatureCollection", features: served });
+  } catch (error) {
+    oracleSkip = `Oracle isn't reachable: ${(error as Error).message}`;
+  }
+}, { timeout: 60_000 });
+before(async () => {
+  if (!process.env.MSSQL_DATABASE) {
+    sqlServerSkip = "no MSSQL_DATABASE: add SQL Server's connection to demo-server's .env (see data/load-sqlserver.ts)";
+    return;
+  }
+  try {
+    sqlServerPool = await createSqlServerPool();
+    const { stores, warnings } = await openSqlServer(sqlServerPool, { tables: [{ table: "dbo.kitchen_sink" }] });
+    fromSqlServer = stores.find((s) => s.id === "kitchen_sink")?.store;
+    if (!fromSqlServer || warnings.some((w) => /cql2_\* functions/.test(w))) {
+      sqlServerSkip = `the kitchen sink isn't loaded in SQL Server (${warnings.join(" ")}): run data/load-sqlserver.ts`;
+      return;
+    }
+    const served = (await fromSqlServer.query(true, { limit: 1000, offset: 0 })).features;
+    fromSqlServerServed = createGeoJsonStore({ id: "kitchen_sink", title: "Kitchen sink" }, { type: "FeatureCollection", features: served });
+  } catch (error) {
+    sqlServerSkip = `SQL Server isn't reachable: ${(error as Error).message}`;
+  }
+}, { timeout: 60_000 });
 after(async () => {
+  await sqlServerPool?.close();
+  await oraclePool?.close(0);
   await pool?.end();
   duck?.close();
 });
@@ -390,4 +447,140 @@ describe("the kitchen sink, four stores", () => {
           : x === y;
     b.forEach((f: Feature, i) => assert.ok(close(f.geometry, a[i]!.geometry), `feature ${f.id}`));
   });
+});
+
+describe("the kitchen sink in Oracle", () => {
+  const PAGE_ALL = { limit: 1000, offset: 0 };
+
+  it("the same queryables as the file", (t) => {
+    if (oracleSkip) return t.skip(oracleSkip);
+    assert.deepEqual(fromOracle!.queryables(), fromFile.queryables());
+  });
+
+  it("serves the file's values, but for the documented rules: text in NFC, and '' as NULL", async (t) => {
+    if (oracleSkip) return t.skip(oracleSkip);
+    const served = (await fromOracle!.query(true, PAGE_ALL)).features;
+    const changed: string[] = [];
+    for (const f of (await fromFile.query(true, PAGE_ALL)).features) {
+      const o = served.find((x) => x.id === f.id)!;
+      for (const [k, v] of Object.entries(f.properties)) if (!isDeepStrictEqual(o.properties[k], v)) changed.push(`${f.id}.${k}: ${JSON.stringify(v)} → ${JSON.stringify(o.properties[k])}`);
+    }
+    assert.deepEqual(changed, [
+      `5.name: "cafe\u0301" → "café"`, // NFD → NFC
+      `5.code: "" → null`,
+      `10.note: "" → null`,
+      `12.name: "" → null`,
+      `17.name: "\u212bngström" → "Ångström"`, // U+212B ANGSTROM SIGN, whose NFC is U+00C5
+    ]);
+  });
+
+  it("serves the file's geometries, the rings in Oracle's orientation", async (t) => {
+    if (oracleSkip) return t.skip(oracleSkip);
+    const served = (await fromOracle!.query(true, PAGE_ALL)).features;
+    // The same geometry as the file's when each ring is read in either direction.
+    const canonical = (g: unknown): unknown => JSON.stringify(g, (_, v) =>
+      Array.isArray(v) && Array.isArray(v[0]) && typeof v[0][0] === "number" && v.length > 3 && JSON.stringify(v[0]) === JSON.stringify(v.at(-1))
+        ? [...v].sort((a, b) => a[0] - b[0] || a[1] - b[1]) : v);
+    const changed = (await fromFile.query(true, PAGE_ALL)).features.filter((f) => {
+      const o = served.find((x) => x.id === f.id)!;
+      return canonical(o.geometry) !== canonical(f.geometry);
+    });
+    assert.deepEqual(changed.map((f) => f.id), []);
+    assert.deepEqual(served.map((f) => f.id).filter((id) => served.find((x) => x.id === id)!.geometry === null), [3, 11, 19]); // no geometry in the file
+  });
+
+  const spatialSets = [
+    ["S_INTERSECTS", [...SPATIAL_MARGIN, ...SPATIAL_EXACT]],
+    ["the other relations", [...RELATIONS_MARGIN, ...RELATIONS_EXACT]],
+  ] as const;
+  for (const [label, filters] of spatialSets) {
+    for (const [index, store] of [["with the spatial index", () => fromOracle], ["without index or metadata", () => fromOraclePlain]] as const) {
+      it(`${label}, ${filters.length * 2} filters (the literal first too), ${index}: Oracle selects what evaluate with GEOS selects`, async (t) => {
+        if (oracleSkip) return t.skip(oracleSkip);
+        const out: string[] = [];
+        // Feature 8 is a GeometryCollection whose members meet (a point at a line's end): Oracle and GEOS read such a
+        // collection differently for the relations but S_INTERSECTS and S_DISJOINT, the dialect's documented deviation.
+        let collection = 0;
+        for (const filter of [...filters, ...filters.map(literalFirst)] as Cql2Filter[]) {
+          const [x, y] = await Promise.all([fromOracleServed!.query(filter, PAGE_ALL), store()!.query(filter, PAGE_ALL)]);
+          const ids = (r: { features: readonly Feature[] }) => r.features.map((f) => f.id);
+          const [a, b] = [ids(x), ids(y)];
+          const differing = [...a.filter((id) => !b.includes(id)), ...b.filter((id) => !a.includes(id))];
+          if (differing.length === 0) continue;
+          const op = (filter as { op: string }).op;
+          if (differing.every((id) => id === 8) && op !== "s_intersects" && op !== "s_disjoint") collection++;
+          else out.push(`${JSON.stringify(filter).slice(0, 160)}\n    evaluate ${a} / oracle ${b}`);
+        }
+        assert.equal(out.slice(0, 10).join("\n"), "");
+        t.diagnostic(`${collection} answers differ on feature 8 (a collection whose members meet: the documented deviation)`);
+        assert.equal(collection, label === "S_INTERSECTS" ? 0 : 8);
+      });
+    }
+  }
+
+  for (const [label, filters] of [["base", FILTERS], ["Property-Property", PAIRS], ["Arithmetic", ARITHMETIC], ["Temporal", TEMPORAL]] as const) {
+    it(`${label}, ${filters.length} filters: Oracle selects what evaluate selects from the features Oracle serves`, async (t) => {
+      if (oracleSkip) return t.skip(oracleSkip);
+      const out: string[] = [];
+      for (const filter of filters) {
+        const [x, y] = await Promise.all([fromOracleServed!.query(filter, PAGE_ALL), fromOracle!.query(filter, PAGE_ALL)]);
+        if (!isDeepStrictEqual(x, y)) out.push(`${JSON.stringify(filter)}\n    evaluate ${x.features.map((f) => f.id)} / oracle ${y.features.map((f) => f.id)}`);
+      }
+      assert.equal(out.slice(0, 10).join("\n"), "");
+    });
+  }
+});
+
+describe("the kitchen sink in SQL Server (Basic Spatial Functions)", () => {
+  const PAGE_ALL = { limit: 1000, offset: 0 };
+
+  it("the same queryables as the file", (t) => {
+    if (sqlServerSkip) return t.skip(sqlServerSkip);
+    assert.deepEqual(fromSqlServer!.queryables(), fromFile.queryables());
+  });
+
+  it("serves the file's values, but for the documented rule: text in NFC ('' is kept)", async (t) => {
+    if (sqlServerSkip) return t.skip(sqlServerSkip);
+    const served = (await fromSqlServer!.query(true, PAGE_ALL)).features;
+    const changed: string[] = [];
+    for (const f of (await fromFile.query(true, PAGE_ALL)).features) {
+      const o = served.find((x) => x.id === f.id)!;
+      for (const [k, v] of Object.entries(f.properties)) if (!isDeepStrictEqual(o.properties[k], v)) changed.push(`${f.id}.${k}: ${JSON.stringify(v)} → ${JSON.stringify(o.properties[k])}`);
+    }
+    assert.deepEqual(changed, [
+      `5.name: "café" → "café"`, // NFD → NFC
+      `17.name: "Ångström" → "Ångström"`, // U+212B ANGSTROM SIGN, whose NFC is U+00C5
+    ]);
+  });
+
+  it("serves the file's geometries exactly (WKB)", async (t) => {
+    if (sqlServerSkip) return t.skip(sqlServerSkip);
+    const served = (await fromSqlServer!.query(true, PAGE_ALL)).features;
+    for (const f of (await fromFile.query(true, PAGE_ALL)).features) assert.deepEqual(served.find((x) => x.id === f.id)!.geometry, f.geometry, `feature ${f.id}`);
+  });
+
+  it(`S_INTERSECTS, ${(SPATIAL_MARGIN.length + SPATIAL_EXACT.length) * 4} filters (the literal first, and under NOT): SQL Server selects what evaluate selects`, async (t) => {
+    if (sqlServerSkip) return t.skip(sqlServerSkip);
+    const base = [...SPATIAL_MARGIN, ...SPATIAL_EXACT];
+    const filters = [...base, ...base.map(literalFirst)].flatMap((f) => [f, { op: "not", args: [f] }]) as Cql2Filter[];
+    const out: string[] = [];
+    for (const filter of filters) {
+      const [x, y] = await Promise.all([fromSqlServerServed!.query(filter, PAGE_ALL), fromSqlServer!.query(filter, PAGE_ALL)]);
+      const ids = (r: { features: readonly Feature[] }) => r.features.map((f) => f.id).join(",");
+      if (ids(x) !== ids(y)) out.push(`${JSON.stringify(filter).slice(0, 160)}\n    evaluate ${ids(x)} / sqlserver ${ids(y)}`);
+    }
+    assert.equal(out.slice(0, 10).join("\n"), "");
+  });
+
+  for (const [label, filters] of [["base", FILTERS], ["Property-Property", PAIRS], ["Arithmetic", ARITHMETIC], ["Temporal", TEMPORAL]] as const) {
+    it(`${label}, ${filters.length} filters: SQL Server selects what evaluate selects from the features SQL Server serves`, async (t) => {
+      if (sqlServerSkip) return t.skip(sqlServerSkip);
+      const out: string[] = [];
+      for (const filter of filters) {
+        const [x, y] = await Promise.all([fromSqlServerServed!.query(filter, PAGE_ALL), fromSqlServer!.query(filter, PAGE_ALL)]);
+        if (!isDeepStrictEqual(x, y)) out.push(`${JSON.stringify(filter)}\n    evaluate ${x.features.map((f) => f.id)} / sqlserver ${y.features.map((f) => f.id)}`);
+      }
+      assert.equal(out.slice(0, 10).join("\n"), "");
+    });
+  }
 });

@@ -5,6 +5,73 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.5.0] - unreleased
+
+Two more SQL databases, for enterprise GIS: **Oracle Database** and **SQL Server**, each selecting exactly what
+`evaluate` selects, but for the rules each documents. A minor version: every existing filter gives the same SQL, the
+same text and the same answers as in 1.4.0.
+
+### Added
+
+- **Dialect `oracle`** in `ogc-cql2/sql`, for Oracle Database 23ai and later, with Oracle Spatial: every conformance
+  class.
+  - Text in code point order whatever the session's NLS settings, and numbers as BINARY_DOUBLE.
+  - Instants as UTC (a DATE is a date-time with no zone, or a day with `format: "date"`).
+  - Every spatial relation, planar, with a tolerance of 1e-10.
+  - `:1` placeholders, each read once.
+- **`oracleFunctions(schema?)`**: the statements, an array run one at a time, that create what the dialect calls.
+  - CASEI and ACCENTI with the package's own Unicode normalization;
+  - the day and instant readers;
+  - `%` and `^`;
+  - `cql2_geometry`, which builds literals exactly;
+  - `cql2_relate`, the spatial relations;
+  - `cql2_planar`, for the spatial index.
+- **`oracleValue(column, sqlColumn)`**: the SELECT expression that serves each column as the dialect compares it.
+- **`SqlColumn.spatialIndex`** (`oracle`): the geometry column has a planar spatial index, on `cql2_planar(column)`.
+  The candidates are found through it first, outside a NOT. A column's own SRID 4326 index is geodetic, and loses
+  planar candidates.
+- **Dialect `sqlserver`**, for SQL Server 2022 and later: every class but Spatial Functions.
+  - Text compared as UTF-8 bytes (code point order, no blank padding).
+  - Numbers as float, and arithmetic that never raises an error.
+  - S_INTERSECTS on `geometry` through `STDistance`, with the spatial index.
+  - `@p1` named placeholders.
+- **`sqlserverFunctions(schema = "dbo")`**: the T-SQL batches that create the dialect's functions: CASEI and ACCENTI
+  (the package's own normalization), LIKE with `_`, the day and instant readers, and arithmetic.
+- **`sqlserverValue(column, sqlColumn)`**, and **`SqlColumn.srid`** for `sqlserver`: a geometry column's SRID, in which
+  the literal is built.
+- **`sqlConformance`** lists every class for `oracle`, and all but Spatial Functions for `sqlserver`.
+- **The guide:** a page for each, [Oracle Database](docs/guide/oracle.md) and [SQL Server](docs/guide/sqlserver.md).
+
+### Documented, where these databases differ
+
+- **Oracle:**
+  - `''` is NULL there: comparisons with an empty string are decided when the SQL is built, and a value made only of
+    accent marks is NULL under ACCENTI;
+  - stored text is assumed to be in NFC;
+  - geometries within 1e-10 of each other's boundary may be decided either way (measured: points within 1.4e-14° of a
+    US state's boundary);
+  - a GeometryCollection whose own members meet can get other answers than GEOS's, but for S_INTERSECTS and
+    S_DISJOINT;
+  - folded text, or NVARCHAR2 as VARCHAR2, can't be longer than 4,000 bytes (the query fails);
+  - `NLS_CALENDAR` must be GREGORIAN.
+- **SQL Server:**
+  - Spatial Functions aren't translated (SQL Server's grid differs from GEOS on boundaries), S_DISJOINT with them:
+    write NOT S_INTERSECTS;
+  - a point within rounding of a boundary may be decided either way;
+  - an invalid geometry makes the query fail;
+  - stored text is assumed to be in NFC;
+  - an nvarchar column in `Latin1_General_100_BIN2` can't be compared exactly;
+  - `^` close to the largest float gives NULL.
+- **Both:** characters added after Unicode 15.0.0 are decomposed by the database's own Unicode version, as between
+  the other engines.
+
+### Tested
+
+- **Oracle:** Oracle AI Database 26ai Free 23.26.3, with `oracledb` 26.0.0.
+- **SQL Server:** 2022 (16.0.4305.5) and 2025 (17.0.5035.5), with `mssql` 12.7.13.
+- **How:** demo-server's differential tests (thousands of generated filters against `evaluate`, the spatial ones
+  against GEOS on the US states), the functions checked exhaustively against `evaluate`. Live, not in CI.
+
 ## [1.4.0] - 2026-11-02
 
 Each engine now says which conformance classes it supports, so an application validates a filter against them
@@ -587,6 +654,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[1.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.4.0...v1.5.0
 [1.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v0.12.0...v1.0.0

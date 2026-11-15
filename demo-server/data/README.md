@@ -29,3 +29,21 @@ The connection is in `demo-server/.env` (copy `.env_sample`). Then, once:
    `kitchen_sink.sql` and `kitchen_sink.geojson`, `kitchen_sink_3857` in Web Mercator, `states` and `sub_regions` from
    `usa.gpkg`) and ogc-cql2's `cql2_*` functions. Safe to run again. Set `PSQL` / `OGR2OGR` if those aren't on the
    path; with Postgres.app they are in `/Applications/Postgres.app/Contents/Versions/17/bin`.
+
+## Oracle
+
+The connection is in `demo-server/.env` (`ORACLE_CONNECT` as `host:port/service`, `ORACLE_USER`, `ORACLE_PASSWORD`),
+for Oracle Database 23ai or later with Oracle Spatial (the Free edition's full image has it; its slim image doesn't).
+Then, once, as that user: `node --env-file-if-exists=.env data/load-oracle.ts` (from `demo-server`, the package
+built). It creates `KITCHEN_SINK` and `KITCHEN_SINK_PLAIN` (the same rows, without spatial metadata or index) from
+`kitchen_sink.geojson`, `STATES` from `states.geojson`, the planar spatial indexes the `oracle` dialect uses, and
+ogc-cql2's `cql2_*` functions. Text is stored in NFC; Oracle stores `''` as NULL. Safe to run again.
+
+## SQL Server
+
+The connection is in `demo-server/.env` (`MSSQL_SERVER`, `MSSQL_PORT`, `MSSQL_DATABASE`, `MSSQL_USER`,
+`MSSQL_PASSWORD`, and `MSSQL_ENCRYPT=false` for a server without TLS), for SQL Server 2022 or later. Then, once:
+`node --env-file-if-exists=.env data/load-sqlserver.ts` (from `demo-server`, the package built). It creates
+`dbo.kitchen_sink` (three kinds of text column: nvarchar with a supplementary-character collation, varchar UTF-8, and
+nvarchar in the database's default collation), `dbo.states`, their spatial indexes, `dbo.bin2_text` (a column the store
+leaves out) and ogc-cql2's `cql2_*` functions. Text is stored in NFC. Safe to run again.
