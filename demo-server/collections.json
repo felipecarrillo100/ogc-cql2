@@ -13,7 +13,8 @@
         { "table": "cql2demo.states", "title": "US states" },
         { "table": "cql2demo.sub_regions", "title": "Census sub-regions" },
         { "table": "cql2demo.kitchen_sink", "title": "Kitchen sink" },
-        { "table": "cql2demo.kitchen_sink_3857", "title": "Kitchen sink (Web Mercator)" }
+        { "table": "cql2demo.kitchen_sink_3857", "title": "Kitchen sink (Web Mercator)" },
+        { "table": "cql2demo.arrays", "title": "Arrays", "arrays": { "doc": {}, "raw": {} } }
       ]
     },
     { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "STATES", "title": "US states" }, { "table": "KITCHEN_SINK", "title": "Kitchen sink", "days": ["day"] }] },

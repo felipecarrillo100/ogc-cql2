@@ -290,7 +290,14 @@ describe("the engines", () => {
     expect(evaluateConformance({ spatialEngine: { prepare: () => ({ relate: () => "FFFFFFFF2" }) } })).toContain(CONFORMANCE.arrays);
   });
 
-  it.for(["sqlite", "postgres", "duckdb", "oracle", "sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
+  it("postgres writes it (since its phase: see test/sql-postgres.test.ts and demo-server's live test)", () => {
+    expect(sqlConformance({ dialect: "postgres" })).toContain(CONFORMANCE.arrays);
+    expect(toSql(fn("a_contains", p("v"), ["a"]), { dialect: "postgres", columns: { v: { sqlType: "text[]" } } }).where).toBe(
+      "cql2_text_array(\"v\") @> ARRAY[$1]::text[]",
+    );
+  });
+
+  it.for(["sqlite", "duckdb", "oracle", "sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
     expect(sqlConformance({ dialect })).not.toContain(CONFORMANCE.arrays);
     expect(() => toSql(fn("a_contains", p("v"), ["a"]), { dialect, columns: { v: {} } })).toThrow(
       expect.objectContaining({ code: "unsupported", details: { conformance: CONFORMANCE.arrays } }),

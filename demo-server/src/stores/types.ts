@@ -15,9 +15,18 @@ export interface Feature {
 }
 
 /** A queryable property, as OGC API Features Part 3 describes one: a JSON Schema. No `type` when it is unknown. */
-export interface Queryable {
+export type Queryable = ScalarQueryable | ArrayQueryable;
+
+/** A property holding one value: a string, a number, a boolean (a date or an instant by its `format`). */
+export interface ScalarQueryable {
   readonly type?: "string" | "number" | "integer" | "boolean";
   readonly format?: "date" | "date-time";
+}
+
+/** A property holding an array (Array Functions, since ogc-cql2 1.6.0): `items` says what its elements hold, `{}` any. */
+export interface ArrayQueryable {
+  readonly type: "array";
+  readonly items: ScalarQueryable;
 }
 
 export interface CollectionDescription {

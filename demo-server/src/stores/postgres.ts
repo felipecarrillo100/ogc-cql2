@@ -15,7 +15,7 @@ import pg from "pg";
 import type { Cql2Filter } from "ogc-cql2";
 import { postgresValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
-import { type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
+import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface PostgresTable {
   /** `schema.table`, or `table` on the search path. */
@@ -23,6 +23,11 @@ export interface PostgresTable {
   /** The id column, when it isn't the (single-column) primary key. */
   readonly id?: string;
   readonly title?: string;
+  /**
+   * `jsonb` / `json` columns that hold arrays, with what their elements hold (`items`, as in a queryable: `{}` for
+   * any). Native arrays (`text[]`…) need no entry: their type says it.
+   */
+  readonly arrays?: Readonly<Record<string, Queryable>>;
 }
 
 export interface PostgresSource {
@@ -39,6 +44,11 @@ const ID = /^[A-Za-z0-9_-]+$/;
 /** A PostgreSQL type (as `format_type` names it) → queryable; `undefined` for a type the dialect can't compare. */
 function queryableOf(sqlType: string): Queryable | undefined {
   const t = sqlType.toLowerCase().replace(/\(\s*\d+\s*(?:,\s*\d+\s*)?\)/g, "").replace(/\s+/g, " ").trim();
+  if (t.endsWith("[]")) {
+    // A native array: its elements' type (a matrix holds the same type: served as no array, see postgresValue).
+    const items = queryableOf(sqlType.replace(/(\s*\[\s*\])+\s*$/, ""));
+    return items && items.type !== "array" ? { type: "array", items } : undefined;
+  }
   if (["text", "character varying", "character", "name", "citext"].includes(t)) return { type: "string" };
   if (["smallint", "integer", "bigint"].includes(t)) return { type: "integer" };
   if (["real", "double precision", "numeric"].includes(t)) return { type: "number" };
@@ -65,14 +75,15 @@ export async function openPostgres(
   if (source.functionSchema) {
     const s = quote(source.functionSchema);
     const { rows } = await pool.query(
-      "SELECT to_regprocedure($1) IS NOT NULL AS casei, to_regprocedure($2) IS NOT NULL AS accenti, to_regprocedure($3) IS NOT NULL AS arithmetic",
-      [`${s}.cql2_casei(text)`, `${s}.cql2_accenti(text)`, `${s}.cql2_arithmetic(text, double precision, double precision)`],
+      "SELECT to_regprocedure($1) IS NOT NULL AS casei, to_regprocedure($2) IS NOT NULL AS accenti, to_regprocedure($3) IS NOT NULL AS arithmetic, to_regprocedure($4) IS NOT NULL AS arrays",
+      [`${s}.cql2_casei(text)`, `${s}.cql2_accenti(text)`, `${s}.cql2_arithmetic(text, double precision, double precision)`, `${s}.cql2_text_array(anyarray)`],
     );
     const where = `schema "${source.functionSchema}"`;
     const fix = "filters using CASEI, ACCENTI or arithmetic, or dates in text, will fail. Run postgresFunctions there (load-postgres.sh does).";
     if (!rows[0].casei) warnings.push(`The cql2_* functions aren't in ${where}: ${fix}`);
     else if (!rows[0].accenti) warnings.push(`The cql2_* functions in ${where} lack cql2_accenti (added in ogc-cql2 0.5.0): ${fix}`);
     else if (!rows[0].arithmetic) warnings.push(`The cql2_* functions in ${where} lack cql2_arithmetic (added in ogc-cql2 1.2.0): ${fix}`);
+    else if (!rows[0].arrays) warnings.push(`The cql2_* functions in ${where} lack cql2_text_array and the other array functions (added in ogc-cql2 1.6.0): array filters will fail. Run postgresFunctions there (load-postgres.sh does).`);
   }
   for (const entry of source.tables) {
     const name = entry.table.split(".").pop()!;
@@ -139,13 +150,15 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
   const columns: Record<string, SqlColumn> = {};
   for (const a of attributes as { name: string; type: string; typname: string }[]) {
     if (a.name === idColumn || a.name === geometryAttribute?.name) continue;
-    const q = queryableOf(a.type);
+    const json = (a.typname === "jsonb" || a.typname === "json") && entry.arrays && Object.hasOwn(entry.arrays, a.name);
+    const q: Queryable | undefined = json ? { type: "array", items: entry.arrays![a.name] as ScalarQueryable } : queryableOf(a.type);
     if (!q) {
       warnings.push(`Column "${a.name}" (${a.type}) isn't queryable and isn't served.`);
       continue;
     }
     queryables[a.name] = q;
-    columns[a.name] = { ...q, sqlType: a.type };
+    // An array column is declared to the dialect by its type and its items (SqlColumn's type names scalars).
+    columns[a.name] = q.type === "array" ? { sqlType: a.type, items: q.items } : { ...q, sqlType: a.type };
   }
 
   const names = Object.keys(columns);

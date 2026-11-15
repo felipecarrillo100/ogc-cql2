@@ -26,7 +26,7 @@ export type CollectionConfig =
   | { readonly source: "geopackage"; readonly file: string; readonly prefix?: string; readonly tables?: readonly string[] }
   | {
       readonly source: "postgres" | "oracle" | "sqlserver";
-      readonly tables: readonly { readonly table: string; readonly id?: string; readonly title?: string; readonly days?: readonly string[] }[];
+      readonly tables: readonly { readonly table: string; readonly id?: string; readonly title?: string; readonly days?: readonly string[]; readonly arrays?: Readonly<Record<string, object>> }[];
       readonly prefix?: string;
       readonly functionSchema?: string;
     };
@@ -46,11 +46,16 @@ export function readConfig(path: string): CollectionConfig[] {
       const tables = entry.tables;
       const days = (t: Record<string, unknown>) =>
         t.days === undefined || (entry.source === "oracle" && Array.isArray(t.days) && t.days.every((d) => typeof d === "string"));
+      // PostgreSQL: the jsonb / json columns that hold arrays, each with its items (a queryable, {} for any).
+      const arrays = (t: Record<string, unknown>) =>
+        t.arrays === undefined || (entry.source === "postgres" && typeof t.arrays === "object" && t.arrays !== null &&
+          !Array.isArray(t.arrays) && Object.values(t.arrays).every((q) => typeof q === "object" && q !== null && !Array.isArray(q)));
       const ok = Array.isArray(tables) && tables.length > 0 && tables.every((t: Record<string, unknown>) =>
         typeof t === "object" && t !== null && typeof t.table === "string" &&
-        (t.id === undefined || typeof t.id === "string") && (t.title === undefined || typeof t.title === "string") && days(t));
+        (t.id === undefined || typeof t.id === "string") && (t.title === undefined || typeof t.title === "string") && days(t) && arrays(t));
       if (!ok) {
-        problems.push(`${where}: "tables" must list { "table": "schema.table", "id"?, "title"?${entry.source === "oracle" ? `, "days"?` : ""} }.`);
+        const extra = entry.source === "oracle" ? `, "days"?` : entry.source === "postgres" ? `, "arrays"?: { "column": { "type": … } }` : "";
+        problems.push(`${where}: "tables" must list { "table": "schema.table", "id"?, "title"?${extra} }.`);
         return;
       }
       if (entry.prefix !== undefined && (typeof entry.prefix !== "string" || !/^[A-Za-z0-9_-]*$/.test(entry.prefix))) {
@@ -59,7 +64,7 @@ export function readConfig(path: string): CollectionConfig[] {
       }
       out.push({
         source: entry.source,
-        tables: tables as { table: string; id?: string; title?: string; days?: string[] }[],
+        tables: tables as { table: string; id?: string; title?: string; days?: string[]; arrays?: Record<string, object> }[],
         ...(entry.prefix !== undefined ? { prefix: entry.prefix as string } : {}),
         ...(typeof entry.functionSchema === "string" ? { functionSchema: entry.functionSchema } : {}),
       });

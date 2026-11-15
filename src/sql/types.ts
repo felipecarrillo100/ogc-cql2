@@ -5,7 +5,7 @@
 
 import type { Fold } from "../core/folds.js";
 import type { MatrixRelation } from "../core/relate.js";
-import type { ArithmeticOperator, Queryable, SpatialLiteral } from "../core/types.js";
+import type { ArithmeticOperator, ArrayOperator, Queryable, SpatialLiteral } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb" | "oracle" | "sqlserver";
 
@@ -193,7 +193,19 @@ export interface Dialect {
    * `evaluate` decides it; `undefined` when a column holds no geometry. No prefilter: neither side is a constant box.
    */
   spatialPair?(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string, fn: (name: string) => string): string | undefined;
+  /**
+   * An array function (Array Functions) of an array column and a literal set, or of two array columns, exactly as
+   * `evaluate` decides it on the values the application serves: sets, a NULL element left out, NULL when a column
+   * isn't an array; `undefined` when the column holds no arrays (no value can match). Absent: the class is
+   * `unsupported`. A literal first is written by the walker as the converse function, two literals are decided there.
+   */
+  arrays?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: ArraySide, param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined;
 }
+
+/** The other side of an array function: a column, or a literal set, each element keyed as `evaluate` keys it. */
+export type ArraySide =
+  | { readonly sql: string; readonly column: SqlColumn }
+  | { readonly literals: readonly { readonly kind: Exclude<Kind, "fold">; readonly value: SqlValue }[] };
 
 /** A side of a spatial relation of two geometries: a column, or a literal. */
 export type PairSide = { readonly sql: string; readonly column: SqlColumn } | { readonly literal: SpatialLiteral };

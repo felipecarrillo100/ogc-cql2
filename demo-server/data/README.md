@@ -27,8 +27,11 @@ The connection is in `demo-server/.env` (copy `.env_sample`). Then, once:
    PostGIS and creates the schema `cql2demo`, owned by the demo's user.
 2. As the demo's user: `sh load-postgres.sh`. It creates the tables in `cql2demo` (`kitchen_sink` from
    `kitchen_sink.sql` and `kitchen_sink.geojson`, `kitchen_sink_3857` in Web Mercator, `states` and `sub_regions` from
-   `usa.gpkg`) and ogc-cql2's `cql2_*` functions. Safe to run again. Set `PSQL` / `OGR2OGR` if those aren't on the
-   path; with Postgres.app they are in `/Applications/Postgres.app/Contents/Versions/17/bin`.
+   `usa.gpkg`) and ogc-cql2's `cql2_*` functions, then `arrays` from `arrays.sql` (native and JSON arrays for the
+   array functions, with GIN indexes on the `cql2_*_array` functions). Safe to run again. Set `PSQL` / `OGR2OGR` if
+   those aren't on the path; with Postgres.app they are in `/Applications/Postgres.app/Contents/Versions/17/bin`.
+   In `collections.json`, a table's optional `"arrays"` lists its `jsonb` / `json` columns that hold arrays, each with
+   what its elements hold (`{}` for any, `{ "type": "string" }`…); native arrays (`text[]`…) need no entry.
 
 ## Oracle
 

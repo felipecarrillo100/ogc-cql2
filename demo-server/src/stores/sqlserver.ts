@@ -15,7 +15,7 @@ import mssql from "mssql";
 import type { Cql2Filter } from "ogc-cql2";
 import { sqlConformance, sqlserverValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
-import { type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
+import { type CollectionDescription, type Feature, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface SqlServerTable {
   /** `schema.table`, or `table` in `dbo`. */
@@ -38,7 +38,7 @@ const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const ID = /^[A-Za-z0-9_-]+$/;
 
 /** A SQL Server type → queryable; `undefined` for a type the dialect can't compare. */
-function queryableOf(type: string, scale: number): Queryable | undefined {
+function queryableOf(type: string, scale: number): ScalarQueryable | undefined {
   if (["varchar", "char", "nvarchar", "nchar"].includes(type)) return { type: "string" };
   if (["int", "bigint", "smallint", "tinyint"].includes(type)) return { type: "integer" };
   if (["decimal", "numeric"].includes(type)) return { type: scale === 0 ? "integer" : "number" };
@@ -131,7 +131,7 @@ async function tableStore(pool: mssql.ConnectionPool, id: string, entry: SqlServ
     if (srid === 4326) geometryColumn = { format: "geometry-any", sqlType: "geometry", column: geometryInfo.name };
     else warnings.push(`Its geometry column "${geometryInfo.name}" is in SRID ${srid}: features are served without geometry.`);
   }
-  const queryables: Record<string, Queryable> = {};
+  const queryables: Record<string, ScalarQueryable> = {};
   const columns: Record<string, SqlColumn> = {};
   for (const c of columnsInfo) {
     if (c.name === idColumn || c.name === geometryInfo?.name) continue;

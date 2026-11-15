@@ -7,7 +7,7 @@
 import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { duckdbValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
-import type { Feature, Queryable } from "./types.ts";
+import type { Feature, Queryable, ScalarQueryable } from "./types.ts";
 
 const bare = (sqlType: string): string => sqlType.toLowerCase().replace(/\(.*\)$/, "").trim();
 
@@ -16,7 +16,7 @@ const INTEGER = ["tinyint", "smallint", "integer", "int", "bigint", "hugeint", "
 const NUMBER = ["float", "real", "double", "decimal", "numeric"];
 
 /** A DuckDB type (as `DESCRIBE` names it) → queryable; `undefined` for a type the dialect can't compare. */
-export function queryableOf(sqlType: string): Queryable | undefined {
+export function queryableOf(sqlType: string): ScalarQueryable | undefined {
   const t = bare(sqlType);
   if (TEXT.includes(t)) return { type: "string" };
   if (INTEGER.includes(t)) return { type: "integer" };
@@ -122,7 +122,7 @@ export function parquetTable(
     throw new Error(types[idColumn] === undefined ? `it has no column "${idColumn}"; set "idColumn" in collections.json.` : `its id column "${idColumn}" is ${types[idColumn]}, not an integer or text.`);
   }
 
-  const queryables: Record<string, Queryable> = {};
+  const queryables: Record<string, ScalarQueryable> = {};
   const columns: Record<string, SqlColumn> = {};
   for (const [name, sqlType] of Object.entries(types)) {
     if (name === idColumn || geometry.hidden.includes(name)) continue;

@@ -115,7 +115,7 @@ describe("the routes on the PostgreSQL collections", () => {
     const answer = await read(fetch(`${base}/collections`));
     const pg = answer.collections.filter((c: { source: string }) => c.source === "postgres");
     assert.deepEqual(pg.map((c: { id: string; featureCount: number }) => [c.id, c.featureCount]), [
-      ["pg-states", 51], ["pg-sub_regions", 9], ["pg-kitchen_sink", 24], ["pg-kitchen_sink_3857", 24],
+      ["pg-states", 51], ["pg-sub_regions", 9], ["pg-kitchen_sink", 24], ["pg-kitchen_sink_3857", 24], ["pg-arrays", 13],
     ]);
   });
 

@@ -16,7 +16,7 @@
 import oracledb from "oracledb";
 import type { Cql2Filter } from "ogc-cql2";
 import { oracleValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
-import { type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
+import { type CollectionDescription, type Feature, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface OracleTable {
   /** `TABLE` in the connection's schema, or `OWNER.TABLE`, as the data dictionary names them. */
@@ -40,7 +40,7 @@ const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const ID = /^[A-Za-z0-9_-]+$/;
 
 /** An Oracle column type → queryable; `undefined` for a type the dialect can't compare. */
-function queryableOf(type: string, scale: number | null, day: boolean): Queryable | undefined {
+function queryableOf(type: string, scale: number | null, day: boolean): ScalarQueryable | undefined {
   if (["VARCHAR2", "CHAR", "NVARCHAR2", "NCHAR"].includes(type)) return { type: "string" };
   if (type === "NUMBER") return { type: scale === 0 ? "integer" : "number" };
   if (["FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE"].includes(type)) return { type: "number" };
@@ -199,7 +199,7 @@ async function tableStore(pool: oracledb.Pool, id: string, entry: OracleTable, f
       warnings.push(`Its geometry column "${geometryInfo.NAME}" is in SRID ${srid}: features are served without geometry.`);
     }
   }
-  const queryables: Record<string, Queryable> = {};
+  const queryables: Record<string, ScalarQueryable> = {};
   const columns: Record<string, SqlColumn> = {};
   const days = new Set(entry.days ?? []);
   for (const c of columnsInfo) {

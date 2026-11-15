@@ -207,7 +207,7 @@ describe("postgresValue: what the application selects, so it serves what the SQL
   it("nothing for a type the dialect can't compare", () => {
     expect(postgresValue("j", { sqlType: "jsonb" })).toBeUndefined();
     expect(postgresValue("u", { sqlType: "uuid" })).toBeUndefined();
-    expect(postgresValue("a", { sqlType: "integer[]" })).toBeUndefined();
+    expect(postgresValue("a", { sqlType: "uuid[]" })).toBeUndefined(); // an array of what it can't compare
   });
 });
 
@@ -303,5 +303,95 @@ describe("S_INTERSECTS in PostGIS", () => {
     // Another SRID and geography: the column as for S_INTERSECTS.
     expect(toSql({ op: "s_within", args: [p("mercator"), square] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where).toContain(`ST_Transform("mercator", 4326) @ `);
     expect(toSql({ op: "s_within", args: [p("name"), square] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where).toBe("NULL::boolean");
+  });
+});
+
+describe("Array Functions in the postgres dialect (since 1.6.0)", () => {
+  const ARRAYS: Record<string, SqlColumn> = {
+    tags: { sqlType: "text[]" },
+    codes: { sqlType: "character varying(20)[]" },
+    nums: { sqlType: "double precision[]" },
+    flags: { sqlType: "boolean[]" },
+    days: { sqlType: "date[]" },
+    moments: { sqlType: "timestamp with time zone[]" },
+    doc: { sqlType: "jsonb", items: {} },
+    raw: { sqlType: "json", items: { type: "string" } },
+    plainJson: { sqlType: "jsonb" }, // no items: not declared an array column
+    name: { type: "string", sqlType: "text" },
+  };
+  const a = (op: string, x: unknown, y: unknown) => toSql({ op, args: [x, y] } as Cql2Filter, { dialect: "postgres", columns: ARRAYS });
+
+  it("a native array against literals of its own kind: the array operators on its cql2_*_array function (a GIN index can serve them)", () => {
+    expect(a("a_contains", p("tags"), ["a", "é"])).toEqual({ where: `cql2_text_array("tags") @> ARRAY[$1, $2]::text[]`, params: ["a", "é"] });
+    expect(a("a_containedBy", p("codes"), []).where).toBe(`cql2_text_array("codes") <@ '{}'::text[]`);
+    expect(a("a_overlaps", p("nums"), [1, 2.5])).toEqual({ where: `cql2_number_array("nums") && ARRAY[$1, $2]::double precision[]`, params: [1, 2.5] });
+    expect(a("a_equals", p("flags"), [true]).where).toBe(`(cql2_boolean_array("flags") @> ARRAY[$1]::boolean[] AND cql2_boolean_array("flags") <@ ARRAY[$2]::boolean[])`);
+    expect(a("a_contains", p("days"), [{ date: "2010-02-10" }])).toEqual({ where: `cql2_date_array("days") @> ARRAY[$1]::date[]`, params: ["2010-02-10"] });
+    // Instants as UTC wall-clock time, as cql2_instant_array gives them (to the millisecond).
+    expect(a("a_contains", p("moments"), [{ timestamp: "2010-02-10T05:30:00.1239Z" }])).toEqual({
+      where: `cql2_instant_array("moments") @> ARRAY[$1]::timestamp[]`, params: ["2010-02-10T05:30:00.123"],
+    });
+  });
+
+  it("a literal first is the converse function; two literals are decided here", () => {
+    expect(a("a_containedBy", ["a"], p("tags")).where).toBe(`cql2_text_array("tags") @> ARRAY[$1]::text[]`);
+    expect(a("a_contains", ["a", "b"], ["b"])).toEqual({ where: "TRUE", params: [] });
+    expect(a("a_overlaps", ["1"], [1])).toEqual({ where: "FALSE", params: [] });
+  });
+
+  it("other kinds (a date against text[], mixed sets): element by element, each match IS TRUE, NULL for no array", () => {
+    const { where, params } = a("a_overlaps", p("tags"), ["a", { date: "2010-02-10" }]);
+    expect(where).toBe(
+      `(CASE WHEN ("tags" IS NOT NULL AND coalesce(array_ndims("tags"), 1) = 1) THEN EXISTS (SELECT 1 FROM unnest("tags") AS cql2_e(v) WHERE ` +
+        `(normalize(cql2_e.v::text, NFC) COLLATE "C" = $1) IS TRUE OR (cql2_day(cql2_e.v::text) COLLATE "C" = $2) IS TRUE) END)`,
+    );
+    expect(params).toEqual(["a", "2010-02-10"]);
+  });
+
+  it("a literal element of a kind the column can't hold is in no set: A_CONTAINS and A_EQUALS FALSE (NULL for no array)", () => {
+    expect(a("a_contains", p("flags"), [true, 1]).where).toBe(`(CASE WHEN ("flags" IS NOT NULL AND coalesce(array_ndims("flags"), 1) = 1) THEN FALSE END)`);
+    expect(a("a_containedBy", p("flags"), [1]).where).toContain("AND NOT (FALSE)");
+  });
+
+  it("JSON arrays: jsonb_array_elements, each element read by its JSON type; json cast to jsonb", () => {
+    const { where } = a("a_containedBy", p("doc"), [1, true]);
+    expect(where).toBe(
+      `(CASE WHEN jsonb_typeof("doc") = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements("doc") AS cql2_e(v) WHERE jsonb_typeof(cql2_e.v) <> 'null' AND NOT (` +
+        `(cql2_json_double(cql2_e.v) = $1::double precision) IS TRUE OR ((CASE WHEN jsonb_typeof(cql2_e.v) = 'boolean' THEN (cql2_e.v #>> '{}')::boolean END) = $2::boolean) IS TRUE)) END)`,
+    );
+    expect(a("a_contains", p("raw"), ["a"]).where).toContain(`jsonb_array_elements("raw"::jsonb)`);
+  });
+
+  it("two array columns: element by element, as their items say, else by their own kinds", () => {
+    expect(a("a_overlaps", p("tags"), p("raw")).where).toBe(
+      `(CASE WHEN ("tags" IS NOT NULL AND coalesce(array_ndims("tags"), 1) = 1) AND jsonb_typeof("raw"::jsonb) = 'array' THEN EXISTS (SELECT 1 FROM ` +
+        `unnest("tags") AS cql2_e(v), jsonb_array_elements("raw"::jsonb) AS cql2_f(v) WHERE (normalize(cql2_e.v::text, NFC) COLLATE "C" = ` +
+        `normalize((CASE WHEN jsonb_typeof(cql2_f.v) = 'string' THEN cql2_f.v #>> '{}' END), NFC) COLLATE "C") IS TRUE) END)`,
+    );
+    expect(a("a_equals", p("tags"), p("days")).where).toContain(`COALESCE(to_char(cql2_f.v, 'YYYY-MM-DD'), cql2_f.v::text) COLLATE "C"`);
+  });
+
+  it("no array column (a scalar, jsonb without items): no value can match", () => {
+    expect(a("a_contains", p("name"), ["a"]).where).toBe("NULL::boolean");
+    expect(a("a_contains", p("plainJson"), ["a"]).where).toBe("NULL::boolean");
+  });
+
+  it("postgresValue serves an array as JSON, element by element, a matrix as its text; a JSON array as it is", () => {
+    expect(postgresValue("tags", ARRAYS.tags!)).toBe(
+      `(CASE WHEN "tags" IS NULL THEN NULL WHEN array_ndims("tags") > 1 THEN to_jsonb("tags"::text) ELSE COALESCE((SELECT ` +
+        `jsonb_agg(cql2_e.v ORDER BY cql2_e.o) FROM unnest("tags") WITH ORDINALITY AS cql2_e(v, o)), '[]'::jsonb) END)`,
+    );
+    expect(postgresValue("days", ARRAYS.days!)).toContain(`jsonb_agg(COALESCE(to_char(cql2_e.v, 'YYYY-MM-DD'), cql2_e.v::text) ORDER BY cql2_e.o)`);
+    expect(postgresValue("doc", ARRAYS.doc!)).toBe(`"doc"`);
+    expect(postgresValue("j", ARRAYS.plainJson!)).toBeUndefined();
+  });
+
+  it("postgresFunctions creates the array functions, IMMUTABLE so that a GIN index can be built on them", () => {
+    const text = postgresFunctions("cql2demo");
+    for (const name of ["cql2_text_array", "cql2_number_array", "cql2_boolean_array", "cql2_date_array", "cql2_instant_array"]) {
+      expect(text).toMatch(new RegExp(`CREATE OR REPLACE FUNCTION "cql2demo"\\.${name}\\(a anyarray\\) RETURNS [a-z ]+\\[\\]\\nLANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE`));
+    }
+    expect(text).toContain(`CREATE OR REPLACE FUNCTION "cql2demo".cql2_json_double(j jsonb) RETURNS double precision`);
+    expect(text).toContain("179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792");
   });
 });

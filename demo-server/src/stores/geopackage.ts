@@ -20,7 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { Cql2Filter } from "ogc-cql2";
 import { sqlConformance, sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeGeoPackageBinary, type Geometry } from "../geopackage/binary.ts";
-import { type CollectionDescription, type Feature, type Queryable, type Store } from "./types.ts";
+import { type CollectionDescription, type Feature, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface GeoPackageSource {
   readonly file: string;
@@ -34,7 +34,7 @@ export interface GeoPackageSource {
 const APPLICATION_IDS = new Map([[0x47504b47, "GPKG"], [0x47503130, "GP10"], [0x47503131, "GP11"]]);
 
 /** GeoPackage Table 1 (Req 5) → queryable. `undefined`: not queryable (BLOB). */
-function queryableOf(declared: string): Queryable | undefined | "unknown" {
+function queryableOf(declared: string): ScalarQueryable | undefined | "unknown" {
   const type = declared.toUpperCase().replace(/\s*\(.*\)$/, "");
   switch (type) {
     case "BOOLEAN":
@@ -162,7 +162,7 @@ function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boo
     }
   }
 
-  const queryables: Record<string, Queryable> = {};
+  const queryables: Record<string, ScalarQueryable> = {};
   const booleans = new Set<string>();
   for (const column of columns) {
     if (column.name === idColumn.name || column.name === geometryColumn) continue;
