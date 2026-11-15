@@ -194,18 +194,44 @@ export interface Dialect {
    */
   spatialPair?(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string, fn: (name: string) => string): string | undefined;
   /**
-   * An array function (Array Functions) of an array column and a literal set, or of two array columns, exactly as
-   * `evaluate` decides it on the values the application serves: sets, a NULL element left out, NULL when a column
-   * isn't an array; `undefined` when the column holds no arrays (no value can match). Absent: the class is
-   * `unsupported`. A literal first is written by the walker as the converse function, two literals are decided there.
+   * How the dialect reaches and reads an array column's elements (Array Functions); `undefined` when the column holds
+   * no arrays (no value can match). With it, the walker writes the array functions element by element, exactly as
+   * `evaluate` decides them on the served values. Absent: the class is `unsupported`.
    */
-  arrays?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: ArraySide, param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined;
+  arrayElements?(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined;
+  /**
+   * The array function of a column and literals, in the dialect's own operators, when it has an exact one (PostgreSQL's
+   * `@>` on its `cql2_*_array` functions, which a GIN index serves); `undefined`: the walker's element-by-element SQL.
+   */
+  arraysOwnKind?(op: ArrayOperator, sql: string, column: SqlColumn, literals: readonly ArrayLiteralValue[], param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined;
+  /**
+   * The array function of two array columns in the dialect's own SQL; `undefined`: the walker's, a `some` inside a
+   * `some` (DuckDB writes its own: see duckdb.ts).
+   */
+  arraysPair?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: { readonly sql: string; readonly column: SqlColumn }, fn: (name: string) => string): string | undefined;
 }
 
-/** The other side of an array function: a column, or a literal set, each element keyed as `evaluate` keys it. */
-export type ArraySide =
-  | { readonly sql: string; readonly column: SqlColumn }
-  | { readonly literals: readonly { readonly kind: Exclude<Kind, "fold">; readonly value: SqlValue }[] };
+/** An element of an array literal, keyed as `evaluate` keys it. */
+export interface ArrayLiteralValue {
+  readonly kind: Exclude<Kind, "fold">;
+  readonly value: SqlValue;
+}
+
+/** An array column's elements, as a dialect gives them (Dialect.arrayElements). */
+export interface ArrayElements {
+  /**
+   * "Some element satisfies `condition`", the element named `name`: `condition` is given the SQL of one element and
+   * returns a condition on it (PostgreSQL: `EXISTS (SELECT 1 FROM unnest(…) AS name(v) WHERE …)`; DuckDB: one
+   * `list_filter` lambda).
+   */
+  some(name: string, condition: (x: string) => string): string;
+  /** The condition that the column's value is an array (else the function is NULL). */
+  readonly isArray: string;
+  /** The condition that element `x` is a value (no NULL element, no JSON null). */
+  present(x: string): string;
+  /** Element `x` read as `kind`, as `evaluate` reads a served element; `undefined` when none can be. */
+  view(x: string, kind: Exclude<Kind, "fold">): View | undefined;
+}
 
 /** A side of a spatial relation of two geometries: a column, or a literal. */
 export type PairSide = { readonly sql: string; readonly column: SqlColumn } | { readonly literal: SpatialLiteral };

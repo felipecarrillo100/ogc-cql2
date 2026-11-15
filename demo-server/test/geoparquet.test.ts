@@ -36,9 +36,9 @@ async function write(name: string, select: string, geo?: object): Promise<string
 }
 const geoOf = (column: Record<string, unknown>) => ({ version: "1.1.0", primary_column: "geom", columns: { geom: { encoding: "WKB", geometry_types: [], ...column } } });
 const ROWS = `SELECT * FROM (VALUES
-  (1, 'a', 1.5, true, DATE '2020-01-01', TIMESTAMPTZ '2020-01-01 00:00:00+00', TIMESTAMP '2020-01-01 10:00:00', [1, 2], ST_Point(1, 2)),
-  (2, 'b', NULL, false, NULL, NULL, NULL, [], ST_Point(10, 10))
-) t(id, name, x, flag, d, t, local, list, geom)`;
+  (1, 'a', 1.5, true, DATE '2020-01-01', TIMESTAMPTZ '2020-01-01 00:00:00+00', TIMESTAMP '2020-01-01 10:00:00', {'k': 1}, ST_Point(1, 2)),
+  (2, 'b', NULL, false, NULL, NULL, NULL, {'k': 2}, ST_Point(10, 10))
+) t(id, name, x, flag, d, t, local, record, geom)`;
 const page = { limit: 100, offset: 0 };
 const intersects = (bbox: number[]) => ({ op: "s_intersects", args: [{ property: "geometry" }, { bbox }] }) as unknown as Cql2Filter;
 const ids = async (store: { query: (f: Cql2Filter, p: typeof page) => Promise<{ features: readonly { id: unknown }[] }> }, filter: Cql2Filter) =>
@@ -55,7 +55,8 @@ describe("a GeoParquet file", () => {
       t: { type: "string", format: "date-time" },
       local: { type: "string" },
     });
-    assert.match(store.describe().warnings.join(" "), /Column "list" \(INTEGER\[\]\) isn't queryable and isn't served/);
+    // A STRUCT: no value the dialect compares (a list is an array since 1.6.0: see geoparquet-arrays.test.ts).
+    assert.match(store.describe().warnings.join(" "), /Column "record" \(STRUCT\(k INTEGER\)\) isn't queryable and isn't served/);
     assert.equal(store.describe().source, "geoparquet");
     assert.equal(store.describe().featureCount, 2);
   });

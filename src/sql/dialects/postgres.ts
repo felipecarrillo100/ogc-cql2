@@ -12,9 +12,8 @@
 import type { Fold } from "../../core/folds.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
 import type { MatrixRelation } from "../../core/relate.js";
-import { heldKind } from "../../core/queryables.js";
 import type { ArrayOperator, BboxLiteral, Geometry, SpatialLiteral } from "../../core/types.js";
-import { quote, type ArraySide, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { quote, type ArrayElements, type ArrayLiteralValue, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "geometry" | "geography" | "other";
 
@@ -436,12 +435,28 @@ function elementView(array: ArrayColumn, x: string, kind: ArrayKind, fn: (name: 
   }
 }
 
-/** The elements, as a FROM item named `alias(v)`; whether the value is an array (else NULL); whether an element is a value. */
-const elementsOf = (array: ArrayColumn, sql: string, alias: string): string =>
-  "native" in array ? `unnest(${sql}) AS ${alias}(v)` : `jsonb_array_elements(${sql}${array.json}) AS ${alias}(v)`;
-const isArray = (array: ArrayColumn, sql: string): string =>
-  "native" in array ? `(${sql} IS NOT NULL AND coalesce(array_ndims(${sql}), 1) = 1)` : `jsonb_typeof(${sql}${array.json}) = 'array'`;
-const present = (array: ArrayColumn, x: string): string => ("native" in array ? `${x} IS NOT NULL` : `jsonb_typeof(${x}) <> 'null'`);
+/**
+ * An array column's elements, for the walker's element-by-element SQL: `unnest` of a native array (a NULL element is
+ * no value), `jsonb_array_elements` of a JSON array (JSON null is no value); NULL unless the value is a one-dimensional
+ * array (a matrix is no CQL2 array; an empty array has no dimension) or a JSON array.
+ */
+function postgresElements(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined {
+  const array = arrayColumn(column);
+  if (array === undefined) return undefined;
+  return "native" in array
+    ? {
+        some: (name, condition) => `EXISTS (SELECT 1 FROM unnest(${sql}) AS ${name}(v) WHERE ${condition(`${name}.v`)})`,
+        isArray: `(${sql} IS NOT NULL AND coalesce(array_ndims(${sql}), 1) = 1)`,
+        present: (x) => `${x} IS NOT NULL`,
+        view: (x, kind) => elementView(array, x, kind, fn),
+      }
+    : {
+        some: (name, condition) => `EXISTS (SELECT 1 FROM jsonb_array_elements(${sql}${array.json}) AS ${name}(v) WHERE ${condition(`${name}.v`)})`,
+        isArray: `jsonb_typeof(${sql}${array.json}) = 'array'`,
+        present: (x) => `jsonb_typeof(${x}) <> 'null'`,
+        view: (x, kind) => elementView(array, x, kind, fn),
+      };
+}
 
 /** A native array's own kind of element, the function that gives its elements as compared, and their type. */
 const NATURAL: Readonly<Partial<Record<PgClass, { readonly kind: ArrayKind; readonly fn: string; readonly type: string; readonly value?: (v: SqlValue) => SqlValue }>>> = {
@@ -454,76 +469,24 @@ const NATURAL: Readonly<Partial<Record<PgClass, { readonly kind: ArrayKind; read
 };
 
 /**
- * An array function (Array Functions) in PostgreSQL, exactly as `evaluate` decides it on the served values:
- * - a native array against literals all of its own kind: PostgreSQL's array operators (`@>`, `<@`, `&&`, both for
- *   A_EQUALS) on a `cql2_*_array` function of the column, exact on their own (sets, NULL elements left out, NULL for a
- *   NULL or multi-dimensional array), and served by a GIN index on that function;
- * - otherwise (literals of other kinds, `jsonb` / `json`, two columns): element by element, each literal element in
- *   its kind's view of an element, `(view = literal) IS TRUE` so that no comparison is NULL (a NULL one would let
- *   `NOT EXISTS` keep a row), inside `CASE WHEN <an array> THEN … END`. A literal element of a kind the column can't
- *   hold is never in it: A_CONTAINS and A_EQUALS FALSE, the others leave it out.
+ * A native array against literals all of its own kind: PostgreSQL's array operators (`@>`, `<@`, `&&`, both for
+ * A_EQUALS) on a `cql2_*_array` function of the column, exact on their own (sets, NULL elements left out, NULL for a
+ * NULL or multi-dimensional array), and served by a GIN index on that function. `undefined` otherwise: the walker's
+ * element-by-element SQL.
  */
-function postgresArrays(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: ArraySide, param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined {
-  const array = arrayColumn(a.column);
-  if (array === undefined) return undefined;
-  if (!("literals" in b)) {
-    const other = arrayColumn(b.column);
-    return other === undefined ? undefined : columnArrays(op, array, a.sql, a.column, other, b.sql, b.column, fn);
+function postgresOwnKind(op: ArrayOperator, sql: string, column: SqlColumn, literals: readonly ArrayLiteralValue[], param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined {
+  const array = arrayColumn(column);
+  const natural = array && "native" in array ? NATURAL[pgClass(array.native)] : undefined;
+  if (!natural || !literals.every((l) => l.kind === natural.kind)) return undefined;
+  const p = `${fn(natural.fn)}(${sql})`;
+  const set = () => (literals.length === 0 ? `'{}'::${natural.type}[]`
+    : `ARRAY[${literals.map((l) => param(natural.value ? natural.value(l.value) : l.value)).join(", ")}]::${natural.type}[]`);
+  switch (op) {
+    case "a_contains": return `${p} @> ${set()}`;
+    case "a_containedBy": return `${p} <@ ${set()}`;
+    case "a_overlaps": return `${p} && ${set()}`;
+    case "a_equals": return `(${p} @> ${set()} AND ${p} <@ ${set()})`;
   }
-  const literals = b.literals;
-  const natural = "native" in array ? NATURAL[pgClass(array.native)] : undefined;
-  if (natural && literals.every((l) => l.kind === natural.kind)) {
-    const p = `${fn(natural.fn)}(${a.sql})`;
-    const set = () => (literals.length === 0 ? `'{}'::${natural.type}[]`
-      : `ARRAY[${literals.map((l) => param(natural.value ? natural.value(l.value) : l.value)).join(", ")}]::${natural.type}[]`);
-    switch (op) {
-      case "a_contains": return `${p} @> ${set()}`;
-      case "a_containedBy": return `${p} <@ ${set()}`;
-      case "a_overlaps": return `${p} && ${set()}`;
-      case "a_equals": return `(${p} @> ${set()} AND ${p} <@ ${set()})`;
-    }
-  }
-  const x = "cql2_e.v";
-  const from = elementsOf(array, a.sql, "cql2_e");
-  const views = literals.map((l) => ({ l, v: elementView(array, x, l.kind, fn) }));
-  const known = views.filter((e): e is { l: (typeof literals)[number]; v: View } => e.v !== undefined);
-  const foreign = known.length < views.length;
-  const match = (e: (typeof known)[number]) => `(${e.v.sql} = ${param(e.l.value, e.v.cast)}) IS TRUE`;
-  const contains = () => foreign ? "FALSE" : known.length === 0 ? "TRUE"
-    : known.map((e) => `EXISTS (SELECT 1 FROM ${from} WHERE ${match(e)})`).join(" AND ");
-  const containedBy = () => `NOT EXISTS (SELECT 1 FROM ${from} WHERE ${present(array, x)} AND NOT (${known.length === 0 ? "FALSE" : known.map(match).join(" OR ")}))`;
-  const overlaps = () => (known.length === 0 ? "FALSE" : `EXISTS (SELECT 1 FROM ${from} WHERE ${known.map(match).join(" OR ")})`);
-  const body = op === "a_contains" ? contains() : op === "a_containedBy" ? containedBy() : op === "a_overlaps" ? overlaps()
-    : `(${contains()}) AND (${containedBy()})`;
-  return `(CASE WHEN ${isArray(array, a.sql)} THEN ${body} END)`;
-}
-
-/**
- * Two array columns (Property-Property Comparisons): every element of one has an equal element in the other. Elements
- * compare as `evaluate` compares two served elements: as their columns' `items` say (days, instants, text…), else by
- * their own kinds, text, number or boolean (a value has one kind, so only one of them can be equal).
- */
-function columnArrays(op: ArrayOperator, a: ArrayColumn, sqlA: string, columnA: SqlColumn, b: ArrayColumn, sqlB: string, columnB: SqlColumn, fn: (name: string) => string): string {
-  const held = [columnA.items, columnB.items].map((q) => (q === undefined ? undefined : heldKind(q))).find((h) => h !== undefined && h !== "any");
-  const kinds: ArrayKind[] = held === "text" ? ["text"] : held === "number" ? ["number"] : held === "boolean" ? ["boolean"]
-    : held === "date" ? ["day"] : held === "instant" ? ["instant"] : ["text", "number", "boolean"];
-  /** Whether element `x` of `p` equals element `y` of `q`. */
-  const same = (p: ArrayColumn, x: string, q: ArrayColumn, y: string): string => {
-    const parts = kinds.flatMap((kind) => {
-      const [vx, vy] = [elementView(p, x, kind, fn), elementView(q, y, kind, fn)];
-      return vx && vy ? [`(${vx.pair ?? vx.sql} = ${vy.pair ?? vy.sql}) IS TRUE`] : [];
-    });
-    return parts.length === 0 ? "FALSE" : parts.join(" OR ");
-  };
-  /** Every element of `q` (at sqlQ) has an equal one in `p` (at sqlP). */
-  const contains = (p: ArrayColumn, sqlP: string, q: ArrayColumn, sqlQ: string) =>
-    `NOT EXISTS (SELECT 1 FROM ${elementsOf(q, sqlQ, "cql2_f")} WHERE ${present(q, "cql2_f.v")} AND NOT EXISTS ` +
-    `(SELECT 1 FROM ${elementsOf(p, sqlP, "cql2_e")} WHERE ${same(p, "cql2_e.v", q, "cql2_f.v")}))`;
-  const body = op === "a_contains" ? contains(a, sqlA, b, sqlB)
-    : op === "a_containedBy" ? contains(b, sqlB, a, sqlA)
-    : op === "a_overlaps" ? `EXISTS (SELECT 1 FROM ${elementsOf(a, sqlA, "cql2_e")}, ${elementsOf(b, sqlB, "cql2_f")} WHERE ${same(a, "cql2_e.v", b, "cql2_f.v")})`
-    : `(${contains(a, sqlA, b, sqlB)}) AND (${contains(b, sqlB, a, sqlA)})`;
-  return `(CASE WHEN ${isArray(a, sqlA)} AND ${isArray(b, sqlB)} THEN ${body} END)`;
 }
 
 export const postgres: Dialect = {
@@ -540,5 +503,6 @@ export const postgres: Dialect = {
   intersects: postgresIntersects,
   relate: postgresRelate,
   spatialPair: postgresPair,
-  arrays: postgresArrays,
+  arrayElements: postgresElements,
+  arraysOwnKind: postgresOwnKind,
 };

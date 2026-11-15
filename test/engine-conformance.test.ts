@@ -17,7 +17,7 @@ const engine: SpatialEngine = { prepare: () => ({ relate: () => "FFFFFFFF2" }) }
 
 const ALL = Object.values(CONFORMANCE);
 const BUT_SPATIAL = ALL.filter((c) => c !== CONFORMANCE.spatial);
-// Array Functions: postgres writes them; the other dialects don't yet, until each one's phase.
+// Array Functions: postgres and duckdb write them; the other dialects don't yet, until each one's phase.
 const SQL_ALL = ALL.filter((c) => c !== CONFORMANCE.arrays);
 const SQL_BUT_SPATIAL = SQL_ALL.filter((c) => c !== CONFORMANCE.spatial);
 
@@ -28,9 +28,9 @@ describe("the lists", () => {
     expect(evaluateConformance({ spatialEngine: engine })).toEqual(ALL);
   });
 
-  it("sql: every class on postgres, all but Array Functions on duckdb and oracle; on sqlite, Spatial Functions only with SpatiaLite; on sqlserver, no Spatial Functions", () => {
+  it("sql: every class on postgres and duckdb, all but Array Functions on oracle; on sqlite, Spatial Functions only with SpatiaLite; on sqlserver, no Spatial Functions", () => {
     expect(sqlConformance({ dialect: "postgres" })).toEqual(ALL);
-    expect(sqlConformance({ dialect: "duckdb" })).toEqual(SQL_ALL);
+    expect(sqlConformance({ dialect: "duckdb" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "sqlite" })).toEqual(SQL_BUT_SPATIAL);
     expect(sqlConformance({ dialect: "sqlite", spatialite: false })).toEqual(SQL_BUT_SPATIAL);
     expect(sqlConformance({ dialect: "sqlite", spatialite: true })).toEqual(SQL_ALL);

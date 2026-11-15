@@ -365,8 +365,8 @@ describe("Array Functions in the postgres dialect (since 1.6.0)", () => {
   it("two array columns: element by element, as their items say, else by their own kinds", () => {
     expect(a("a_overlaps", p("tags"), p("raw")).where).toBe(
       `(CASE WHEN ("tags" IS NOT NULL AND coalesce(array_ndims("tags"), 1) = 1) AND jsonb_typeof("raw"::jsonb) = 'array' THEN EXISTS (SELECT 1 FROM ` +
-        `unnest("tags") AS cql2_e(v), jsonb_array_elements("raw"::jsonb) AS cql2_f(v) WHERE (normalize(cql2_e.v::text, NFC) COLLATE "C" = ` +
-        `normalize((CASE WHEN jsonb_typeof(cql2_f.v) = 'string' THEN cql2_f.v #>> '{}' END), NFC) COLLATE "C") IS TRUE) END)`,
+        `unnest("tags") AS cql2_e(v) WHERE EXISTS (SELECT 1 FROM jsonb_array_elements("raw"::jsonb) AS cql2_f(v) WHERE (normalize(cql2_e.v::text, NFC) COLLATE "C" = ` +
+        `normalize((CASE WHEN jsonb_typeof(cql2_f.v) = 'string' THEN cql2_f.v #>> '{}' END), NFC) COLLATE "C") IS TRUE)) END)`,
     );
     expect(a("a_equals", p("tags"), p("days")).where).toContain(`COALESCE(to_char(cql2_f.v, 'YYYY-MM-DD'), cql2_f.v::text) COLLATE "C"`);
   });
