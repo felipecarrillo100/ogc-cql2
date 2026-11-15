@@ -6,6 +6,7 @@
  *   { "id": "states", "title": "US states", "source": "geojson", "file": "data/states.geojson" },
  *   { "id": "parquet-states", "title": "US states", "source": "geoparquet", "file": "data/states.parquet" },
  *   { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-", "tables": ["states"] },
+ *   { "source": "geopackage", "file": "data/arrays.gpkg", "prefix": "gpkg-", "arrays": { "arrays": { "tags": { "type": "string" } } } },
  *   { "source": "postgres", "prefix": "pg-", "functionSchema": "cql2demo", "tables": [{ "table": "cql2demo.states" }] },
  *   { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "KITCHEN_SINK", "days": ["day"] }] },
  *   { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states" }] }
@@ -13,7 +14,8 @@
  * ```
  * A `geojson` entry is one collection, and so is a `geoparquet` entry (a GeoParquet or Parquet file, read in place by
  * DuckDB; its id column is `id` unless `idColumn` names another). A `geopackage` entry is one collection per table the GeoPackage lists (or only
- * `tables`), each with the id `prefix` + table name. A `postgres`, `oracle` or `sqlserver` entry is one collection per
+ * `tables`), each with the id `prefix` + table name, and may list per table its TEXT columns that hold arrays as JSON
+ * (`arrays`: table → column → `items`, `{}` for any), as GDAL writes list fields. A `postgres`, `oracle` or `sqlserver` entry is one collection per
  * listed table, from the database the environment names (`.env`: `PG*`, `ORACLE_*`, `MSSQL_*`); an Oracle table may list
  * its DATE columns that hold days (`days`). Files are relative to the directory of `collections.json`.
  */
@@ -23,7 +25,14 @@ import { dirname, resolve } from "node:path";
 export type CollectionConfig =
   | { readonly source: "geojson"; readonly id: string; readonly title: string; readonly file: string }
   | { readonly source: "geoparquet"; readonly id: string; readonly title: string; readonly file: string; readonly idColumn?: string }
-  | { readonly source: "geopackage"; readonly file: string; readonly prefix?: string; readonly tables?: readonly string[] }
+  | {
+      readonly source: "geopackage";
+      readonly file: string;
+      readonly prefix?: string;
+      readonly tables?: readonly string[];
+      /** Per table, the TEXT columns that hold arrays as JSON, each with its items (a queryable, {} for any). */
+      readonly arrays?: Readonly<Record<string, Readonly<Record<string, object>>>>;
+    }
   | {
       readonly source: "postgres" | "oracle" | "sqlserver";
       readonly tables: readonly { readonly table: string; readonly id?: string; readonly title?: string; readonly days?: readonly string[]; readonly arrays?: Readonly<Record<string, object>> }[];
@@ -99,11 +108,17 @@ export function readConfig(path: string): CollectionConfig[] {
         problems.push(`${where}: "tables" must be a list of table names.`);
         return;
       }
+      const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+      if (entry.arrays !== undefined && !(record(entry.arrays) && Object.values(entry.arrays).every((t) => record(t) && Object.values(t).every(record)))) {
+        problems.push(`${where}: "arrays" must be { "table": { "column": { "type": … } } }.`);
+        return;
+      }
       out.push({
         source: "geopackage",
         file,
         ...(entry.prefix !== undefined ? { prefix: entry.prefix as string } : {}),
         ...(entry.tables !== undefined ? { tables: entry.tables as string[] } : {}),
+        ...(entry.arrays !== undefined ? { arrays: entry.arrays as Record<string, Record<string, object>> } : {}),
       });
     } else {
       problems.push(`${where}: source "${String(entry.source)}" is not supported; use "geojson", "geoparquet", "geopackage", "postgres", "oracle" or "sqlserver".`);

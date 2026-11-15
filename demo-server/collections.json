@@ -7,6 +7,17 @@
     { "id": "parquet-arrays", "title": "Arrays", "source": "geoparquet", "file": "data/arrays.parquet" },
     { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-" },
     {
+      "source": "geopackage",
+      "file": "data/arrays.gpkg",
+      "prefix": "gpkg-",
+      "arrays": {
+        "arrays": {
+          "tags": { "type": "string" }, "codes": { "type": "string" }, "ratios": { "type": "number" }, "counts": { "type": "integer" },
+          "flags": { "type": "boolean" }, "days": { "type": "string", "format": "date" }, "moments": { "type": "string", "format": "date-time" }, "doc": {}
+        }
+      }
+    },
+    {
       "source": "postgres",
       "prefix": "pg-",
       "functionSchema": "cql2demo",

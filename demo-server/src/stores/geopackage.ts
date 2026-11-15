@@ -12,7 +12,10 @@
  * - a feature table's geometry column is registered in `gpkg_geometry_columns` with its `srs_id` (Req 22); values are
  *   GeoPackageBinary, decoded to GeoJSON. GeoJSON is WGS 84 longitude, latitude, so a table in another SRS is served
  *   without geometry, and that's reported. Spatial filters run in the database, through `cql2_intersects`, with the
- *   R-tree index (the `gpkg_rtree_index` extension) when the file registers one.
+ *   R-tree index (the `gpkg_rtree_index` extension) when the file registers one;
+ * - GeoPackage has no array type: GDAL writes list fields as TEXT JSON (`application/json` in `gpkg_data_columns`),
+ *   without their elements' type. The TEXT columns the source lists in `arrays`, with their `items`, are served as
+ *   JSON.parse reads them (the text itself when it doesn't parse) and filtered with the array functions.
  *
  * The file is opened read-only.
  */
@@ -20,7 +23,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { Cql2Filter } from "ogc-cql2";
 import { sqlConformance, sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeGeoPackageBinary, type Geometry } from "../geopackage/binary.ts";
-import { type CollectionDescription, type Feature, type ScalarQueryable, type Store } from "./types.ts";
+import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface GeoPackageSource {
   readonly file: string;
@@ -28,6 +31,8 @@ export interface GeoPackageSource {
   readonly tables?: readonly string[];
   /** Put before each table name to make its collection id, so that ids stay unique across sources. */
   readonly prefix?: string;
+  /** Per table, the TEXT columns that hold arrays as JSON, each with its items (a queryable, `{}` for any). */
+  readonly arrays?: Readonly<Record<string, Readonly<Record<string, object>>>>;
 }
 
 /** `PRAGMA application_id` of a GeoPackage: "GPKG" (1.2 and later), "GP10" and "GP11" (1.0, 1.1). */
@@ -119,7 +124,7 @@ export function openGeoPackage(source: GeoPackageSource): { stores: { id: string
       continue;
     }
     try {
-      stores.push({ id, store: tableStore(db, id, row, spatialite) });
+      stores.push({ id, store: tableStore(db, id, row, spatialite, source.arrays?.[table] ?? {}) });
     } catch (error) {
       warnings.push(`Table "${table}" not served: ${(error as Error).message}`);
     }
@@ -137,7 +142,17 @@ function hasRtree(db: DatabaseSync, table: string, column: string): boolean {
   }
 }
 
-function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boolean): Store {
+/** An array column's value as served: JSON.parse of its text, or the value itself when it isn't JSON text. */
+function servedArray(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boolean, arrays: Readonly<Record<string, object>>): Store {
   const table = String(contents.table_name);
   const all = (sql: string, ...params: unknown[]) => db.prepare(sql).all(...(params as never[])) as Row[];
   const columns = all(`PRAGMA table_info(${quote(table)})`) as { name: string; type: string; pk: number }[];
@@ -162,18 +177,34 @@ function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boo
     }
   }
 
-  const queryables: Record<string, ScalarQueryable> = {};
+  const queryables: Record<string, Queryable> = {};
+  const filterColumns: Record<string, SqlColumn> = {};
   const booleans = new Set<string>();
+  const arrayColumns = new Set<string>();
+  for (const name of Object.keys(arrays)) {
+    const column = columns.find((c) => c.name === name);
+    if (!column || column.name === idColumn.name || column.name === geometryColumn || queryableOf(column.type) === undefined) {
+      warnings.push(`Column "${name}", listed in "arrays", isn't a column of the table that can hold JSON text.`);
+    }
+  }
   for (const column of columns) {
     if (column.name === idColumn.name || column.name === geometryColumn) continue;
+    if (Object.hasOwn(arrays, column.name) && queryableOf(column.type) !== undefined) {
+      const items = arrays[column.name] as ScalarQueryable;
+      queryables[column.name] = { type: "array", items };
+      // An array column is declared to the dialect by its items (SqlColumn's type names scalars).
+      filterColumns[column.name] = { sqlType: column.type, items };
+      arrayColumns.add(column.name);
+      continue;
+    }
     const q = queryableOf(column.type);
     if (q === undefined) continue;
     if (q === "unknown") {
-      queryables[column.name] = {};
+      queryables[column.name] = filterColumns[column.name] = {};
       warnings.push(`Column "${column.name}" is declared ${column.type || "without a type"}, which isn't a GeoPackage type (Req 5).`);
       continue;
     }
-    queryables[column.name] = q;
+    queryables[column.name] = filterColumns[column.name] = q;
     if (q.type === "boolean") booleans.add(column.name);
   }
 
@@ -182,8 +213,7 @@ function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boo
   // The R-tree, when the extension is registered for the column, finds the candidates first.
   const rtree = !isView && geometryColumn !== undefined && hasRtree(db, table, geometryColumn) ? `rtree_${table}_${geometryColumn}` : undefined;
   const geometryFilter: SqlColumn = { format: "geometry-any", column: geometryColumn!, ...(rtree ? { rtree } : {}) };
-  const filterColumns: Record<string, SqlColumn> =
-    withGeometry && !Object.hasOwn(queryables, "geometry") ? { ...queryables, geometry: geometryFilter } : queryables;
+  if (withGeometry && !Object.hasOwn(queryables, "geometry")) filterColumns.geometry = geometryFilter;
   const select = [idColumn.name, ...(withGeometry ? [geometryColumn!] : []), ...propertyNames].map(quote).join(", ");
   const from = quote(table);
   let decodeProblems = 0;
@@ -192,7 +222,7 @@ function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boo
     const properties: Record<string, unknown> = {};
     for (const name of propertyNames) {
       const value = row[name];
-      properties[name] = booleans.has(name) && (value === 0 || value === 1) ? value === 1 : value;
+      properties[name] = booleans.has(name) && (value === 0 || value === 1) ? value === 1 : arrayColumns.has(name) ? servedArray(value) : value;
     }
     let geometry: Geometry | null = null;
     const bytes = withGeometry ? row[geometryColumn!] : null;

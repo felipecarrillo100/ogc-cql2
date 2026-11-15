@@ -99,8 +99,8 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
  */
 export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pick<SqlOptions, "columns">>): string[] {
   // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
-  // Array Functions where the dialect writes them (Dialect.arrays).
-  const arrays = DIALECTS[options.dialect].arrayElements ? [] : [CONFORMANCE.arrays];
+  // Array Functions where the dialect writes them (Dialect.arrayElements or Dialect.arrayFunction).
+  const arrays = DIALECTS[options.dialect].arrayElements || DIALECTS[options.dialect].arrayFunction ? [] : [CONFORMANCE.arrays];
   if (relateOf(options)) return implementedBut(arrays);
   if (DIALECTS[options.dialect].intersects) return implementedBut([CONFORMANCE.spatial, ...arrays]);
   return implementedBut([CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial, ...arrays]);
@@ -409,6 +409,9 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       ? [a, b, `${path}/args/0`, `${path}/args/1`, op]
       : [b as PropertyRef, a, `${path}/args/1`, `${path}/args/0`, CONVERSE_ARRAY[op]];
     const c = columnOf(ref, refPath);
+    if (dialect.arrayFunction) {
+      return dialect.arrayFunction(relation, c, isRef(other) ? columnOf(other, otherPath) : { literal: other }, param) ?? dialect.never;
+    }
     const elements = dialect.arrayElements!(c.sql, c.column, fn);
     if (isRef(other)) {
       const d = columnOf(other, otherPath);

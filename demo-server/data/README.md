@@ -18,6 +18,13 @@ To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if 
   milliseconds, periods from `at` to `until` (equal ends, NULL ends, one ending before it begins), local times without
   an offset, text that looks like dates and numbers, every geometry type, NULLs in every column). The
   same rows go into `usa.gpkg`, `kitchen_sink.parquet` and PostgreSQL, so every store must answer alike.
+- `arrays.parquet` and `arrays.gpkg`: the arrays table of `arrays.sql` (Array Functions), with the values where
+  engines disagree:
+  - `arrays.parquet` holds DuckDB lists (GeoParquet), made by `node data/make-arrays-parquet.ts`;
+  - `arrays.gpkg` holds a GeoPackage table whose arrays are TEXT JSON, as GDAL writes list fields (`application/json`
+    in `gpkg_data_columns`), plus JSON that isn't an array and the values where SQLite's own JSON reading parts from
+    JSON.parse. It is made by `node data/make-arrays-gpkg.ts`. GeoPackage has no array type, so `collections.json`
+    lists the columns and their elements (`"arrays": { "table": { "column": { "type": … } } }`).
 
 ## PostgreSQL
 

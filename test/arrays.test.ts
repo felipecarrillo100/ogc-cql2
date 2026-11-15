@@ -297,12 +297,19 @@ describe("the engines", () => {
     );
   });
 
-  it("duckdb writes it (see test/duckdb-arrays.ts, run on DuckDB 2.0 and 1.4)", () => {
+  it("duckdb writes it (see test/duckdb-arrays.ts, run on DuckDB 2.0 and 1.5)", () => {
     expect(sqlConformance({ dialect: "duckdb" })).toContain(CONFORMANCE.arrays);
     expect(toSql(fn("a_contains", p("v"), ["a"]), { dialect: "duckdb", columns: { v: { sqlType: "VARCHAR[]" } } }).where).toContain("list_has_all(");
   });
 
-  it.for(["sqlite", "oracle", "sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
+  it("sqlite writes it, through cql2_array (see test/sql-arrays-sqlite.test.ts)", () => {
+    expect(sqlConformance({ dialect: "sqlite" })).toContain(CONFORMANCE.arrays);
+    expect(toSql(fn("a_contains", p("v"), ["a"]), { dialect: "sqlite", columns: { v: { items: {} } } }).where).toBe(
+      "cql2_array('a_contains', \"v\", ?, ?) = 1",
+    );
+  });
+
+  it.for(["oracle", "sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
     expect(sqlConformance({ dialect })).not.toContain(CONFORMANCE.arrays);
     expect(() => toSql(fn("a_contains", p("v"), ["a"]), { dialect, columns: { v: {} } })).toThrow(
       expect.objectContaining({ code: "unsupported", details: { conformance: CONFORMANCE.arrays } }),

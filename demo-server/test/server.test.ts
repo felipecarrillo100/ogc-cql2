@@ -58,15 +58,15 @@ describe("collections", () => {
       files.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
       [["states", "geojson", 51], ["kitchen_sink", "geojson", 24], ["parquet-states", "geoparquet", 51],
         ["parquet-kitchen_sink", "geoparquet", 24], ["parquet-arrays", "geoparquet", 13], ["gpkg-kitchen_sink", "geopackage", 24],
-        ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["dupes", "geojson", 2]],
+        ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["gpkg-arrays", "geopackage", 13], ["dupes", "geojson", 2]],
     );
-    assert.match(files[8].warnings[0], /Dropped 1 feature/);
+    assert.match(files[9].warnings[0], /Dropped 1 feature/);
     assert.ok(log.includes(`states: 51 features from ${fileURLToPath(new URL("../data/states.geojson", import.meta.url))}`));
   });
 
   it("each with the classes its store evaluates, as ogc-cql2's engines report them", async () => {
     const all = Object.values(CONFORMANCE);
-    const sql = all.filter((x) => x !== CONFORMANCE.arrays); // Array Functions: postgres and duckdb write them so far
+    const sql = all.filter((x) => x !== CONFORMANCE.arrays); // Array Functions: not yet in the oracle dialect
     const spatial = [CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial];
     const { DatabaseSync } = await import("node:sqlite");
     const spatialite = loadSpatialite(new DatabaseSync(":memory:", { allowExtension: true }));

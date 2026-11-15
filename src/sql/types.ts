@@ -5,7 +5,7 @@
 
 import type { Fold } from "../core/folds.js";
 import type { MatrixRelation } from "../core/relate.js";
-import type { ArithmeticOperator, ArrayOperator, Queryable, SpatialLiteral } from "../core/types.js";
+import type { ArithmeticOperator, ArrayLiteral, ArrayOperator, Queryable, SpatialLiteral } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb" | "oracle" | "sqlserver";
 
@@ -209,6 +209,12 @@ export interface Dialect {
    * `some` (DuckDB writes its own: see duckdb.ts).
    */
   arraysPair?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: { readonly sql: string; readonly column: SqlColumn }, fn: (name: string) => string): string | undefined;
+  /**
+   * An array function of a column and a literal set, or of two columns, decided by one function of the database
+   * (SQLite: `cql2_array`, running `evaluate`'s own code); `undefined` when a column holds no arrays (no value can
+   * match). The alternative to `arrayElements`: a dialect with either supports the class.
+   */
+  arrayFunction?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: { readonly sql: string; readonly column: SqlColumn } | { readonly literal: ArrayLiteral }, param: (value: SqlValue) => string): string | undefined;
 }
 
 /** An element of an array literal, keyed as `evaluate` keys it. */

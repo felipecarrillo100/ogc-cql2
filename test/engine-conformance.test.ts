@@ -17,7 +17,7 @@ const engine: SpatialEngine = { prepare: () => ({ relate: () => "FFFFFFFF2" }) }
 
 const ALL = Object.values(CONFORMANCE);
 const BUT_SPATIAL = ALL.filter((c) => c !== CONFORMANCE.spatial);
-// Array Functions: postgres and duckdb write them; the other dialects don't yet, until each one's phase.
+// Array Functions: postgres, duckdb and sqlite write them; oracle and sqlserver don't yet, until each one's phase.
 const SQL_ALL = ALL.filter((c) => c !== CONFORMANCE.arrays);
 const SQL_BUT_SPATIAL = SQL_ALL.filter((c) => c !== CONFORMANCE.spatial);
 
@@ -28,12 +28,12 @@ describe("the lists", () => {
     expect(evaluateConformance({ spatialEngine: engine })).toEqual(ALL);
   });
 
-  it("sql: every class on postgres and duckdb, all but Array Functions on oracle; on sqlite, Spatial Functions only with SpatiaLite; on sqlserver, no Spatial Functions", () => {
+  it("sql: every class on postgres and duckdb, and on sqlite with SpatiaLite (without it, all but Spatial Functions); all but Array Functions on oracle; on sqlserver, no Spatial Functions or Array Functions", () => {
     expect(sqlConformance({ dialect: "postgres" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "duckdb" })).toEqual(ALL);
-    expect(sqlConformance({ dialect: "sqlite" })).toEqual(SQL_BUT_SPATIAL);
-    expect(sqlConformance({ dialect: "sqlite", spatialite: false })).toEqual(SQL_BUT_SPATIAL);
-    expect(sqlConformance({ dialect: "sqlite", spatialite: true })).toEqual(SQL_ALL);
+    expect(sqlConformance({ dialect: "sqlite" })).toEqual(BUT_SPATIAL);
+    expect(sqlConformance({ dialect: "sqlite", spatialite: false })).toEqual(BUT_SPATIAL);
+    expect(sqlConformance({ dialect: "sqlite", spatialite: true })).toEqual(ALL);
     expect(sqlConformance({ dialect: "oracle" })).toEqual(SQL_ALL);
     expect(sqlConformance({ dialect: "sqlserver" })).toEqual(SQL_BUT_SPATIAL);
   });
@@ -47,7 +47,7 @@ describe("the lists", () => {
 
   it("the options toPredicate and toSql take fit as they are", () => {
     const sqlOptions: SqlOptions = { dialect: "sqlite", columns: {}, spatialite: true };
-    expect(sqlConformance(sqlOptions)).toEqual(SQL_ALL);
+    expect(sqlConformance(sqlOptions)).toEqual(ALL);
     expect(sqlConformance({ dialect: "postgres", columns: {}, functionSchema: "cql2" })).toEqual(ALL);
     expect(evaluateConformance({ spatialEngine: engine, getProperty: () => null, geometryProperty: "g" })).toEqual(ALL);
   });
