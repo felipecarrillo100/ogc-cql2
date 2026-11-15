@@ -155,7 +155,7 @@ describe("Basic Spatial Functions in the sqlserver dialect", () => {
   });
 
   it("Spatial Functions refused, S_DISJOINT with them (it belongs to that class): write NOT S_INTERSECTS", () => {
-    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.spatial));
+    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.spatial && c !== CONFORMANCE.arrays));
     for (const op of ["s_disjoint", "s_within", "s_touches", "s_equals"]) {
       expect(() => s({ op, args: [p("geometry"), pt(1, 2)] })).toThrowError(expect.objectContaining({ code: "unsupported" }));
     }

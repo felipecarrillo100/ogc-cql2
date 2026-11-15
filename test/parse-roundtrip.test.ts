@@ -9,16 +9,19 @@ import { describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
 import { textProblem, toText } from "ogc-cql2/text";
-import { generateFilters } from "./corpus.ts";
+import { generateArrayFilters, generateFilters } from "./corpus.ts";
 import { FILTERS, RELATION_FILTERS } from "./spatial-cases.ts";
 
 const corpus = generateFilters(["s", "date", "In", "eo:cloud_cover", "a\u1680"]);
 const spatial = [...FILTERS, ...RELATION_FILTERS];
+// Not read with cql2-rs below: cql2-wasm 0.5.6 reads a one-element array as its element and `()` as a property (measured).
+const arrays = generateArrayFilters(["tags", "In", "eo:ids"]);
 
 describe("fromText reads back what toText writes", () => {
   it.for([
     ["the generated filters", corpus],
     ["the spatial filters", spatial],
+    ["the array filters", arrays],
   ] as const)("%s", ([, filters]) => {
     const differences: string[] = [];
     let written = 0;

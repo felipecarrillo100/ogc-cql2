@@ -85,8 +85,9 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
 
 /**
  * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
- * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite`
- * is `true`, and on `sqlserver` all but Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
+ * package implements but Array Functions on `postgres`, `duckdb` and `oracle`, on `sqlite` all but those and Spatial
+ * Functions unless `spatialite` is `true`, and on `sqlserver` all but those and Spatial Functions. (Array Functions
+ * are evaluated in memory only, for now.) Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
  * `toSql` would refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the
  * database has: the spatial classes also need PostGIS, DuckDB's spatial extension or Oracle Spatial, and the package's
  * functions installed (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`, `oracleFunctions`). A new array, in
@@ -94,9 +95,10 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
  */
 export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pick<SqlOptions, "columns">>): string[] {
   // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
-  if (relateOf(options)) return implementedBut([]);
-  if (DIALECTS[options.dialect].intersects) return implementedBut([CONFORMANCE.spatial]);
-  return implementedBut([CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial]);
+  // No dialect writes Array Functions yet.
+  if (relateOf(options)) return implementedBut([CONFORMANCE.arrays]);
+  if (DIALECTS[options.dialect].intersects) return implementedBut([CONFORMANCE.spatial, CONFORMANCE.arrays]);
+  return implementedBut([CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial, CONFORMANCE.arrays]);
 }
 
 /**

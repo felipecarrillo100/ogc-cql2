@@ -18,6 +18,7 @@ const NAMES: ReadonlyMap<string, string> = new Map([
   [CONFORMANCE.propertyProperty, "Property-Property Comparisons"],
   [CONFORMANCE.arithmetic, "Arithmetic Expressions"],
   [CONFORMANCE.temporal, "Temporal Functions"],
+  [CONFORMANCE.arrays, "Array Functions"],
 ]);
 
 /** Every class the package implements, but `except`: in `CONFORMANCE`'s order, a new array each time. */

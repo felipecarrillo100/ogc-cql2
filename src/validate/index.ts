@@ -9,7 +9,7 @@
  */
 import { CONFORMANCE, CQL2_CONFORMANCE } from "../core/conformance.js";
 import { Cql2Error } from "../core/errors.js";
-import { heldKind, type HeldKind } from "../core/queryables.js";
+import { heldKind, itemsKind, type HeldKind } from "../core/queryables.js";
 import { INTERVALS_ONLY, OPEN, isTemporal } from "../core/temporal.js";
 import type { Cql2Filter, Queryable, TemporalOperator } from "../core/types.js";
 
@@ -66,7 +66,8 @@ export interface ValidateOptions {
    * The properties a filter may use and their types, typically a collection's queryables (OGC API Features Part 3):
    * a queryables response's `properties`, as it comes. A property not listed is `unknown-property`; a literal that
    * can't be of the property's type is `type-mismatch`, which CQL2 lets a server answer with an error
-   * (`/per/basic-cql2/type-casts`). A queryable without a `type` accepts any literal. Default: no check.
+   * (`/per/basic-cql2/type-casts`). A queryable without a `type` accepts any literal. An array function needs an
+   * `array` queryable, and its `items` type the elements compared with it. Default: no check.
    */
   readonly queryables?: Readonly<Record<string, Queryable | object>>;
 }
@@ -163,6 +164,19 @@ interface TemporalEnd {
   readonly name?: string;
 }
 
+/** A property in an array function: its name, and what its elements hold (`any` without queryables or `items`). */
+interface ArrayProperty {
+  readonly name: string;
+  readonly items: HeldKind;
+  readonly path: string;
+}
+
+/** An element of an array literal that passed the checks. */
+interface ArrayElement {
+  readonly kind: Exclude<LiteralKind, "folded-string">;
+  readonly path: string;
+}
+
 /** Whether an operand of a temporal function reads the features: a property, or an interval with one at an end. */
 const readsTemporal = (x: unknown): boolean =>
   isPropertyRef(x) || (isObject(x) && Array.isArray(x.interval) && x.interval.some(isPropertyRef));
@@ -226,11 +240,7 @@ class Checker {
 
     if (SPATIAL.has(op)) return this.spatial(op, args, path);
     if (isTemporal(op)) return this.temporal(op, args, path);
-    if (ARRAY.has(op)) {
-      return this.report(
-        "outside-profile", path, `"${op}" is an array function, not in the profile yet.`, CQL2_CONFORMANCE.arrays,
-      );
-    }
+    if (ARRAY.has(op)) return this.array(op, args, path);
     if (op === "casei" || op === "accenti" || ARITHMETIC.has(op)) {
       return this.report(
         "not-an-expression", path, `"${op}" gives a value, not TRUE or FALSE: compare it with something.`,
@@ -755,6 +765,99 @@ class Checker {
     return undefined;
   }
 
+  /**
+   * An array function: two operands, each a property or an array of strings, numbers, booleans, dates and
+   * timestamps, in any mix. An array first, or a property second, needs Property-Property Comparisons. With
+   * queryables, a property must be an array, and an element compared with its `items` must be of a kind they accept.
+   */
+  array(op: string, args: unknown[], path: string): void {
+    const what = op.toUpperCase();
+    this.uses(CONFORMANCE.arrays, path, what);
+    if (args.length !== 2) {
+      return this.report("wrong-arguments", `${path}/args`, `"${op}" needs two arguments: arrays or array properties.`);
+    }
+    if (!isPropertyRef(args[0]) || isPropertyRef(args[1])) {
+      this.uses(CONFORMANCE.propertyProperty, path, `${what} with an array first, or a property second,`);
+    }
+    const operands = args.map((x, i) => this.arrayOperand(x, `${path}/args/${i}`, `The ${i === 0 ? "first" : "second"} argument of ${what}`));
+    // With queryables, the elements on both sides must be of one kind: a property's items say which.
+    const typed = operands.filter((o): o is ArrayProperty => o !== undefined && "items" in o && o.items !== "any");
+    for (const p of typed) {
+      for (const o of operands) {
+        if (o === undefined || o === p) continue;
+        if ("elements" in o) {
+          for (const e of o.elements) {
+            if (!ACCEPTS[p.items].includes(e.kind)) {
+              this.report("type-mismatch", e.path, `"${p.name}" holds ${NAME[p.items as Exclude<HeldKind, "any">]} elements, and this is ${NAME[e.kind]}.`);
+            }
+          }
+        } else if (o.items !== "any" && o.items !== p.items && p === typed[0]) {
+          this.report(
+            "type-mismatch", o.path,
+            `"${p.name}" holds ${NAME[p.items as Exclude<HeldKind, "any">]} elements and "${o.name}" ${NAME[o.items as Exclude<HeldKind, "any">]}: they can't be compared.`,
+          );
+        }
+      }
+    }
+  }
+
+  /** An operand of an array function: a property (its elements' kind) or an array (its elements); `undefined` after reporting. */
+  arrayOperand(x: unknown, path: string, where: string): ArrayProperty | { readonly elements: readonly ArrayElement[] } | undefined {
+    if (isPropertyRef(x)) {
+      const held = this.property(x, path);
+      if (held === undefined) return undefined;
+      const name = x.property as string;
+      const q = this.#queryables?.[name] as Queryable | undefined;
+      const items = q === undefined || held === "any" ? "any" : itemsKind(q);
+      if (items === "not-array") {
+        this.report("type-mismatch", path, `An array function compares arrays, and "${name}" isn't one: its queryable's type is not "array".`);
+        return undefined;
+      }
+      return { name, items, path };
+    }
+    if (Array.isArray(x)) {
+      const elements: ArrayElement[] = [];
+      let valid = true;
+      x.forEach((element, i) => {
+        const at = `${path}/${i}`;
+        const kind = this.arrayElement(element, at);
+        if (kind === undefined) valid = false;
+        else elements.push({ kind, path: at });
+      });
+      return valid ? { elements } : undefined;
+    }
+    if (
+      typeof x === "string" || typeof x === "number" || typeof x === "boolean" ||
+      (isObject(x) && ("date" in x || "timestamp" in x))
+    ) {
+      this.report("wrong-arguments", path, `${where} is a single value: an array function compares arrays, e.g. ["a", "b"], and array properties.`);
+      return undefined;
+    }
+    this.notInProfile(x, path, where);
+    return undefined;
+  }
+
+  /** An element of an array literal: its kind, or `undefined` after reporting one the profile doesn't hold. */
+  arrayElement(x: unknown, path: string): Exclude<LiteralKind, "folded-string"> | undefined {
+    if (
+      typeof x === "string" || typeof x === "number" || typeof x === "boolean" ||
+      (isObject(x) && ("date" in x || "timestamp" in x) && !("op" in x))
+    ) {
+      return this.literal(x, path) as Exclude<LiteralKind, "folded-string"> | undefined;
+    }
+    if (x === null) return void this.notInProfile(x, path, "An element");
+    const op = opOf(x);
+    const isFunction = op !== undefined && op !== "casei" && op !== "accenti" && !ARITHMETIC.has(op) && !COMPARISON.has(op) &&
+      !["and", "or", "not", "like", "between", "in", "isNull"].includes(op) && !SPATIAL.has(op) && !ARRAY.has(op) && !isTemporal(op);
+    this.report(
+      "outside-profile", path,
+      `${Array.isArray(x) ? "An array inside an array" : isPropertyRef(x) ? "A property inside an array" : op !== undefined ? `"${op}" inside an array` : "This element"} ` +
+        `is not in the profile: an element is a string, a number, a boolean, a date or a timestamp.`,
+      isFunction ? CQL2_CONFORMANCE.functions : undefined,
+    );
+    return undefined;
+  }
+
   /** A geometry literal or a bbox: whether it is a point or a box (Basic) or another geometry; `undefined` if invalid. */
   spatialLiteral(x: Json, path: string): "point-or-box" | "other" | undefined {
     const before = this.problems.length;
@@ -957,6 +1060,11 @@ export function requiredConformance(filter: Cql2Filter): string[] {
       used.add(CONFORMANCE.temporal);
       if (!readsTemporal(x.args[0]) || readsTemporal(x.args[1])) used.add(CONFORMANCE.propertyProperty);
       return; // instants and intervals hold no other class
+    }
+    if (typeof x.op === "string" && ARRAY.has(x.op) && Array.isArray(x.args)) {
+      used.add(CONFORMANCE.arrays);
+      if (!isPropertyRef(x.args[0]) || isPropertyRef(x.args[1])) used.add(CONFORMANCE.propertyProperty);
+      return; // the elements hold no other class
     }
     if (Array.isArray(x.args)) walk(x.args);
   };

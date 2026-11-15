@@ -349,9 +349,13 @@ describe("fromText: the profile check after the reading", () => {
   });
 
   it("refuses valid CQL2 outside the profile as invalid-filter, naming the class", () => {
-    expect(() => fromText("A_CONTAINS(tags, ('a', 'b'))")).toThrow(
-      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.arrays })] } }),
+    expect(() => fromText("upper(name) = 'X'")).toThrow(
+      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ conformance: CQL2_CONFORMANCE.functions })] } }),
     );
+  });
+
+  it("reads the array functions, since 1.6.0", () => {
+    expect(fromText("A_CONTAINS(tags, ('a', 'b'))")).toEqual({ op: "a_contains", args: [p("tags"), ["a", "b"]] });
   });
 
   it("refuses what isn't CQL2-text as invalid-text, before any profile check", () => {

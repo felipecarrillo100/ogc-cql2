@@ -43,6 +43,8 @@ const IN_PROFILE = new Set([
   "clause7_12", "clause7_13", "clause7_17", "example20", "example21", "example22", "example53", "example54", "example55",
   "example56", "example57", "example58", "example59", "example61", "example62", "example64", "example65", "example66",
   "example67",
+  // Array Functions, since 1.6.0.
+  "clause7_15", "example79", "example80", "example81", "example82",
 ]);
 
 /**
@@ -74,11 +76,12 @@ const signedNumbers = (x: unknown): unknown => {
 };
 
 /**
- * cql2-rs 0.5.6 names the temporal functions in lower case (`t_finishedby`, measured), where CQL2-JSON writes four of
- * them in camel case (`t_finishedBy`, `t_metBy`, `t_overlappedBy`, `t_startedBy`): the same functions.
+ * cql2-rs 0.5.6 names the temporal and array functions in lower case (`t_finishedby`, `a_containedby`, measured),
+ * where CQL2-JSON writes five of them in camel case (`t_finishedBy`, `t_metBy`, `t_overlappedBy`, `t_startedBy`,
+ * `a_containedBy`): the same functions.
  */
 const CAMEL: Readonly<Record<string, string>> = Object.fromEntries(
-  ["t_finishedBy", "t_metBy", "t_overlappedBy", "t_startedBy"].map((name) => [name.toLowerCase(), name]),
+  ["t_finishedBy", "t_metBy", "t_overlappedBy", "t_startedBy", "a_containedBy"].map((name) => [name.toLowerCase(), name]),
 );
 const camelCase = (x: unknown): unknown => {
   if (Array.isArray(x)) return x.map(camelCase);

@@ -22,3 +22,14 @@ export function heldKind(q: Queryable): HeldKind {
   if (type === "boolean") return "boolean";
   return "other";
 }
+
+/**
+ * What an array queryable's elements hold (its `items`; `any` without them), for the array functions; `not-array`
+ * for a queryable that isn't an array.
+ */
+export function itemsKind(q: Queryable): HeldKind | "not-array" {
+  const types: unknown = Array.isArray(q.type) ? q.type.filter((t) => t !== "null") : q.type;
+  const type = Array.isArray(types) ? (types.length === 1 ? types[0] : undefined) : types;
+  if (type !== "array") return "not-array";
+  return typeof q.items === "object" && q.items !== null ? heldKind(q.items) : "any";
+}
