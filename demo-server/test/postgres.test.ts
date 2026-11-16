@@ -156,6 +156,60 @@ describe("the routes on the PostgreSQL collections", () => {
   });
 });
 
+describe('"filter-crs" on the PostgreSQL store (OGC API Features Part 3, Requirement 8)', () => {
+  const EPSG = (code: number) => `http://www.opengis.net/def/crs/EPSG/0/${code}`;
+  const R = 6378137; // Web Mercator, as EPSG:3857 defines it
+  const mercator = (lon: number, lat: number) => [(R * lon * Math.PI) / 180, R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360))];
+  /** A box, in CRS84 (west, south, east, north), in EPSG:3857 and in EPSG:4326 (latitude first), as text and JSON. */
+  const boxes = (w: number, s: number, e: number, n: number) => {
+    const [x1, y1] = mercator(w, s);
+    const [x2, y2] = mercator(e, n);
+    return [
+      { crs: undefined, bbox: [w, s, e, n] },
+      { crs: EPSG(3857), bbox: [x1!, y1!, x2!, y2!] },
+      { crs: EPSG(4326), bbox: [s, w, n, e] },
+    ];
+  };
+  const intersects = (bbox: number[]) => ({ op: "s_intersects", args: [{ property: "geometry" }, { bbox }] });
+  const ids = (answer: { features: { id: number }[] }) => answer.features.map((f) => f.id);
+
+  // The request's rows, on the states: a box west of 90° W (latitude first it doesn't fit CRS84: refused before 1.7.0),
+  // and one whose latitude-first numbers fit CRS84 by chance (read wrongly without filter-crs).
+  const BOXES: [string, [number, number, number, number]][] = [["around Colorado", [-106.3, 36.4, -100.7, 41.6]], ["around Maine", [-70, 44, -69, 45]]];
+  for (const [name, box] of BOXES) {
+    it(`a box ${name}: the same states in CRS84, EPSG:3857 and EPSG:4326, as text and as JSON`, async (t) => {
+      if (skip) return t.skip(skip);
+      const answers: number[][] = [];
+      for (const { crs, bbox } of boxes(...box)) {
+        const crsMember = crs ? { "filter-crs": crs } : {};
+        const json = await query("pg-states", { filter: intersects(bbox), ...crsMember });
+        const text = await query("pg-states", { filter: `S_INTERSECTS(geometry, BBOX(${bbox.join(", ")}))`, "filter-lang": "cql2-text", ...crsMember });
+        assert.equal(json.status, 200, `${crs} JSON`);
+        assert.equal(text.status, 200, `${crs} text`);
+        answers.push(ids(await read(json)), ids(await read(text)));
+      }
+      assert.ok(answers[0]!.length > 0);
+      for (const answer of answers) assert.deepEqual(answer, answers[0]);
+    });
+  }
+
+  it("refuses: an unknown CRS, a literal outside EPSG:3857's area, a latitude out of range, a box running backwards", async (t) => {
+    if (skip) return t.skip(skip);
+    const problem = async (body: Record<string, unknown>) => {
+      const res = await query("pg-states", body);
+      const answer = await read(res);
+      return [res.status, answer.code, answer.problems?.[0]?.path];
+    };
+    assert.deepEqual(await problem({ filter: intersects([0, 0, 1, 1]), "filter-crs": "http://www.opengis.net/def/crs/OGC/0/does_not_exist" }), [400, "invalid-request", undefined]);
+    // Past the antimeridian PostGIS would wrap x to the other side: the server refuses it (the guide's pattern).
+    assert.deepEqual(await problem({ filter: intersects([19000000, 0, 21000000, 1000000]), "filter-crs": EPSG(3857) }), [400, "invalid-filter", "/args/1/bbox/2"]);
+    assert.deepEqual(await problem({ filter: intersects([95, -106, 96, -105]), "filter-crs": EPSG(4326) }), [400, "invalid-filter", "/args/1/bbox/0"]);
+    assert.deepEqual(await problem({ filter: intersects([-11000000, 4000000, -12000000, 5000000]), "filter-crs": EPSG(3857) }), [400, "invalid-filter", "/args/1/bbox"]);
+    // Without filter-crs a box in metres is CRS84's, refused (Part 3's Conformance Test 10).
+    assert.deepEqual(await problem({ filter: intersects([1000000, 1000000, 2000000, 2000000]) }), [400, "invalid-filter", "/args/1/bbox/0"]);
+  });
+});
+
 describe("the postgres dialect on values the kitchen sink doesn't have", () => {
   /** The value served for `x` (an SQL expression), and whether toSql's filter and its negation select it, beside evaluate. */
   const check = async (x: string, column: SqlColumn, filter: Cql2Filter) => {

@@ -21,7 +21,8 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import type { Cql2Filter } from "ogc-cql2";
-import { sqlConformance, sqliteFunctions, toSql, type SqlColumn } from "ogc-cql2/sql";
+import { sqlConformance, sqliteFunctions, toSql, type SqlColumn, type SqlLiterals } from "ogc-cql2/sql";
+import { sqlFilterCrs } from "./filter-crs.ts";
 import { decodeGeoPackageBinary, type Geometry } from "../geopackage/binary.ts";
 import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
@@ -253,8 +254,9 @@ function tableStore(db: DatabaseSync, id: string, contents: Row, spatialite: boo
     queryables: () => queryables,
     hasGeometry: () => withGeometry,
     conformance: () => sqlConformance({ dialect: "sqlite", spatialite }), // Spatial Functions with SpatiaLite
-    async query(filter: Cql2Filter, { limit, offset }) {
-      const { where, params } = toSql(filter, { dialect: "sqlite", columns: filterColumns, spatialite });
+    filterCrs: () => sqlFilterCrs("sqlite"),
+    async query(filter: Cql2Filter, { limit, offset }, literals?: SqlLiterals) {
+      const { where, params } = toSql(filter, { dialect: "sqlite", columns: filterColumns, spatialite, ...(literals ? { literals } : {}) });
       const rows = all(`SELECT ${select} FROM ${from} WHERE ${where} ORDER BY ${quote(idColumn.name)} LIMIT ? OFFSET ?`, ...params, limit, offset);
       const numberMatched = Number(all(`SELECT COUNT(*) AS n FROM ${from} WHERE ${where}`, ...params)[0]!.n);
       return { features: rows.map(toFeature), numberMatched };

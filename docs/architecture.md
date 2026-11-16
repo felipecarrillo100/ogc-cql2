@@ -73,7 +73,7 @@ drops the rest.
 | `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate`; `evaluateConformance` (the classes it supports with its options) | 0.1.0; 1.4.0: `evaluateConformance` |
-| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqlConformance` (the classes a dialect supports with its options), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb`; 1.4.0: `sqlConformance` |
+| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqlConformance` (the classes a dialect supports with its options), `sqlReprojects` (whether it reprojects `literals`), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb`; 1.4.0: `sqlConformance`; 1.7.0: `literals`, `sqlReprojects` |
 | `ogc-cql2/parse` | `src/parse/` | `fromText` (CQL2-text → CQL2-JSON, then the profile check), for a server that receives text | 0.11.0 |
 
 `text`, `parse`, `evaluate` and `sql` validate their input (or their result) first, so they load `validate` too.
@@ -107,6 +107,17 @@ characters a string can hold).
   (west greater than east is a box across the antimeridian), 2 or 3 numbers per position. A geometry's own GeoJSON
   `bbox` member is refused, as the schema refuses it (`oneOf` geometry or bbox literal). The class named follows the
   standard: S_INTERSECTS with a point or a box is Basic, with another geometry Basic plus, another relation Full.
+- **Literals in another CRS** (since 1.7.0, OGC API Features Part 3's `filter-crs`, Requirement 8):
+  - **`crs84: false`:** skips the ranges and the box's axis order, which only CRS84 defines; the rest is checked.
+  - **`toSql`'s `literals: { srid, yx }`:**
+    - `yx` swaps the axes, on every dialect;
+    - another SRID than 4326 is reprojected by the database (`Dialect.reprojects`, `sqlReprojects`; PostgreSQL), in a
+      scalar subquery computed once, and compared planar in CRS84;
+    - two literals are then decided by the database, after its transform, not by the package in the given numbers;
+    - a box running backwards is refused outside 4326.
+  - `evaluate` and `toText` stay CRS84.
+  - Coordinates outside a CRS's area of use are the server's check.
+  - See the guide's [Literals in another CRS](guide/spatial.md#literals-in-another-crs-filter-crs).
 - **Array functions** (since 1.6.0): an operand is a property or an array of scalar literals. A nested array, a
   property, a function, arithmetic, an interval, a geometry or CASEI / ACCENTI inside an array is `outside-profile`; a
   `null` element is `wrong-arguments`. With queryables, the property must be an array (`type: "array"`), and its
@@ -680,7 +691,9 @@ checks that they agree.
 | 1.4.0 | **The classes each engine supports:** `evaluateConformance` and `sqlConformance`, the lists `toEvaluator` and `toSql` refuse by, so a filter valid against them is never `unsupported`; the **developer guide** (`docs/guide/`) and a short README; demo-server and the playground use the lists. Fixed: `filterProperties` on INTERVAL ends; the `s_disjoint` documentation |
 | 1.5.0 | **Oracle and SQL Server, for enterprise GIS:** the `oracle` dialect (every class, Oracle Spatial) and the `sqlserver` dialect (every class but Spatial Functions), on the dialect interface, tested live against each database (not in CI); `oracleFunctions` / `oracleValue`, `sqlserverFunctions` / `sqlserverValue`, `SqlColumn.spatialIndex`. Details below |
 | 1.6.0 | **Array Functions:** A_EQUALS, A_CONTAINS, A_CONTAINEDBY, A_OVERLAPS on sets, in every part and engine; native arrays (PostgreSQL, DuckDB lists) and JSON (PostgreSQL `jsonb`, GeoPackage text, Oracle, SQL Server) through `SqlColumn.items`; the walker's array hooks; `cql2_*_array` (GIN-indexable) in `postgresFunctions`, `cql2_array` / `cql2_array_pair` in `sqliteFunctions`. Details below |
-| later | JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
+| 1.7.0 | **Literals in another CRS** (OGC API Features Part 3's `filter-crs`): `crs84: false` in `validate` and `fromText`; `toSql`'s `literals: { srid, yx }`, the axes swapped on every dialect, another SRID reprojected by PostgreSQL (`sqlReprojects`); proved on PostGIS 3.1–3.7, amd64 and arm64, against converting first and against `evaluate`. JSTS as an engine in the guide (Table 14 and the US states, measured) |
+| later | JSON-FG: `place`, `coordRefSys` and 3D comparison; an index-friendly SQL mode |
+| candidates | `mapGeometryLiterals(filter, fn)`, each spatial literal mapped (for an application converting `filter-crs` literals itself); `literals` with another SRID on Oracle (`SDO_CS.TRANSFORM`), DuckDB (`ST_Transform`) and SpatiaLite (`ST_Transform` with PROJ), each through `Dialect.reprojects` |
 
 ### 1.6.0: Array Functions
 

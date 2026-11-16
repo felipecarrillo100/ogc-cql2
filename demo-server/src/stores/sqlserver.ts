@@ -15,7 +15,8 @@
  */
 import mssql from "mssql";
 import type { Cql2Filter } from "ogc-cql2";
-import { sqlConformance, sqlserverValue, toSql, type SqlColumn } from "ogc-cql2/sql";
+import { sqlConformance, sqlserverValue, toSql, type SqlColumn, type SqlLiterals } from "ogc-cql2/sql";
+import { sqlFilterCrs } from "./filter-crs.ts";
 import { decodeWkb } from "../geopackage/binary.ts";
 import { servedArray } from "./geopackage.ts";
 import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
@@ -195,9 +196,10 @@ async function tableStore(pool: mssql.ConnectionPool, id: string, entry: SqlServ
     queryables: () => queryables,
     hasGeometry: () => geometryColumn !== undefined,
     conformance: () => sqlConformance({ dialect: "sqlserver" }),
-    async query(filter: Cql2Filter, { limit, offset }) {
+    filterCrs: () => sqlFilterCrs("sqlserver"),
+    async query(filter: Cql2Filter, { limit, offset }, literals?: SqlLiterals) {
       const filterColumns = geometryColumn && !Object.hasOwn(columns, "geometry") ? { ...columns, geometry: geometryColumn } : columns;
-      const { where, params } = toSql(filter, { dialect: "sqlserver", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}) });
+      const { where, params } = toSql(filter, { dialect: "sqlserver", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}), ...(literals ? { literals } : {}) });
       const [page, total] = await Promise.all([
         run(pool, `SELECT ${select} FROM ${relation} WHERE ${where} ORDER BY ${quote(idColumn)} OFFSET @cql2_offset ROWS FETCH NEXT @cql2_limit ROWS ONLY`, params, { cql2_offset: offset, cql2_limit: limit }),
         run<{ n: number }>(pool, `SELECT COUNT(*) AS n FROM ${relation} WHERE ${where}`, params),

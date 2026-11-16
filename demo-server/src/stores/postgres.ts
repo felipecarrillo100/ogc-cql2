@@ -13,7 +13,8 @@
  */
 import pg from "pg";
 import type { Cql2Filter } from "ogc-cql2";
-import { postgresValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
+import { postgresValue, sqlConformance, toSql, type SqlColumn, type SqlLiterals } from "ogc-cql2/sql";
+import { sqlFilterCrs } from "./filter-crs.ts";
 import { decodeWkb } from "../geopackage/binary.ts";
 import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
@@ -193,9 +194,10 @@ async function tableStore(pool: pg.Pool, id: string, entry: PostgresTable, funct
     queryables: () => queryables,
     hasGeometry: () => geometryColumn !== undefined,
     conformance: () => sqlConformance({ dialect: "postgres" }), // the spatial classes through PostGIS
-    async query(filter: Cql2Filter, { limit, offset }) {
+    filterCrs: () => sqlFilterCrs("postgres"),
+    async query(filter: Cql2Filter, { limit, offset }, literals?: SqlLiterals) {
       const filterColumns = geometryColumn && !Object.hasOwn(columns, "geometry") ? { ...columns, geometry: geometryColumn } : columns;
-      const { where, params } = toSql(filter, { dialect: "postgres", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}) });
+      const { where, params } = toSql(filter, { dialect: "postgres", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}), ...(literals ? { literals } : {}) });
       const n = params.length;
       const [page, count] = await Promise.all([
         pool.query(`SELECT ${select} FROM ${relation.name} WHERE ${where} ORDER BY ${quote(idColumn)} LIMIT $${n + 1} OFFSET $${n + 2}`, [...params, limit, offset]),

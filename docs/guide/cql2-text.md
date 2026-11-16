@@ -36,7 +36,8 @@ const filter = fromText(req.query.filter, { queryables, conformance });
 ```
 
 `fromText` reads the standard's grammar exactly, every class, then checks the result as `validate` does (with the
-same options). So:
+same options; `crs84: false` for geometries in a `filter-crs` CRS, see
+[Literals in another CRS](spatial.md#literals-in-another-crs-filter-crs)). So:
 
 - text that isn't CQL2-text throws `invalid-text`, with `details.position` (where, as a JavaScript string index) and
   `details.expected`. Nothing is guessed, and nothing is left unread: `a = 1)` is refused, not read as `a = 1`;

@@ -14,7 +14,7 @@ import { readText } from "./read.js";
 
 /**
  * Reads CQL2-text as CQL2-JSON, then checks it against the profile, with the same options as `validate` (a
- * collection's queryables, a server's conformance classes).
+ * collection's queryables, a server's conformance classes, `crs84: false` for literals in a `filter-crs` CRS).
  *
  * @throws Cql2Error `invalid-text` for text that isn't CQL2-text: `details.position` (a UTF-16 index into the text)
  * says where, `details.expected` what the grammar expected there.

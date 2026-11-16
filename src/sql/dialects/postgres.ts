@@ -309,15 +309,19 @@ function sridOf(column: SqlColumn): number {
  * - A column in another SRID is transformed to 4326 (planar in CRS84, as CQL2 compares; a planar comparison in Mercator
  *   would draw other edges): give it an index on `ST_Transform(column, 4326)`; a geography column, one on
  *   `(column::geometry)`. Heights are ignored (GEOS's predicates are 2D).
+ * - A literal in another SRID (`SqlOptions.literals`) is read in it and transformed to 4326 (`ST_Transform`, PROJ's
+ *   vertices, x, y axes); a box is then one envelope (it can't cross the antimeridian there), a transformed polygon.
+ *   The transform is a scalar subquery, computed once; the GiST index is still used (measured on PostGIS 3.1–3.7,
+ *   with a parameter and a generic plan).
  */
-function postgresIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
+function postgresIntersects(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, _positive: boolean, _fn: unknown, srid: number): string | undefined {
   const g = geometryOf(sql, column);
   if (g === undefined) return undefined;
   const parts: string[] = [];
-  if ("bbox" in literal && !("type" in literal)) parts.push(...boxes(literal, param)); // across the antimeridian: two boxes
+  if ("bbox" in literal && !("type" in literal)) parts.push(...boxes(literal, param, srid)); // across the antimeridian: two boxes
   else {
     const geometry = literal as Geometry;
-    parts.push(...(geometry.type === "GeometryCollection" ? geometry.geometries : [geometry]).map((l) => geojson(l, param)));
+    parts.push(...(geometry.type === "GeometryCollection" ? geometry.geometries : [geometry]).map((l) => geojson(l, param, srid)));
   }
   const tests = parts.map((l) => `(${g} && ${l} AND NOT ST_Relate(${g}, ${l}, 'FF*FF****'))`);
   return tests.length === 1 ? tests[0]! : `(${tests.join(" OR ")})`;
@@ -331,16 +335,25 @@ function geometryOf(sql: string, column: SqlColumn): string | undefined {
   return cls === "geography" ? `${sql}::geometry` : srid === 4326 ? sql : `ST_Transform(${sql}, 4326)`;
 }
 
-const geojson = (l: Geometry, param: (value: SqlValue) => string) => `ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(l))}), 4326)`;
+/**
+ * A literal in `srid`, in 4326: as it is, or transformed in a scalar subquery, so it is computed once for the query
+ * (an InitPlan) rather than for every candidate row the relation tests (measured on PostGIS 3.6: half the time, the
+ * GiST index still used); see {@link postgresIntersects}.
+ */
+const in4326 = (l: string, srid: number) => (srid === 4326 ? l : `(SELECT ST_Transform(${l}, 4326))`);
 
-/** A box literal as envelopes: one, or across the antimeridian (west > east) two. */
-function boxes(literal: BboxLiteral, param: (value: SqlValue) => string): string[] {
+const geojson = (l: Geometry, param: (value: SqlValue) => string, srid: number) =>
+  in4326(`ST_SetSRID(ST_GeomFromGeoJSON(${param(JSON.stringify(l))}), ${srid})`, srid);
+
+/** A box literal as envelopes: one, or in 4326 across the antimeridian (west > east) two. */
+function boxes(literal: BboxLiteral, param: (value: SqlValue) => string, srid: number): string[] {
   const b = literal.bbox;
   const [west, south, east, north] = b.length === 4 ? b : [b[0], b[1], b[3], b[4]];
   const s = param(south);
   const n = param(north);
-  const box = (w: string, e: string) => `ST_MakeEnvelope(${w}::double precision, ${s}::double precision, ${e}::double precision, ${n}::double precision, 4326)`;
-  return west > east ? [box(param(west), "180"), box("-180", param(east))] : [box(param(west), param(east))];
+  const box = (w: string, e: string) =>
+    in4326(`ST_MakeEnvelope(${w}::double precision, ${s}::double precision, ${e}::double precision, ${n}::double precision, ${srid})`, srid);
+  return west > east && srid === 4326 ? [box(param(west), "180"), box("-180", param(east))] : [box(param(west), param(east))];
 }
 
 /**
@@ -356,15 +369,15 @@ function boxes(literal: BboxLiteral, param: (value: SqlValue) => string): string
  * The literal is one geometry: a box across the antimeridian is its two halves collected, a GeometryCollection kept
  * whole (these relations don't split into members).
  */
-function postgresRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string): string | undefined {
+function postgresRelate(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, _positive: boolean, _fn: unknown, srid: number): string | undefined {
   const g = geometryOf(sql, column);
-  return g === undefined ? undefined : relationSql(relation, g, relateLiteral(literal, param));
+  return g === undefined ? undefined : relationSql(relation, g, relateLiteral(literal, param, srid));
 }
 
 /** A literal as one geometry, for the relations: a box across the antimeridian is its two halves collected. */
-function relateLiteral(literal: SpatialLiteral, param: (value: SqlValue) => string): string {
-  if (!("bbox" in literal) || "type" in literal) return geojson(literal as Geometry, param);
-  const parts = boxes(literal, param);
+function relateLiteral(literal: SpatialLiteral, param: (value: SqlValue) => string, srid: number): string {
+  if (!("bbox" in literal) || "type" in literal) return geojson(literal as Geometry, param, srid);
+  const parts = boxes(literal, param, srid);
   return parts.length === 1 ? parts[0]! : `ST_Collect(${parts.join(", ")})`;
 }
 
@@ -392,8 +405,8 @@ function relationSql(relation: MatrixRelation, g: string, l: string): string {
  * S_EQUALS also needs the two not both empty: PostGIS's `ST_Equals` holds for two empty geometries, GEOS's DE-9IM
  * matrix doesn't (a literal is never empty; two columns can be). Written so that a NULL side stays NULL.
  */
-function postgresPair(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string): string | undefined {
-  const g = (side: PairSide) => ("literal" in side ? relateLiteral(side.literal, param) : geometryOf(side.sql, side.column));
+function postgresPair(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string, _fn: unknown, srid: number): string | undefined {
+  const g = (side: PairSide) => ("literal" in side ? relateLiteral(side.literal, param, srid) : geometryOf(side.sql, side.column));
   const [ga, gb] = [g(a), g(b)];
   if (ga === undefined || gb === undefined) return undefined;
   if (relation === "s_intersects") return `(${ga} && ${gb} AND NOT ST_Relate(${ga}, ${gb}, 'FF*FF****'))`;
@@ -506,6 +519,7 @@ export const postgres: Dialect = {
   intersects: postgresIntersects,
   relate: postgresRelate,
   spatialPair: postgresPair,
+  reprojects: true,
   arrayElements: postgresElements,
   arraysOwnKind: postgresOwnKind,
 };

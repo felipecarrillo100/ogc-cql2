@@ -53,7 +53,8 @@ The package implements these conformance classes:
   DuckDB lists) or as JSON (PostgreSQL `jsonb`, GeoPackage text as GDAL writes list fields, Oracle, SQL Server)
   ([guide](docs/guide/arrays.md)).
 - **Each engine says what it supports:** `evaluateConformance(options)` and `sqlConformance(options)` return the
-  classes, as conformance URIs, to pass to `validate`; a filter valid against them is never refused as `unsupported`.
+  classes, as conformance URIs, to pass to `validate`; a filter valid against them is never refused as `unsupported`
+  (`toSql`'s `literals` in another SRID aside: `sqlReprojects` says where).
 - **Anything else that is valid CQL2** (custom functions) is refused as `outside-profile`, with the conformance class
   it would need.
 
@@ -113,7 +114,7 @@ const { where, params } = toSql(filter, { dialect: "sqlite", columns });
 | Database | Dialect | What you get |
 |---|---|---|
 | SQLite, GeoPackage | `sqlite` | `?` placeholders, GeoPackage's types, its R-tree for spatial filters; Spatial Functions with SpatiaLite; arrays as JSON text ([guide](docs/guide/sqlite-geopackage.md)) |
-| PostgreSQL, PostGIS | `postgres` | `$1` placeholders, code point order, PostGIS's GiST index, exact on arm64 too, any SRID; native and `jsonb` arrays, GIN-indexable ([guide](docs/guide/postgresql.md)) |
+| PostgreSQL, PostGIS | `postgres` | `$1` placeholders, code point order, PostGIS's GiST index, exact on arm64 too, any SRID, literals in another CRS (`filter-crs`); native and `jsonb` arrays, GIN-indexable ([guide](docs/guide/postgresql.md)) |
 | DuckDB, GeoParquet | `duckdb` | the same SQL in Node and in the browser (DuckDB-WASM), straight on files, GeoParquet's bbox covering; lists as arrays ([guide](docs/guide/duckdb.md)) |
 | Oracle Database 23ai+, Oracle Spatial | `oracle` | `:1` placeholders, code point order whatever the session's NLS settings, every spatial relation planar with a planar index; arrays as JSON ([guide](docs/guide/oracle.md)) |
 | SQL Server 2022+ | `sqlserver` | `@p1` placeholders, code point order without blank padding, S_INTERSECTS on `geometry` with the spatial index; arrays as JSON; no Spatial Functions ([guide](docs/guide/sqlserver.md)) |
@@ -153,6 +154,7 @@ them into PostgreSQL, Oracle and SQL Server). Its routes:
 | `GET /collections/{id}/queryables` | the properties and their types (a JSON Schema) |
 | `POST /collections/{id}/query` with `{ "filter": …, "limit": 50, "offset": 0 }` | the matching features, as GeoJSON |
 | … with `"filter-lang": "cql2-text"` and the filter as a CQL2-text string | the same, read with `ogc-cql2/parse` |
+| … with `"filter-crs"`: EPSG:4326 (latitude first) on the SQL stores, EPSG:3857 on PostgreSQL | the same, its geometries read in that CRS |
 
 An invalid filter, or one naming a property the collection doesn't have, is refused with HTTP 400 and the problems as
 `application/problem+json`. Neither the page nor the server is part of the npm package.
@@ -224,13 +226,14 @@ Older versions may well work, but haven't been tested.
 |---|---|---|
 | Node.js | 22.23.4, 24.15.0 | 22 or later. `node:sqlite` needs no flag from Node 22.13 |
 | Browsers | Chrome 156 | the DuckDB-WASM checks; `fromText` on the standard's text examples |
-| PostgreSQL + PostGIS (GEOS) | 13 / 3.1.4 (3.9.0), 15 / 3.3.4 (3.9.0), 16 / 3.4.3 (3.9.0), 17 / 3.5.2 (3.9.0), 18 / 3.6.4 (3.14.1) on amd64; 17 / 3.5.3 (3.11.1), 17.10 / 3.5.6 (3.13.1), 18 / 3.6.1 (3.13.1), 18 / 3.7.0 (3.15.0) on arm64 | the spatial filters on all of them; every other filter on 17.10 / 3.5.6. A column holding GeometryCollections: GEOS 3.13 or later |
+| PostgreSQL + PostGIS (GEOS) | 13 / 3.1.4 (3.9.0), 15 / 3.3.4 (3.9.0), 16 / 3.4.3 (3.9.0), 17 / 3.5.2 (3.9.0), 18 / 3.6.4 (3.14.1) on amd64; 17 / 3.5.3 (3.11.1), 17.10 / 3.5.6 (3.13.1), 18 / 3.6.1 (3.13.1), 18 / 3.7.0 (3.15.0) on arm64 | the spatial filters on all of them; every other filter on 17.10 / 3.5.6. A column holding GeometryCollections: GEOS 3.13 or later. Literals in another CRS (`literals`): all of them, and 14 / 3.2.3 (3.9.0), 18 / 3.7.0 (3.15.0) on amd64 |
 | `pg` (node-postgres) | 8.23.1 | |
 | SQLite (`node:sqlite`) | 3.51.3 (Node 24.15), 3.53.4 (Node 22.23) | GeoPackage 1.4 |
 | SpatiaLite | 5.1.0 (GEOS 3.15.0, 3.14.1) | for Spatial Functions in `sqlite`; GEOS 3.13 or later for GeometryCollection literals |
 | DuckDB, Node (`@duckdb/node-api`) | 2.0.0, 1.5.4 | 1.5.4 is DuckDB-WASM's engine; `npm run check:duckdb` tests the newest releases |
 | DuckDB-WASM (`@duckdb/duckdb-wasm`) | 1.33.1-dev57.0 (DuckDB 1.5.4) | with the spatial extension |
 | geos.js (as `spatialEngine`) | 0.1.5 (GEOS 3.14.0) | |
+| jsts (as `spatialEngine`) | 2.12.1 (JTS 1.17) | the standard's Table 14, and the US states against GEOS; not in CI ([guide](docs/guide/spatial.md#the-other-relations-plug-in-an-engine)) |
 | Oracle Database | 26ai Free 23.26.3 (arm64) | every filter, arrays as text and in the `JSON` type, every spatial relation, against GEOS. Not in CI |
 | `oracledb` | 26.0.0 (thin mode) | |
 | SQL Server | 2022 (16.0.4305.5), 2025 (17.0.5035.5), amd64 (under emulation) | every filter, arrays as text and in 2025's `json` type, S_INTERSECTS against GEOS. Not in CI |

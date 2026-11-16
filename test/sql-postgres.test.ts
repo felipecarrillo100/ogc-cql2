@@ -3,8 +3,8 @@
  * Whether that SQL selects what `evaluate` selects is checked against a real PostgreSQL by demo-server's tests.
  */
 import { describe, expect, it } from "vitest";
-import type { Cql2Filter } from "ogc-cql2";
-import { postgresFunctions, postgresValue, toSql, type SqlColumn } from "ogc-cql2/sql";
+import type { Cql2Error, Cql2Filter } from "ogc-cql2";
+import { postgresFunctions, postgresValue, sqlReprojects, toSql, type SqlColumn, type SqlDialect, type SqlLiterals } from "ogc-cql2/sql";
 
 const COLUMNS: Record<string, SqlColumn> = {
   name: { type: "string", sqlType: "text" },
@@ -303,6 +303,107 @@ describe("S_INTERSECTS in PostGIS", () => {
     // Another SRID and geography: the column as for S_INTERSECTS.
     expect(toSql({ op: "s_within", args: [p("mercator"), square] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where).toContain(`ST_Transform("mercator", 4326) @ `);
     expect(toSql({ op: "s_within", args: [p("name"), square] } as unknown as Cql2Filter, { dialect: "postgres", columns: geo }).where).toBe("NULL::boolean");
+  });
+});
+
+describe("literals in another CRS (SqlOptions.literals, filter-crs), since 1.7.0", () => {
+  const geo: Record<string, SqlColumn> = { geometry: { sqlType: "geometry(MultiPolygon, 4326)", column: "geom" } };
+  const at = (literal: unknown, op = "s_intersects") => ({ op, args: [p("geometry"), literal] }) as unknown as Cql2Filter;
+  const s = (filter: Cql2Filter, literals: SqlLiterals, dialect: SqlDialect = "postgres") => toSql(filter, { dialect, columns: geo, literals });
+  const refusal = (run: () => unknown) => {
+    try {
+      run();
+    } catch (e) {
+      const { name, code, path, details } = e as Cql2Error;
+      return { name, code, path, problems: (details?.problems as { path: string }[] | undefined)?.map((x) => x.path) };
+    }
+    throw new Error("not refused");
+  };
+  const box3857 = { bbox: [445277.96317309426, 6446275.841017158, 556597.4539663679, 6621293.722740165] };
+  const env = (srid: number) =>
+    `ST_MakeEnvelope($3::double precision, $1::double precision, $4::double precision, $2::double precision, ${srid})`;
+
+  it("a box in 3857: one envelope, read in 3857 and transformed to 4326 once (a scalar subquery), behind the index", () => {
+    const L = `(SELECT ST_Transform(${env(3857)}, 4326))`;
+    expect(s(at(box3857), { srid: 3857 })).toEqual({
+      where: `("geom" && ${L} AND NOT ST_Relate("geom", ${L}, 'FF*FF****'))`,
+      params: [6446275.841017158, 6621293.722740165, 445277.96317309426, 556597.4539663679],
+    });
+  });
+
+  it("a geometry in 3857, and every relation, through the same builders", () => {
+    const L = `(SELECT ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($1), 3857), 4326))`;
+    const point = { type: "Point", coordinates: [489805, 6585991] };
+    expect(s(at(point), { srid: 3857 }).where).toBe(`("geom" && ${L} AND NOT ST_Relate("geom", ${L}, 'FF*FF****'))`);
+    expect(s(at(point, "s_within"), { srid: 3857 }).where).toBe(`("geom" @ ${L} AND ST_Relate("geom", ${L}, 'T*F**F***'))`);
+    expect(s(at(point, "s_disjoint"), { srid: 3857 }).where).toBe(`NOT (("geom" && ${L} AND NOT ST_Relate("geom", ${L}, 'FF*FF****')))`);
+    const collection = { type: "GeometryCollection", geometries: [point, { type: "LineString", coordinates: [[0, 0], [1000, 1000]] }] };
+    expect(s(at(collection), { srid: 32635 }).where).toBe(
+      `(("geom" && ${L.replace("3857", "32635")} AND NOT ST_Relate("geom", ${L.replace("3857", "32635")}, 'FF*FF****')) OR ` +
+        `("geom" && ${L.replace("$1", "$2").replace("3857", "32635")} AND NOT ST_Relate("geom", ${L.replace("$1", "$2").replace("3857", "32635")}, 'FF*FF****')))`,
+    );
+  });
+
+  it("two literals in 3857: the database decides, in CRS84 after its transform (not the package's planar test in metres)", () => {
+    const filter = { op: "s_intersects", args: [{ type: "Point", coordinates: [489805, 6585991] }, box3857] } as unknown as Cql2Filter;
+    expect(s(filter, { srid: 3857 }).where).toMatch(/^\(\(SELECT ST_Transform\(ST_SetSRID\(ST_GeomFromGeoJSON\(\$1\), 3857\), 4326\)\) && \(SELECT ST_Transform\(ST_MakeEnvelope\(/);
+    // In CRS84, two literals are decided by the package, as before.
+    const crs84 = { op: "s_intersects", args: [{ type: "Point", coordinates: [4.4, 50.8] }, { bbox: [4, 50, 5, 51] }] } as unknown as Cql2Filter;
+    expect(toSql(crs84, { dialect: "postgres", columns: geo }).where).toBe("TRUE");
+  });
+
+  it("yx (EPSG:4326 as EPSG orders it): the axes swapped, no transform, CRS84's checks and the antimeridian as without it", () => {
+    expect(s(at({ type: "Point", coordinates: [50.8, 4.4, 30] }), { srid: 4326, yx: true }).params).toEqual(['{"type":"Point","coordinates":[4.4,50.8,30]}']);
+    expect(s(at({ bbox: [35, 139, 36, 140] }), { srid: 4326, yx: true })).toEqual(
+      toSql(at({ bbox: [139, 35, 140, 36] }), { dialect: "postgres", columns: geo }),
+    );
+    expect(s(at({ bbox: [-10, 170, -100, 10, -170, 100] }), { srid: 4326, yx: true })).toEqual(
+      toSql(at({ bbox: [170, -10, -100, -170, 10, 100] }), { dialect: "postgres", columns: geo }),
+    );
+    const ring = [[50, 4], [50, 5], [51, 5], [50, 4]];
+    expect(s(at({ type: "Polygon", coordinates: [ring] }), { srid: 4326, yx: true }).params).toEqual([
+      JSON.stringify({ type: "Polygon", coordinates: [ring.map(([y, x]) => [x, y])] }),
+    ]);
+    // A latitude out of range is refused where the client wrote it: the first number.
+    expect(refusal(() => s(at({ bbox: [95, 10, 96, 11] }), { srid: 4326, yx: true }))).toMatchObject({
+      code: "invalid-filter", path: "/args/1/bbox/0", problems: ["/args/1/bbox/0", "/args/1/bbox/2"],
+    });
+    expect(refusal(() => s(at({ type: "Point", coordinates: [10, 200] }), { srid: 4326, yx: true }))).toMatchObject({
+      path: "/args/1/coordinates/1",
+    });
+    // Every dialect: only a swap, nothing to reproject.
+    expect(s(at({ bbox: [35, 139, 36, 140] }), { srid: 4326, yx: true }, "duckdb")).toEqual(
+      toSql(at({ bbox: [139, 35, 140, 36] }), { dialect: "duckdb", columns: geo }),
+    );
+    // { srid: 4326 } alone is CRS84, as without literals.
+    const belgium = at({ bbox: [4, 50, 5, 51] });
+    expect(s(belgium, { srid: 4326 })).toEqual(toSql(belgium, { dialect: "postgres", columns: geo }));
+    expect(refusal(() => s(at(box3857), { srid: 4326 }))).toMatchObject({ code: "invalid-filter", path: "/args/1/bbox/0" });
+  });
+
+  it("refuses, in another SRID than 4326, a box running backwards on either axis (ST_MakeEnvelope would turn it round)", () => {
+    expect(refusal(() => s(at({ bbox: [556597, 6446275, 445277, 6621293] }), { srid: 3857 }))).toMatchObject({
+      code: "invalid-filter", path: "/args/1/bbox", problems: ["/args/1/bbox"],
+    });
+    expect(refusal(() => s(at({ bbox: [6446275, 445277, 6621293, 556597, 0, 1] }), { srid: 2056, yx: true }))).toMatchObject({ code: "invalid-filter" });
+    expect(refusal(() => s(at({ bbox: [445277, 6621293, 556597, 6446275] }), { srid: 3857 }))).toMatchObject({ path: "/args/1/bbox" });
+    // The structure is still checked; the CRS84 ranges aren't.
+    expect(refusal(() => s(at({ type: "Point", coordinates: [1] }), { srid: 3857 }))).toMatchObject({ code: "invalid-filter", path: "/args/1/coordinates" });
+  });
+
+  it("sqlReprojects: postgres only; elsewhere a SRID other than 4326 is unsupported, with details.srid", () => {
+    expect(sqlReprojects({ dialect: "postgres" })).toBe(true);
+    for (const dialect of ["duckdb", "sqlite", "oracle", "sqlserver"] as const) {
+      expect(sqlReprojects({ dialect })).toBe(false);
+      expect(refusal(() => s(at(box3857), { srid: 3857 }, dialect))).toMatchObject({ code: "unsupported", path: "" });
+    }
+    expect(sqlReprojects({ dialect: "sqlite", spatialite: true })).toBe(false);
+  });
+
+  it("an SRID that isn't a positive integer is a TypeError (it is written into the SQL)", () => {
+    for (const srid of [0, -3857, 3857.5, Number.NaN, "3857" as unknown as number]) {
+      expect(refusal(() => s(at(box3857), { srid }))).toMatchObject({ name: "TypeError" });
+    }
   });
 });
 

@@ -25,7 +25,7 @@ overview; this guide has the details.
 
 **The classes in detail**
 - [Spatial filters](spatial.md): geometry literals, the classes a server must declare, `s_intersects` in memory, the
-  other relations with GEOS.
+  other relations with GEOS or JSTS, and literals in another CRS (`filter-crs`).
 - [Temporal filters](temporal.md): instants, intervals and the fifteen relations.
 - [Comparing two properties, and arithmetic](property-property-and-arithmetic.md).
 - [Array filters](arrays.md): the four array functions as sets, array queryables, and array columns in each

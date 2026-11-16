@@ -171,7 +171,10 @@ export interface Not {
 
 // --- Spatial (the classes Basic Spatial Functions, … with additional Spatial Literals, and Spatial Functions) -------
 
-/** A position: longitude, latitude (CRS84) and optionally a height. */
+/**
+ * A position: longitude, latitude (CRS84) and optionally a height; in a filter read with `crs84: false`, the axes of
+ * the CRS `filter-crs` names.
+ */
 export type Position = readonly [number, number] | readonly [number, number, number];
 
 /**

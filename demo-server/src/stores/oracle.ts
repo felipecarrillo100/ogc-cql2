@@ -17,7 +17,8 @@
  */
 import oracledb from "oracledb";
 import type { Cql2Filter } from "ogc-cql2";
-import { oracleValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
+import { oracleValue, sqlConformance, toSql, type SqlColumn, type SqlLiterals } from "ogc-cql2/sql";
+import { sqlFilterCrs } from "./filter-crs.ts";
 import { servedArray } from "./geopackage.ts";
 import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
@@ -257,9 +258,10 @@ async function tableStore(pool: oracledb.Pool, id: string, entry: OracleTable, f
     queryables: () => queryables,
     hasGeometry: () => geometryColumn !== undefined,
     conformance: () => sqlConformance({ dialect: "oracle" }),
-    async query(filter: Cql2Filter, { limit, offset }) {
+    filterCrs: () => sqlFilterCrs("oracle"),
+    async query(filter: Cql2Filter, { limit, offset }, literals?: SqlLiterals) {
       const filterColumns = geometryColumn && !Object.hasOwn(columns, "geometry") ? { ...columns, geometry: geometryColumn } : columns;
-      const { where, params } = toSql(filter, { dialect: "oracle", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}) });
+      const { where, params } = toSql(filter, { dialect: "oracle", columns: filterColumns, ...(functionSchema ? { functionSchema } : {}), ...(literals ? { literals } : {}) });
       const n = params.length;
       const [page, count] = await Promise.all([
         run(pool, `SELECT ${select} FROM ${relation} WHERE ${where} ORDER BY ${quote(idColumn)} OFFSET :${n + 1} ROWS FETCH NEXT :${n + 2} ROWS ONLY`, [...params, offset, limit]),

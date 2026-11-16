@@ -13,7 +13,8 @@
  */
 import { DuckDBInstance, DuckDBScalarFunction, INTEGER, VARCHAR, type DuckDBValue } from "@duckdb/node-api";
 import type { Cql2Filter } from "ogc-cql2";
-import { duckdbFunctions } from "ogc-cql2/sql";
+import { duckdbFunctions, type SqlLiterals } from "ogc-cql2/sql";
+import { sqlFilterCrs } from "./filter-crs.ts";
 import { describeSql, duckdbConformance, geoSql, parquetTable } from "./duckdb-columns.ts";
 import { type CollectionDescription, type Store } from "./types.ts";
 
@@ -101,8 +102,9 @@ export async function openGeoParquet(duck: DuckDB, source: GeoParquetSource): Pr
     queryables: () => table.queryables,
     hasGeometry: () => table.filterable,
     conformance: () => duckdbConformance(duck.spatial),
-    async query(filter: Cql2Filter, { limit, offset }) {
-      const { page, count, params } = table.query(filter, limit, offset);
+    filterCrs: () => sqlFilterCrs("duckdb"),
+    async query(filter: Cql2Filter, { limit, offset }, literals?: SqlLiterals) {
+      const { page, count, params } = table.query(filter, limit, offset, literals);
       const rows = await duck.rows(page, params);
       const [n] = await duck.rows(count, params);
       return { features: rows.map(table.toFeature), numberMatched: Number(n!.n) };

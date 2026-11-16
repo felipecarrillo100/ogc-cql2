@@ -155,9 +155,11 @@ hook below, without the package depending on it, provided it is planar.
 4. **Heights:** a six-number bbox and Z coordinates are accepted and kept in the filter, and compared in 2D for now,
    as every engine does; documented as a deliberate choice. A 3D mode comes later with JSON-FG (where `place`
    geometries in a 3D CRS are common): PostGIS natively (SFCGAL for solids), `evaluate` through the hook.
-5. **CRS:** CRS84 only for now (the standard's default without `filter-crs`). Data stored in another CRS is the
-   engine's business (PostGIS transforms its column). `filter-crs` comes with JSON-FG, for the SQL engines that can
-   transform; `evaluate` would refuse it rather than guess.
+5. **CRS:** CRS84 by default (the standard's default without `filter-crs`). Data stored in another CRS is the
+   engine's business (PostGIS transforms its column). Since 1.7.0:
+   - **filter-crs literals:** `validate` / `fromText` read them with `crs84: false`, and `toSql` takes their CRS
+     (`literals`). PostgreSQL reprojects them; `yx` (latitude first) works on every dialect.
+   - **Not supported:** `evaluate` stays CRS84 rather than guess, and the application converts.
 
 Order: Basic and Basic plus first (types, `validate` and `text` for all three classes; `evaluate`; PostGIS; SQLite;
 DuckDB), then Full in PostGIS, SpatiaLite, DuckDB and the hook.

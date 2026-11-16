@@ -77,6 +77,24 @@ export interface SqlOptions {
    * no SpatiaLite. A GeometryCollection literal needs SpatiaLite built with GEOS 3.13 or later.
    */
   readonly spatialite?: boolean;
+  /**
+   * The CRS of the filter's geometry and BBOX literals, when it isn't CRS84: OGC API Features Part 3's `filter-crs`,
+   * which the server maps to an SRID its database knows. The database reprojects each literal to 4326, and the
+   * comparison stays planar in CRS84, as CQL2's is. Only where `sqlReprojects` says so (`postgres`); elsewhere a SRID
+   * other than 4326 is `unsupported`. Absent: CRS84.
+   */
+  readonly literals?: SqlLiterals;
+}
+
+/** The CRS of a filter's literals, for `SqlOptions.literals`. */
+export interface SqlLiterals {
+  /** The SRID, as the database's `spatial_ref_sys` (or equivalent) has it: 3857, 32635, or 4326 for EPSG:4326. */
+  readonly srid: number;
+  /**
+   * The CRS's first axis is latitude or northing, as in EPSG:4326 as EPSG defines it and many national grids: the
+   * package swaps each position's first two numbers (and a box's) before the database reads them as x, y.
+   */
+  readonly yx?: boolean;
 }
 
 /** A parameter's value. */
@@ -180,19 +198,26 @@ export interface Dialect {
    * same rows (in three-valued logic, a condition TRUE with a NULL leaf is TRUE with a FALSE one, and NOT is the only
    * operator that turns FALSE into TRUE), so a prefilter that leaves out rows without a geometry is exact.
    */
-  intersects?(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, fn: (name: string) => string): string | undefined;
+  intersects?(sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, fn: (name: string) => string, srid: number): string | undefined;
   /**
    * The other relations of Spatial Functions but S_DISJOINT (written as NOT S_INTERSECTS): S_EQUALS, S_TOUCHES,
    * S_WITHIN, S_OVERLAPS, S_CROSSES, S_CONTAINS of (column, literal), as their DE-9IM patterns decide them;
    * `undefined` when the column holds no geometry. Absent: the class is `unsupported`. `positive` as for `intersects`.
    */
-  relate?(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, fn: (name: string) => string): string | undefined;
+  relate?(relation: MatrixRelation, sql: string, column: SqlColumn, literal: SpatialLiteral, param: (value: SqlValue) => string, positive: boolean, fn: (name: string) => string, srid: number): string | undefined;
   /**
    * A relation of two geometry columns, or of a column and a literal in the database's own terms, or (but for
    * S_INTERSECTS) of two literals (Property-Property Comparisons): S_INTERSECTS, or one of `relate`'s, exactly as
    * `evaluate` decides it; `undefined` when a column holds no geometry. No prefilter: neither side is a constant box.
    */
-  spatialPair?(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string, fn: (name: string) => string): string | undefined;
+  spatialPair?(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string, fn: (name: string) => string, srid: number): string | undefined;
+  /**
+   * The dialect reprojects literals in another SRID (`SqlOptions.literals`): its spatial hooks write each literal
+   * read in `srid` and transformed to 4326 when `srid` isn't 4326, and `spatialPair` decides two literals too (in CRS84,
+   * after the transform). The literals arrive valid, with x, y axes, and a box from its minimum to its maximum.
+   * Absent: a SRID other than 4326 is `unsupported`, and the hooks always get 4326.
+   */
+  readonly reprojects?: boolean;
   /**
    * How the dialect reaches and reads an array column's elements (Array Functions); `undefined` when the column holds
    * no arrays (no value can match). With it, the walker writes the array functions element by element, exactly as

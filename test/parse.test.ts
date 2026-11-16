@@ -471,4 +471,24 @@ describe("fromText: the profile check after the reading", () => {
     expect(() => fromText("s LIKE 'x%'", { conformance: [CONFORMANCE.basic] })).toThrow(expect.objectContaining({ code: "invalid-filter" }));
     expect(fromText("a = 1", { queryables: { a: { type: "integer" } }, conformance: [CONFORMANCE.basic] })).toEqual(eq("a", 1));
   });
+
+  it("crs84: false reads literals in a filter-crs CRS: CQL2's Example 12 (EPSG:32635), 3857, 4326 latitude first", () => {
+    const intersects = (literal: unknown) => ({ op: "s_intersects", args: [p("geometry"), literal] });
+    const example12 = "S_INTERSECTS(geometry,POINT(379213.87 3610774.16))";
+    expect(() => fromText(example12)).toThrow(expect.objectContaining({ code: "invalid-filter" }));
+    expect(fromText(example12, { crs84: false })).toEqual(intersects({ type: "Point", coordinates: [379213.87, 3610774.16] }));
+    expect(fromText("S_INTERSECTS(geometry, BBOX(445278, 6446276, 556597, 6621293))", { crs84: false })).toEqual(
+      intersects({ bbox: [445278, 6446276, 556597, 6621293] }),
+    );
+    expect(fromText("S_INTERSECTS(geometry, BBOX(35, 139, 36, 140))", { crs84: false })).toEqual(intersects({ bbox: [35, 139, 36, 140] }));
+  });
+
+  it("crs84: false still refuses a syntax error, an unknown operator, an unclosed ring", () => {
+    const options = { crs84: false };
+    expect(() => fromText("S_INTERSECTS(geometry, POINT(489805 6585991)", options)).toThrow(expect.objectContaining({ code: "invalid-text" }));
+    expect(() => fromText("S_NEAR(geometry, POINT(489805 6585991))", options)).toThrow(expect.objectContaining({ code: "invalid-filter" }));
+    expect(() => fromText("S_INTERSECTS(geometry, POLYGON((0 0, 1000 0, 1000 1000, 0 1000)))", options)).toThrow(
+      expect.objectContaining({ code: "invalid-filter", details: { problems: [expect.objectContaining({ code: "invalid-geometry" })] } }),
+    );
+  });
 });

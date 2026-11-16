@@ -21,7 +21,7 @@ Each part is its own entry point, so an application loads only what it uses:
 | `ogc-cql2/text` | `toText`, `textProblem`: CQL2-JSON to CQL2-text | [CQL2-text](cql2-text.md) |
 | `ogc-cql2/parse` | `fromText`: CQL2-text to CQL2-JSON | [CQL2-text](cql2-text.md) |
 | `ogc-cql2/evaluate` | `toPredicate`, `toEvaluator`, `evaluate`, `evaluateConformance` | [Filtering in memory](filtering-in-memory.md) |
-| `ogc-cql2/sql` | `toSql`, `sqlConformance`, each database's helper functions | [SQL backends](sql-backends.md) |
+| `ogc-cql2/sql` | `toSql`, `sqlConformance`, `sqlReprojects`, each database's helper functions | [SQL backends](sql-backends.md) |
 
 ## A filter
 

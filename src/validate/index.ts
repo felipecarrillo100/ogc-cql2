@@ -70,6 +70,15 @@ export interface ValidateOptions {
    * `array` queryable, and its `items` type the elements compared with it. Default: no check.
    */
   readonly queryables?: Readonly<Record<string, Queryable | object>>;
+  /**
+   * `false` when the geometry and BBOX literals are in another CRS than CRS84, as OGC API Features Part 3's
+   * `filter-crs` parameter names one (Requirement 8): their numbers aren't checked against CRS84's ranges, nor a
+   * box's axis order, which the package can't know in another CRS. Everything else is checked as usual: 2 or 3
+   * numbers a position, rings closed, a box of 4 or 6 numbers with its minimum height below its maximum. The
+   * application converts the literals to CRS84 before `evaluate`, `toText` or `toSql`, which check CRS84. Default:
+   * `true`, CRS84, as the standard reads a filter without `filter-crs`.
+   */
+  readonly crs84?: boolean;
 }
 
 export type ValidationResult =
@@ -197,10 +206,13 @@ class Checker {
   readonly problems: Problem[] = [];
   readonly #allowed: ReadonlySet<string> | undefined;
   readonly #queryables: ValidateOptions["queryables"];
+  /** Whether the literals are CRS84, so their ranges and a box's axis order are checked. */
+  readonly #crs84: boolean;
 
   constructor(options: ValidateOptions) {
     this.#allowed = options.conformance ? new Set(options.conformance) : undefined;
     this.#queryables = options.queryables;
+    this.#crs84 = options.crs84 !== false;
   }
 
   report(code: ProblemCode, path: string, message: string, conformance?: string): void {
@@ -928,11 +940,12 @@ class Checker {
     return false;
   }
 
-  /** A position: 2 or 3 finite numbers, longitude −180…180 and latitude −90…90 (CRS84). */
+  /** A position: 2 or 3 finite numbers, longitude −180…180 and latitude −90…90 (CRS84; no ranges in another CRS). */
   position(x: unknown, path: string): void {
     if (!Array.isArray(x) || x.length < 2 || x.length > 3 || !x.every(isFiniteNumber)) {
       return this.invalidGeometry(path, `A position is 2 or 3 numbers: longitude, latitude and optionally a height.`);
     }
+    if (!this.#crs84) return;
     const [lon, lat] = x as number[];
     if (lon! < -180 || lon! > 180) this.invalidGeometry(`${path}/0`, `Longitude ${lon} is outside −180…180 (CRS84: longitude first).`);
     if (lat! < -90 || lat! > 90) this.invalidGeometry(`${path}/1`, `Latitude ${lat} is outside −90…90 (CRS84: latitude second).`);
@@ -970,6 +983,13 @@ class Checker {
       );
     }
     const n = x as number[];
+    // In another CRS, no ranges, and which axis may run backwards (across the antimeridian) is the CRS's.
+    if (this.#crs84) this.crs84Box(n, path);
+    if (n.length === 6 && n[2]! > n[5]!) this.invalidGeometry(path, `A bbox's minimum height (${n[2]}) is above its maximum (${n[5]}).`);
+  }
+
+  /** A box's CRS84 checks: longitudes −180…180, latitudes −90…90, its south not above its north. */
+  crs84Box(n: readonly number[], path: string): void {
     const [west, south, east, north] = n.length === 4 ? n : [n[0], n[1], n[3], n[4]];
     for (const [value, i] of [[west, 0], [east, n.length === 4 ? 2 : 3]] as const) {
       if (value! < -180 || value! > 180) this.invalidGeometry(`${path}/${i}`, `Longitude ${value} is outside −180…180.`);
@@ -978,7 +998,6 @@ class Checker {
       if (value! < -90 || value! > 90) this.invalidGeometry(`${path}/${i}`, `Latitude ${value} is outside −90…90.`);
     }
     if (south! > north!) this.invalidGeometry(path, `A bbox's south (${south}) is above its north (${north}).`);
-    if (n.length === 6 && n[2]! > n[5]!) this.invalidGeometry(path, `A bbox's minimum height (${n[2]}) is above its maximum (${n[5]}).`);
   }
 
   isNull(args: unknown[], path: string): void {

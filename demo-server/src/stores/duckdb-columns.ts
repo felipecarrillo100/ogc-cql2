@@ -5,7 +5,7 @@
  * runs the SQL given here on its own connection.
  */
 import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
-import { duckdbValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
+import { duckdbValue, sqlConformance, toSql, type SqlColumn, type SqlLiterals } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
 import type { Feature, Queryable } from "./types.ts";
 
@@ -104,7 +104,8 @@ export interface ParquetTable {
   /** One row: `n` rows, `ids` ids, `distinct_ids` distinct ids. The id column must be unique and never NULL. */
   readonly idCheckSql: string;
   /** The SQL of one page of the features a filter selects, ordered by id, and of their count (`n`). */
-  query(filter: Cql2Filter, limit: number, offset: number): { page: string; count: string; params: unknown[] };
+  /** `literals`: the CRS of the filter's literals, when it isn't CRS84 (`toSql`'s `literals`). */
+  query(filter: Cql2Filter, limit: number, offset: number, literals?: SqlLiterals): { page: string; count: string; params: unknown[] };
   /** A row of the page as a GeoJSON feature. */
   toFeature(row: Readonly<Record<string, unknown>>): Feature;
 }
@@ -171,9 +172,9 @@ export function parquetTable(
     warnings,
     filterable,
     idCheckSql: `SELECT count(*) AS n, count(${id}) AS ids, count(DISTINCT ${id}) AS distinct_ids FROM ${from}`,
-    query(filter, limit, offset) {
+    query(filter, limit, offset, literals) {
       if (!Number.isInteger(limit) || !Number.isInteger(offset)) throw new TypeError("limit and offset must be integers");
-      const { where, params } = toSql(filter, { dialect: "duckdb", columns: filterColumns });
+      const { where, params } = toSql(filter, { dialect: "duckdb", columns: filterColumns, ...(literals ? { literals } : {}) });
       return {
         page: `SELECT ${select} FROM ${from} WHERE ${where} ORDER BY ${id} LIMIT ${limit} OFFSET ${offset}`,
         count: `SELECT count(*) AS n FROM ${from} WHERE ${where}`,

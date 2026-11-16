@@ -59,9 +59,13 @@ if (result.valid) {
   Functions, unless `spatialite` is `true`. **`sqlserver`:** every class but Spatial Functions (S_DISJOINT is one of
   them: write NOT S_INTERSECTS).
 - **The promise:** a filter `validate` accepts against that list is never refused as `unsupported` with the same
-  options. One it refuses as `needs-conformance` would be.
+  options, but for `literals` in an SRID the dialect doesn't reproject (below). One it refuses as
+  `needs-conformance` would be.
 - **The list grows** with minor versions, as the package implements classes.
 - **It is a plain new array,** in `CONFORMANCE`'s order, to change at will.
+
+Literals in another CRS (`filter-crs`) are a separate question: `sqlReprojects(options)` says whether `toSql` takes
+`literals` with an SRID other than 4326 for those options ([Literals in another CRS](spatial.md#literals-in-another-crs-filter-crs)).
 
 ## Publishing an honest `/conformance`
 
