@@ -19,9 +19,10 @@ export const IDENTIFIER: RegExp = new RegExp(`^[${IDENTIFIER_START}][${IDENTIFIE
 /** An `identifier` at the reading position (sticky). */
 export const IDENTIFIER_AT: RegExp = new RegExp(`[${IDENTIFIER_START}][${IDENTIFIER_PART}]*`, "uy");
 
-// The standard's keywords (OGC 21-065r2, the list ahead of Requirement 20), and INTERVAL, the temporal function. A
+// The standard's keywords (OGC 21-065r2, the list ahead of Requirement 20), and INTERVAL, the temporal literal. A
 // property with such a name is written in double quotes, which the BNF allows only for an identifier:
-// `propertyName = identifier | "\"" identifier "\""`.
+// `propertyName = identifier | "\"" identifier "\""`. INTERVAL isn't in the standard's list, so the reader takes it as
+// the literal only before "(" (a property name elsewhere); the writer still quotes it, which is always allowed.
 export const KEYWORDS: ReadonlySet<string> = new Set([
   "A_CONTAINEDBY", "A_CONTAINS", "A_EQUALS", "A_OVERLAPS", "ACCENTI", "AND", "BBOX", "BETWEEN", "CASEI", "DATE", "DIV",
   "FALSE", "GEOMETRYCOLLECTION", "IN", "INTERVAL", "IS", "LIKE", "LINESTRING", "MULTILINESTRING", "MULTIPOINT",

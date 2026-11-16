@@ -58,8 +58,8 @@ const ROWS: string[][] = [
   ["['c']", "[2.5]", "[2]", "[false]", `[${D("1969-07-16")}]`, `[${T("1969-07-16 13:32:00.0005+00")}]`, "['2010-02-10T05:30:00.1239Z']", "[['c']]", "['c', 'c']"],
 ];
 
-/** Registers `duckdbFunctions` on a connection, as the README shows. */
-function register(engine: Engine, connection: Connection): void {
+/** Registers `duckdbFunctions` on a connection, as the README shows (also used by duckdb-spatial.ts). */
+export function register(engine: Engine, connection: Connection): void {
   const types = { VARCHAR: engine.VARCHAR, INTEGER: engine.INTEGER };
   for (const [name, f] of Object.entries(duckdbFunctions)) {
     connection.registerScalarFunction(

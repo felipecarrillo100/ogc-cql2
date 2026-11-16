@@ -7,6 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { CONFORMANCE, CQL2_CONFORMANCE } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
+import { toText } from "ogc-cql2/text";
+import { validate } from "ogc-cql2/validate";
 import { readText } from "../src/parse/read.ts";
 
 const p = (property: string) => ({ property });
@@ -237,6 +239,18 @@ describe("names", () => {
     expect(refusal("x = and")).toMatchObject({ code: "invalid-text", position: 4, message: expect.stringContaining('written "and"') });
   });
 
+  it("INTERVAL isn't in the standard's list of keywords (§8.2): a property name where no ( follows", () => {
+    expect(readText("interval = 1")).toEqual(eq("interval", 1));
+    expect(readText("Interval IS NULL")).toEqual({ op: "isNull", args: [p("Interval")] });
+    expect(readText("CASEI(interval) = 'a'")).toEqual({ op: "=", args: [{ op: "casei", args: [p("interval")] }, "a"] });
+    expect(readText("T_DURING(interval, INTERVAL ('2020-01-01', interval))")).toEqual({
+      op: "t_during",
+      args: [p("interval"), { interval: ["2020-01-01", p("interval")] }],
+    });
+    expect(readText('"interval" = 1')).toEqual(eq("interval", 1));
+    expect(toText(eq("interval", 1) as never)).toBe('"interval" = 1'); // the writer still quotes it, which is always allowed
+  });
+
   it("only an identifier can be quoted", () => {
     refusedAt('"a b" = 1', 0);
     refusedAt('"open = 1', 0);
@@ -304,14 +318,96 @@ describe("spatial, temporal and array predicates", () => {
   });
 });
 
+describe("parentheses: only around a boolean or an arithmetic expression (outside arrays)", () => {
+  it("reads the grammar's groups", () => {
+    expect(readText("((a = 1))")).toEqual(eq("a", 1));
+    expect(readText("(TRUE)")).toBe(true);
+    expect(readText("(f(x))")).toEqual({ op: "f", args: [p("x")] });
+    expect(readText("x = (y)")).toEqual(eq("x", p("y")));
+    expect(readText("x = (y + 1) * 2")).toEqual(eq("x", { op: "*", args: [{ op: "+", args: [p("y"), 1] }, 2] }));
+    expect(readText("(f(x)) = 1")).toEqual({ op: "=", args: [{ op: "f", args: [p("x")] }, 1] });
+    expect(readText("x IN ((1), 2)")).toEqual({ op: "in", args: [p("x"), [1, 2]] });
+    expect(readText("x BETWEEN (1) AND (y)")).toEqual({ op: "between", args: [p("x"), 1, p("y")] });
+    // An IS NULL operand may be a boolean expression too.
+    expect(readText("(TRUE) IS NULL")).toEqual({ op: "isNull", args: [true] });
+    expect(readText("(a = 1) IS NOT NULL")).toEqual({ op: "not", args: [{ op: "isNull", args: [eq("a", 1)] }] });
+  });
+
+  it.for([
+    ["x = ('a')", 4],
+    ["x = (CASEI('a'))", 4],
+    ["x = (DATE('2020-01-01'))", 4],
+    ["x = (TRUE)", 4],
+    ["x IN (('a'))", 6],
+    ["x IN ('a', (TRUE))", 11],
+    ["('a') IS NULL", 0],
+    ["(POINT(1 2)) IS NULL", 0],
+    ["('a') = x", 0],
+    ["S_INTERSECTS(g, (POINT(1 2)))", 16],
+    ["T_AFTER(t, (DATE('2020-01-01')))", 11],
+  ] as const)("refuses %j at the (", ([text, position]) => {
+    expect(refusal(text)).toMatchObject({ code: "invalid-text", position, message: expect.stringContaining("only around a boolean or an arithmetic expression") });
+  });
+
+  it.for([
+    ["S_INTERSECTS((g), POINT(1 2))", 13],
+    ["T_AFTER((t), DATE('2020-01-01'))", 8],
+    ["(name) LIKE 'a%'", 0],
+    ["(name) NOT LIKE 'a%'", 0],
+  ] as const)("refuses %j, an operand that is never parenthesized, at the (", ([text, position]) => {
+    expect(refusal(text)).toMatchObject({ code: "invalid-text", position, message: expect.stringContaining("without parentheses") });
+  });
+
+  it("a list or () in parentheses is an array, only where the grammar has one", () => {
+    expect(refusal("x = ('a', 'b')")).toMatchObject({ code: "invalid-text", position: 8, message: expect.stringContaining("is an array") });
+    expect(refusal("x = ()")).toMatchObject({ code: "invalid-text", position: 4, message: expect.stringContaining("is an array") });
+  });
+
+  it("a function argument may be an array: (), a list, or one element that isn't a group", () => {
+    expect(readText("f(('a')) = TRUE")).toEqual({ op: "=", args: [{ op: "f", args: [["a"]] }, true] });
+    expect(readText("f(()) = TRUE")).toEqual({ op: "=", args: [{ op: "f", args: [[]] }, true] });
+    expect(readText("f((1), (x + 1) * 2) = TRUE")).toEqual({ op: "=", args: [{ op: "f", args: [1, { op: "*", args: [{ op: "+", args: [p("x"), 1] }, 2] }] }, true] });
+  });
+});
+
+describe("arrays: inside one, ( always opens a nested array (the package's reading of #972)", () => {
+  it("reads one-element groups as nested arrays", () => {
+    expect(readText("A_EQUALS(arr, (('a')))")).toEqual({ op: "a_equals", args: [p("arr"), [["a"]]] });
+    expect(readText("A_EQUALS(arr, ((1), 2))")).toEqual({ op: "a_equals", args: [p("arr"), [[1], 2]] });
+    expect(readText("A_EQUALS(arr, ((x)))")).toEqual({ op: "a_equals", args: [p("arr"), [[p("x")]]] });
+    expect(readText("A_EQUALS(arr, (()))")).toEqual({ op: "a_equals", args: [p("arr"), [[]]] });
+    expect(readText("A_EQUALS(arr, (1 + (2)))")).toEqual({ op: "a_equals", args: [p("arr"), [{ op: "+", args: [1, 2] }]] });
+  });
+
+  it("an element can't start with a parenthesized expression", () => {
+    expect(refusal("A_EQUALS(arr, ((1) + 2))")).toMatchObject({ code: "invalid-text", position: 19, message: expect.stringContaining("nested array") });
+  });
+
+  it("which the profile then refuses: arrays hold literals", () => {
+    expect(() => fromText("A_EQUALS(arr, (('a')))")).toThrow(expect.objectContaining({ code: "invalid-filter" }));
+    expect(fromText("A_OVERLAPS(days, (DATE('2024-02-29')))")).toEqual({ op: "a_overlaps", args: [p("days"), [{ date: "2024-02-29" }]] });
+    expect(fromText("A_EQUALS(names, ('O''Brien'))")).toEqual({ op: "a_equals", args: [p("names"), ["O'Brien"]] });
+  });
+});
+
 describe("instants", () => {
   it("DATE and TIMESTAMP with the grammar's shapes, in UTC", () => {
     expect(readText("t = TIMESTAMP('2020-01-01T00:00:00Z')")).toEqual(eq("t", { timestamp: "2020-01-01T00:00:00Z" }));
     expect(readText("t = TIMESTAMP('2020-01-01T00:00:00.123456Z')")).toEqual(eq("t", { timestamp: "2020-01-01T00:00:00.123456Z" }));
     refusedAt("t = TIMESTAMP('2020-01-01T00:00:00+01:00')", 14);
-    refusedAt("t = TIMESTAMP('2020-01-01T00:00:00z')", 14);
     refusedAt("t = DATE('2020-1-01')", 9);
     refusedAt("t = DATE(x)", 9);
+  });
+
+  it("t and Z in any case (ABNF strings are case-insensitive, §8.2), read as CQL2-JSON writes them: T and Z", () => {
+    expect(readText("t = TIMESTAMP('2020-01-01t00:00:00z')")).toEqual(eq("t", { timestamp: "2020-01-01T00:00:00Z" }));
+    expect(readText("t = TIMESTAMP('2020-01-01t00:00:00.5Z')")).toEqual(eq("t", { timestamp: "2020-01-01T00:00:00.5Z" }));
+    expect(readText("T_DURING(t, INTERVAL('2020-01-01t00:00:00z', '..'))")).toEqual({
+      op: "t_during",
+      args: [p("t"), { interval: ["2020-01-01T00:00:00Z", ".."] }],
+    });
+    // CQL2-JSON keeps its schema's pattern: upper case only.
+    expect(validate(eq("t", { timestamp: "2020-01-01t00:00:00z" })).valid).toBe(false);
   });
 
   it("INTERVAL: dates, timestamps, '..', properties, functions", () => {

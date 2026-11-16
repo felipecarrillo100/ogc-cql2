@@ -46,16 +46,32 @@ same options). So:
 How it reads what the grammar allows in more than one way, or leaves open:
 
 - keywords in any case; a property named like a keyword must be in double quotes (`"date" = 1`; `date = 1` is
-  refused, with a hint);
+  refused, with a hint). INTERVAL isn't in the standard's list of keywords, so `interval` is a property name wherever
+  no `(` follows it (since 1.6.1); `toText` still quotes it, which is always allowed;
+- parentheses only where the grammar has them (since 1.6.1):
+  - around a boolean expression, `(a = 1 OR b = 2)`;
+  - around an arithmetic expression, a number, a property or a function: `x = (y + 1) * 2`, `x IN ((1), 2)`;
+  - nowhere else. `x = ('a')`, `x = (TRUE)`, `x = (DATE('2020-01-01'))`, `S_INTERSECTS(g, (POINT(1 2)))` and
+    `(name) LIKE 'a%'` are refused as `invalid-text`, at the `(`. Write them without the parentheses;
+  - a list in parentheses is an array, only as an operand of the array functions (or a function's argument).
+    `x = ('a', 'b')` and `x = ()` are refused;
 - strings: `''` or `\'` for a quote, and Requirement 21's `\a \b \t \n \v \f \r`; in a LIKE pattern, `\%` and `\_` stay
   as they are; any other backslash is refused;
 - `x NOT LIKE …`, `x NOT IN (…)`, `x IS NOT NULL` become `NOT` of the predicate, as in the standard's JSON;
 - `-1` is a number; `<>`, `<=`, `>=` may have a space inside (`!=` isn't CQL2);
 - geometries: `Z` is optional, the coordinates tell the dimension; `EMPTY` and `MULTIPOINT(1 2, 3 4)` (without each
   point's parentheses) aren't in the grammar and are refused;
-- `TIMESTAMP('…')` in UTC, with `Z`, as the grammar writes it;
+- `TIMESTAMP('…')` in UTC, with `T` and `Z`, which the grammar's case-insensitive strings also allow as `t` and `z`
+  (since 1.6.1); the filter returned has `T` and `Z`, as CQL2-JSON's schema requires (in CQL2-JSON, lowercase stays
+  refused);
+- an interval with a date at one end and a timestamp at the other is refused as `type-mismatch`, in both encodings:
+  Permission 2 (§7.8.3) lets an implementation either raise an error or cast, and the package raises the error rather
+  than convert one kind of instant to the other;
 - arrays in parentheses, `A_CONTAINS(tags, ('a', 'b'))`, and the empty array as `()`, which `toText` writes the same
-  way (see [Array filters](arrays.md)).
+  way (see [Array filters](arrays.md)). Inside an array, `(` always opens a nested array: `(('a'))` is an array
+  holding the array `('a')`. One element in parentheses could also be read as a group (OGC issue #972); the package
+  reads it as the nested array, which the profile then refuses (`invalid-filter`), so the filter is never silently
+  changed. Write `('a')`.
 
 It reads back exactly what `toText` writes.
 

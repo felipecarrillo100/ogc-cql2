@@ -89,7 +89,11 @@ function tokenize(text: string): Token[] {
     if (word) {
       i = IDENTIFIER_AT.lastIndex;
       const upper = asciiUpper(word[0]);
-      tokens.push(KEYWORDS.has(upper) ? { kind: "keyword", text: upper, raw: word[0], start } : { kind: "word", text: word[0], raw: word[0], start });
+      // INTERVAL isn't in the standard's list of keywords (§8.2): it is the temporal literal only before "(", and a
+      // property name anywhere else.
+      WHITESPACE_AT.lastIndex = i;
+      const keyword = KEYWORDS.has(upper) && (upper !== "INTERVAL" || text[WHITESPACE_AT.test(text) ? WHITESPACE_AT.lastIndex : i] === "(");
+      tokens.push(keyword ? { kind: "keyword", text: upper, raw: word[0], start } : { kind: "word", text: word[0], raw: word[0], start });
       continue;
     }
     if (PUNCTUATION.includes(c)) {
@@ -138,9 +142,12 @@ function decode(token: Token, inPattern: boolean): string {
   return out;
 }
 
-// `dateInstantString`, `timestampInstantString`: `fullDate` and `fullDate "T" utcTime`, in UTC.
+// `dateInstantString`, `timestampInstantString`: `fullDate` and `fullDate "T" utcTime`, in UTC. "T" and "Z" are ABNF
+// strings, case-insensitive (§8.2), so `t` and `z` are read too, and written in upper case, as CQL2-JSON's schema has
+// them.
 const FULL_DATE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
-const TIMESTAMP = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z$/;
+const TIMESTAMP = /^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?[Zz]$/;
+const upperTZ = (timestamp: string) => `${timestamp.slice(0, 10)}T${timestamp.slice(11, -1)}Z`;
 
 // --- The grammar ----------------------------------------------------------------------------------------------------
 
@@ -152,6 +159,10 @@ type Kind = "bool" | "value" | "either";
 interface Node {
   readonly json: unknown;
   readonly kind: Kind;
+  /** An `arithmeticExpression`: a number, a property, a function, or arithmetic on them. */
+  readonly arith?: boolean;
+  /** Written in parentheses, as a whole. */
+  readonly grouped?: boolean;
 }
 
 const GEOMETRIES = new Set(["POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON"]);
@@ -162,6 +173,8 @@ const OP_NAMES: Readonly<Record<string, string>> = {
 };
 const opName = (keyword: string) => OP_NAMES[keyword] ?? keyword.toLowerCase();
 const PREDICATE = "a comparison (=, <>, <, <=, >, >=), LIKE, BETWEEN, IN or IS NULL";
+const PARENTHESES = "CQL2 puts parentheses only around a boolean or an arithmetic expression";
+const ARRAYS = "a list in parentheses is an array, an operand of A_EQUALS, A_CONTAINS, A_CONTAINEDBY or A_OVERLAPS";
 
 class Parser {
   private at = 0;
@@ -192,9 +205,9 @@ class Parser {
   private isKeyword(keyword: string, token = this.peek()): boolean {
     return token.kind === "keyword" && token.text === keyword;
   }
-  private fail(expected: string, token = this.peek(), hint = ""): never {
+  private fail(expected: string, token = this.peek(), hint = "", at = token): never {
     const found = token.kind === "end" ? "the end of the text" : token.kind === "string" ? `the string ${token.raw}` : `"${token.raw}"`;
-    throw new ParseError(token.start, expected, found, hint);
+    throw new ParseError(at.start, expected, found, hint);
   }
   private expectPunct(c: string, keyword?: Token): void {
     // After a keyword that needs "(", the likely mistake is a property named like it: say how to write one.
@@ -227,7 +240,14 @@ class Parser {
   /** A value where the grammar needs one: an operand. */
   private asValue(node: Node, token: Token): unknown {
     if (node.kind === "bool") this.fail("a value (a property, a literal or a function), not a predicate", token);
+    // `(TRUE)` is a booleanExpression, which a value position doesn't take (a scalarExpression takes TRUE itself).
+    if (node.grouped && !node.arith) this.fail("an arithmetic expression in these parentheses", this.tokens[this.tokens.indexOf(token) + 1], PARENTHESES, token);
     return node.json;
+  }
+  /** An operand the grammar never parenthesises: a `geomExpression`, a `temporalExpression`, a `characterExpression`. */
+  private ungrouped(node: Node, token: Token, expected: string): unknown {
+    if (node.grouped) this.fail(`${expected}, without parentheses`, this.tokens[this.tokens.indexOf(token) + 1], "", token);
+    return this.asValue(node, token);
   }
 
   // `booleanExpression = booleanTerm [ {"OR" booleanTerm} ]`; `booleanTerm` likewise with AND. A chain is one
@@ -284,7 +304,8 @@ class Parser {
     if (negated) this.next();
     if (this.isKeyword("LIKE")) {
       this.next();
-      return this.negate({ op: "like", args: [this.asValue(left, leftToken), this.patternExpression()] }, negated);
+      const value = this.ungrouped(left, leftToken, "a string, a property or a function before LIKE");
+      return this.negate({ op: "like", args: [value, this.patternExpression()] }, negated);
     }
     if (this.isKeyword("BETWEEN")) {
       this.next();
@@ -350,7 +371,7 @@ class Parser {
     this.next();
     const exponentToken = this.peek();
     const exponent = this.arithmeticFactor();
-    return { json: { op: "^", args: [this.asValue(base, baseToken), this.asValue(exponent, exponentToken)] }, kind: "value" };
+    return { json: { op: "^", args: [this.asValue(base, baseToken), this.asValue(exponent, exponentToken)] }, kind: "value", arith: true };
   }
   private binary(ops: readonly string[], operand: () => Node): Node {
     const firstToken = this.peek();
@@ -363,7 +384,7 @@ class Parser {
       this.next();
       const rightToken = this.peek();
       const right = operand();
-      left = { json: { op: op.toLowerCase(), args: [this.asValue(left, leftToken), this.asValue(right, rightToken)] }, kind: "value" };
+      left = { json: { op: op.toLowerCase(), args: [this.asValue(left, leftToken), this.asValue(right, rightToken)] }, kind: "value", arith: true };
       leftToken = firstToken;
     }
   }
@@ -379,10 +400,10 @@ class Parser {
       const token = this.peek();
       if (token.kind === "number") {
         this.next();
-        return { json: Number(sign + token.text), kind: "value" };
+        return { json: Number(sign + token.text), kind: "value", arith: true };
       }
       if (sign === "-" && (token.kind === "name" || token.kind === "word")) {
-        return { json: { op: "*", args: [-1, this.primary().json] }, kind: "value" };
+        return { json: { op: "*", args: [-1, this.primary().json] }, kind: "value", arith: true };
       }
       this.fail(sign === "-" ? "a number, a property or a function after -" : "a number after +", token);
     }
@@ -394,15 +415,15 @@ class Parser {
     const token = this.next();
     switch (token.kind) {
       case "number":
-        return { json: Number(token.text), kind: "value" };
+        return { json: Number(token.text), kind: "value", arith: true };
       case "string":
         return { json: decode(token, false), kind: "value" };
       case "name":
-        return { json: { property: token.text }, kind: "value" };
+        return { json: { property: token.text }, kind: "value", arith: true };
       case "word":
-        return this.isPunct("(") ? this.functionCall(token) : { json: { property: token.text }, kind: "value" };
+        return this.isPunct("(") ? this.functionCall(token) : { json: { property: token.text }, kind: "value", arith: true };
       case "punct":
-        if (token.text === "(") return this.parenthesized();
+        if (token.text === "(") return this.parenthesized(token);
         break;
       case "keyword":
         return this.keywordPrimary(token);
@@ -413,15 +434,37 @@ class Parser {
   /** `function = identifier "(" {argumentList} ")"`: `{"op": name, "args": […]}`, the name as written. */
   private functionCall(name: Token): Node {
     this.expectPunct("(");
-    const args = this.isPunct(")") ? (this.next(), []) : this.list(() => this.booleanExpression().json);
-    return { json: { op: name.text, args }, kind: "either" };
+    const args = this.isPunct(")") ? (this.next(), []) : this.list(() => {
+      this.argumentAt = this.peek();
+      return this.booleanExpression().json;
+    });
+    return { json: { op: name.text, args }, kind: "either", arith: true };
+  }
+
+  /** The first token of the function argument being read: an `argument` may be an `array`. */
+  private argumentAt: Token | undefined;
+
+  /**
+   * After "(": `"(" booleanExpression ")"` or `"(" arithmeticExpression ")"`, the only parentheses of the grammar
+   * outside arrays. A group keeps its content's kind. Anything else in parentheses (a string, an instant, a geometry,
+   * a list) isn't CQL2-text, except as a whole function argument, which may be an `array`.
+   */
+  private parenthesized(open: Token): Node {
+    if (open === this.argumentAt) return this.argument();
+    if (this.isPunct(")")) this.fail("a boolean or an arithmetic expression in parentheses", this.peek(), ARRAYS, open);
+    const inside = this.peek();
+    const inner = this.booleanExpression();
+    if (this.isPunct(",")) this.fail('")"', this.peek(), ARRAYS);
+    this.expectPunct(")");
+    if (inner.kind === "value" && !inner.arith) this.fail("a boolean or an arithmetic expression in parentheses", inside, PARENTHESES, open);
+    return { ...inner, grouped: true };
   }
 
   /**
-   * After "(": `"(" booleanExpression ")"`, `"(" arithmeticExpression ")"`, or an `array` (`"(" ")"`, or elements
-   * separated by commas). A group keeps its content's kind.
+   * A function argument that starts with "(": an `array` (`()`, a list, or one element that isn't a boolean or an
+   * arithmetic expression), or a group. One boolean or arithmetic element is ambiguous (#972) and read as a group.
    */
-  private parenthesized(): Node {
+  private argument(): Node {
     if (this.isPunct(")")) {
       this.next();
       return { json: [], kind: "value" };
@@ -429,10 +472,10 @@ class Parser {
     const first = this.booleanExpression();
     if (this.isPunct(",")) {
       this.next();
-      return { json: [first.json, ...this.list(() => this.booleanExpression().json)], kind: "value" };
+      return { json: [first.json, ...this.list(() => this.arrayElement())], kind: "value" };
     }
     this.expectPunct(")");
-    return first;
+    return first.kind !== "value" || first.arith ? { ...first, grouped: true } : { json: [first.json], kind: "value" };
   }
 
   /** `array`, where the grammar needs one (`arrayExpression`): "(" always opens an array there, even of one. */
@@ -442,11 +485,30 @@ class Parser {
       return this.asValue(this.arithmeticExpression(), token);
     }
     this.next();
+    return this.array();
+  }
+
+  /** The elements of an `array`, after its "(", up to its ")". */
+  private array(): unknown[] {
     if (this.isPunct(")")) {
       this.next();
       return [];
     }
-    return this.list(() => this.booleanExpression().json);
+    return this.list(() => this.arrayElement());
+  }
+
+  /**
+   * `arrayElement`. A "(" that starts one always opens a nested `array`: `(1)` inside an array is either a nested
+   * array or a group (#972), and the package reads it as the array.
+   */
+  private arrayElement(): unknown {
+    if (!this.isPunct("(")) return this.booleanExpression().json;
+    this.next();
+    const nested = this.array();
+    if (!this.isPunct(",") && !this.isPunct(")")) {
+      this.fail('"," or ")"', this.peek(), "inside an array, \"(\" opens a nested array, so an element can't start with a parenthesized expression");
+    }
+    return nested;
   }
 
   private keywordPrimary(token: Token): Node {
@@ -468,7 +530,12 @@ class Parser {
     if (/^[STA]_/.test(keyword)) {
       // `spatialPredicate`, `temporalPredicate`, `arrayPredicate`: `function "(" expression "," expression ")"`.
       this.expectPunct("(", token);
-      const operand = () => (keyword.startsWith("A_") ? this.arrayExpression() : this.asValue(this.arithmeticExpression(), this.peek()));
+      const expected = keyword.startsWith("S_") ? "a geometry, a property or a function" : "an instant, an interval, a property or a function";
+      const operand = () => {
+        if (keyword.startsWith("A_")) return this.arrayExpression();
+        const token = this.peek();
+        return this.ungrouped(this.arithmeticExpression(), token, expected);
+      };
       const first = operand();
       this.expectPunct(",");
       const second = operand();
@@ -501,13 +568,14 @@ class Parser {
       this.fail(date ? "a date, 'YYYY-MM-DD'" : "an instant in UTC, 'YYYY-MM-DDThh:mm:ss[.fff]Z'", token);
     }
     this.expectPunct(")");
-    return date ? { date: token.text } : { timestamp: token.text };
+    return date ? { date: token.text } : { timestamp: upperTZ(token.text) };
   }
 
   /** `instantParameter = dateInstantString | timestampInstantString | "'..'" | propertyName | function`. */
   private instantParameter(): unknown {
     const token = this.next();
-    if (token.kind === "string" && (token.text === ".." || FULL_DATE.test(token.text) || TIMESTAMP.test(token.text))) return token.text;
+    if (token.kind === "string" && (token.text === ".." || FULL_DATE.test(token.text))) return token.text;
+    if (token.kind === "string" && TIMESTAMP.test(token.text)) return upperTZ(token.text);
     if (token.kind === "name") return { property: token.text };
     if (token.kind === "word") return this.isPunct("(") ? this.functionCall(token).json : { property: token.text };
     return this.fail("'YYYY-MM-DD', 'YYYY-MM-DDThh:mm:ss[.fff]Z', '..', a property or a function", token);

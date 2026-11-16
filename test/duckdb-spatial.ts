@@ -7,8 +7,8 @@
  * The differential test runs every spatial filter of spatial-cases.ts on a `GEOMETRY` and a `BLOB` (WKB) column, each
  * without and with GeoParquet's bbox covering (`DOUBLE` and `FLOAT` fields), against `evaluate` on the same values.
  * The canaries state what the dialect relies on in DuckDB; each fails when a DuckDB release changes it, and says what
- * to update (docs/architecture.md, "DuckDB: what we rely on"). And the standard's Table 16 (Property-Property
- * Comparisons) on its test data, in each engine.
+ * to update (docs/architecture.md, "DuckDB: what we rely on"). And the standard's tests on its test data, in each
+ * engine: Table 16 (Property-Property Comparisons), Table 17, the Temporal Functions and Conformance Test 23.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Cql2Filter } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
 import { toSql, type SqlColumn } from "ogc-cql2/sql";
-import { PLACES_QUERYABLES, places, sqlLiteral, TABLE_16, TABLE_16_TEMPORAL, TABLE_17, TABLE_TEMPORAL } from "./table16.ts";
+import { register } from "./duckdb-arrays.ts";
+import { PLACES_QUERYABLES, places, sqlLiteral, TABLE_16, TABLE_16_TEMPORAL, TABLE_17, TABLE_ACCENTI, TABLE_TEMPORAL } from "./table16.ts";
 import {
   ALL, asGeoJson, differences, FILTERS, leaf, LITERAL_FIRST, LITERAL_PAIRS, pairDifferences, PAIR_FILTERS, pairsOf, RELATION_FILTERS,
   RELATIONS, STORAGES, stored, VALUES, wkb, type G,
@@ -287,6 +288,7 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
     ])) as Record<string, SqlColumn>;
     beforeAll(async () => {
       const names = Object.keys(columns);
+      register(engine as never, duck as never); // the package's functions, for ACCENTI and CASEI
       await duck.run(`CREATE TABLE places (id INTEGER, ${names.map((n) => `"${n}" ${columns[n]!.sqlType}`).join(", ")})`);
       await duck.run(`INSERT INTO places VALUES ${places.map((f) => `(${[f.id, ...names.map((n) => f.properties[n])].map(sqlLiteral).join(", ")})`).join(", ")}`);
     });
@@ -297,6 +299,11 @@ export function duckdbSpatialSuite(name: string, { version, line }: EngineProfil
     });
 
     it.for(TABLE_17)("Table 17 (Arithmetic Expressions), %s: %i", async ([text, expected]) => {
+      const { where, params } = toSql(fromText(text), { dialect: "duckdb", columns });
+      expect(Number((await rows(`SELECT count(*) FROM places WHERE ${where}`, params))[0]![0])).toBe(expected);
+    });
+
+    it.for(TABLE_ACCENTI)("Conformance Test 23 (Accent-insensitive Comparison), %s: %i", async ([text, expected]) => {
       const { where, params } = toSql(fromText(text), { dialect: "duckdb", columns });
       expect(Number((await rows(`SELECT count(*) FROM places WHERE ${where}`, params))[0]![0])).toBe(expected);
     });

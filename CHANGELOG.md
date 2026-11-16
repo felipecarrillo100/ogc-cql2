@@ -5,6 +5,36 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.6.1] - Unreleased
+
+A review against the standard's latest text (OGC 21-065r2, its grammar and JSON schema, the 1.0.1 draft, and its open
+issues). Where the package read more than the standard allows, it now follows the standard.
+
+### Changed
+
+- **`fromText` refuses parentheses the grammar doesn't have,** as `invalid-text` at the `(`. The grammar puts
+  parentheses only around a boolean or an arithmetic expression, so `x = ('a')`, `x = (TRUE)`,
+  `x = (DATE('2020-01-01'))`, `x IN (('a'))`, `S_INTERSECTS(g, (POINT(1 2)))` and `(name) LIKE 'a%'` were read as
+  if unparenthesized, and are now refused. A list in parentheses outside the array functions (`x = ('a', 'b')`,
+  `x = ()`) is refused too. `toText` never wrote these forms.
+- **Inside an array, `(` always opens a nested array:** `A_EQUALS(tags, (('a')))` was read as `('a')`, a different
+  filter. It is now the array holding `('a')`, which the profile refuses (`invalid-filter`), as it refuses
+  `(('a', 'b'))`. The standard's grammar allows both readings of one element in parentheses (OGC issue #972); the
+  package reads the one that never changes a filter silently.
+
+### Fixed
+
+- **`interval` is a property name** where no `(` follows: INTERVAL isn't in the standard's list of keywords (§8.2).
+  `toText` still writes it quoted.
+- **Lowercase `t` and `z` in a CQL2-text timestamp** are read (`TIMESTAMP('2020-01-01t00:00:00z')`): ABNF strings are
+  case-insensitive (§8.2). The filter has `T` and `Z`, as CQL2-JSON's schema requires; CQL2-JSON is unchanged.
+
+### Tests
+
+- Conformance Test 23 (Accent-insensitive Comparison) on the standard's data, in memory, SQLite and both DuckDB
+  engines. Three of its printed counts are off by one (OGC issue #1011): the counts tested are the ones the standard's
+  rules give.
+
 ## [1.6.0] - 2026-11-16
 
 The Array Functions class: a property holding an array compared with a set of values, or with another array

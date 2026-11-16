@@ -1,7 +1,8 @@
 /**
  * The standard's tests on its test data (OGC 21-065r2): Conformance Test 49 for Property-Property Comparisons (Annex
  * A.12, Table 16), Conformance Test 53 for Arithmetic Expressions (Annex A.14, Table 17) and the Temporal Functions
- * test-data test, their predicates and expected counts, and the data. Run by `evaluate`, SQLite and both DuckDB engines.
+ * test-data test, Conformance Test 23 for Accent-insensitive Comparison, their predicates and expected counts, and the
+ * data. Run by `evaluate`, SQLite and both DuckDB engines.
  */
 import { readFileSync } from "node:fs";
 
@@ -29,6 +30,26 @@ export const TABLE_16: [string, number][] = [
   ['start="end"', 0], ['start<="end"', 3], ['start<"end"', 3], ['start>="end"', 0], ['start>"end"', 0], ['start<>"end"', 3],
   ["'København' LIKE 'K_benhavn'", 243], ["'København' NOT LIKE 'K_benhavn'", 0],
   ["pop_other between pop_min and pop_max", 94], ["pop_other not between pop_min and pop_max", 149],
+];
+
+/**
+ * The Accent-insensitive Comparison test-data test (Annex A.6, Conformance Test 23, "Predicates and expected
+ * results"), as the standard writes the predicates, with the counts its rules give on its data. Three rows differ from
+ * the counts printed in the standard, recorded in OGC issue #1011 (open): `LIKE accenti('Ch%')` matches Chișinău,
+ * Chicago and Chengdu (3, printed 2), and `'Chiș%'` / `'cHis%'` only Chișinău (1, printed 2).
+ */
+export const TABLE_ACCENTI: [string, number][] = [
+  ["ACCENTI(name)=accenti('Chișinău')", 1],
+  ["ACCENTI(name)=accenti('Chisinau')", 1],
+  ["ACCENTI(name)=accenti('Kiev')", 1],
+  ["ACCENTI(CASEI(name))=accenti(casei('chișinău'))", 1],
+  ["ACCENTI(CASEI(name))=accenti(casei('chisinau'))", 1],
+  ["ACCENTI(CASEI(name))=accenti(casei('CHISINAU'))", 1],
+  ["ACCENTI(CASEI(name))=accenti(casei('CHIȘINĂU'))", 1],
+  ["ACCENTI(name) LIKE accenti('Ch%')", 3], // printed 2 (#1011)
+  ["ACCENTI(CASEI(name)) LIKE accenti(casei('Chiș%'))", 1], // printed 2 (#1011)
+  ["ACCENTI(CASEI(name)) LIKE accenti(casei('cHis%'))", 1], // printed 2 (#1011)
+  ["ACCENTI(CASEI(name)) IN (accenti(casei('Kiev')), accenti(casei('chișinău')), accenti(casei('Berlin')), accenti(casei('athens')), accenti(casei('foo')))", 4],
 ];
 
 /** A SQL literal of a place's value: text quoted, numbers as they are, NULL. */
