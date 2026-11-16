@@ -90,8 +90,8 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
 
 /**
  * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
- * package implements on `postgres`, all but Array Functions on `duckdb` and `oracle`, on `sqlite` all but those and
- * Spatial Functions unless `spatialite` is `true`, and on `sqlserver` all but those and Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
+ * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite` is
+ * `true`, and on `sqlserver` all but Spatial Functions and Array Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
  * `toSql` would refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the
  * database has: the spatial classes also need PostGIS, DuckDB's spatial extension or Oracle Spatial, and the package's
  * functions installed (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`, `oracleFunctions`). A new array, in
@@ -112,7 +112,7 @@ export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pi
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
  * @throws Cql2Error `unsupported` for a filter of a class not in {@link sqlConformance}: Spatial Functions on `sqlite`
- * without `spatialite` (S_DISJOINT included), Spatial Functions on `sqlserver`, Array Functions but on `postgres`.
+ * without `spatialite` (S_DISJOINT included), Spatial Functions and Array Functions on `sqlserver`.
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
@@ -436,6 +436,7 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     const foreign = kinds.some((kind) => elements.view("x", kind) === undefined);
     const known = literals.filter((l) => elements.view("x", l.kind) !== undefined);
     const match = (x: string, l: ArrayLiteralValue) => {
+      if (l.kind === "text" && isEmptyString(l.value) && elements.empty) return elements.empty(x);
       const v = elements.view(x, l.kind)!;
       return `(${v.sql} = ${valueParam(v, l.value)}) IS TRUE`;
     };
@@ -461,7 +462,10 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     const same = (p: ArrayElements, x: string, q: ArrayElements, y: string): string => {
       const parts = kinds.flatMap((kind) => {
         const [vx, vy] = [p.view(x, kind), q.view(y, kind)];
-        return vx && vy ? [`(${vx.pair ?? vx.sql} = ${vy.pair ?? vy.sql}) IS TRUE`] : [];
+        if (!vx || !vy) return [];
+        const equal = `(${vx.pair ?? vx.sql} = ${vy.pair ?? vy.sql}) IS TRUE`;
+        // Where '' is NULL (Oracle), two empty strings are equal all the same.
+        return kind === "text" && p.empty && q.empty ? [equal, `(${p.empty(x)} AND ${q.empty(y)})`] : [equal];
       });
       return parts.length === 0 ? "FALSE" : parts.join(" OR ");
     };

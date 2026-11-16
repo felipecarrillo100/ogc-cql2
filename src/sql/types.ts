@@ -237,6 +237,11 @@ export interface ArrayElements {
   present(x: string): string;
   /** Element `x` read as `kind`, as `evaluate` reads a served element; `undefined` when none can be. */
   view(x: string, kind: Exclude<Kind, "fold">): View | undefined;
+  /**
+   * The condition that element `x` is the empty string, for a dialect that reads `''` as NULL (Dialect.emptyStringIsNull:
+   * Oracle), whose text view of `""` is NULL: the walker uses it for a literal `""` and for two empty strings.
+   */
+  empty?(x: string): string;
 }
 
 /** A side of a spatial relation of two geometries: a column, or a literal. */

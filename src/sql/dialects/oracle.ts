@@ -22,6 +22,11 @@
  *   S_DISJOINT can differ (measured: 73 of 1,764 answers on such collections; none where the members are apart).
  *   Literals are prepared here (boxes as polygons, rings oriented
  *   as Oracle requires, heights dropped) and bound as numbers (Oracle's GeoJSON functions keep 15 digits).
+ * - Array Functions on JSON arrays, in the `JSON` type or as VARCHAR2 / CLOB text, for a column with `items` (see
+ *   {@link oracleValue}): element by element through `JSON_TABLE`, each element compared only with literals of its own
+ *   JSON type. As for text columns, strings are assumed to be valid Unicode in NFC: a JSON string escaping a lone
+ *   surrogate (`"\ud800"`) is stored as bytes no Unicode text has, which the driver reads back as replacement
+ *   characters, so its comparisons can differ from `evaluate`'s on the served value.
  * The session's `NLS_CALENDAR` must be GREGORIAN (Oracle's default): it changes the text `TO_CHAR` gives.
  */
 import type { Fold } from "../../core/folds.js";
@@ -29,7 +34,7 @@ import type { MatrixRelation } from "../../core/relate.js";
 import type { ArithmeticOperator, BboxLiteral, Geometry, Position, SpatialLiteral } from "../../core/types.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
 import { COMBINING_CLASSES, COMPOSITIONS } from "./composition.js";
-import { quote, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { quote, type ArrayElements, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type OraClass =
   | "text" | "char" | "ntext" | "nchar" | "number" | "double" | "boolean" | "date" | "timestamp" | "timestamptz" | "geometry" | "other";
@@ -97,11 +102,14 @@ function oraText(sql: string, cls: OraClass, column: SqlColumn): string | undefi
  * TIMESTAMP as `YYYY-MM-DDTHH:MM:SS.sss`; a TIMESTAMP WITH (LOCAL) TIME ZONE as UTC `YYYY-MM-DDTHH:MM:SS.sssZ`;
  * NVARCHAR2 and NCHAR as VARCHAR2. Text (CHAR with its padding), booleans and an SDO_GEOMETRY as they are: read the
  * geometry's ordinates as numbers (the driver gives them exactly), not through SDO_UTIL.TO_GEOJSON (15 significant
- * digits) or TO_WKBGEOMETRY (which can round to the next double). `undefined` for a column
- * type the dialect can't compare (CLOB, RAW, JSON…), which an application shouldn't serve as a queryable.
+ * digits) or TO_WKBGEOMETRY (which can round to the next double). An array column (Array Functions: `JSON`, or
+ * VARCHAR2 / CLOB text, with `items`) as it is: serve the `JSON` type as the driver gives it, and text as `JSON.parse`
+ * reads it (the text itself when it isn't JSON). `undefined` for a column type the dialect can't compare (CLOB, RAW,
+ * JSON… without `items`), which an application shouldn't serve as a queryable.
  */
 export function oracleValue(sqlColumn: string, column: SqlColumn): string | undefined {
   const sql = quote(sqlColumn);
+  if (arrayColumn(column) !== undefined) return sql;
   const cls = oraClass(column);
   if (cls === "boolean" || cls === "double") return sql;
   if (cls === "number") return `TO_BINARY_DOUBLE(${sql})`;
@@ -197,6 +205,67 @@ function oracleArithmetic(op: ArithmeticOperator, a: string, b: string, fn: (nam
     default:
       return finiteOrNull(`${a} ${op} ${b}`);
   }
+}
+
+// --- Array Functions -----------------------------------------------------------------------------------------------
+
+/**
+ * What a column holds as arrays: JSON, in the `JSON` type or as text (VARCHAR2, CLOB), declared with `items`;
+ * `undefined` for a column that holds none.
+ */
+function arrayColumn(column: SqlColumn): "json" | "text" | undefined {
+  if (column.items === undefined || column.sqlType === undefined) return undefined;
+  const t = bareType(column.sqlType);
+  return t === "JSON" ? "json" : t === "VARCHAR2" || t === "VARCHAR" || t === "CLOB" ? "text" : undefined;
+}
+
+/**
+ * An array's elements as rows of `JSON_TABLE`: the element's JSON type (`type()`: the `JSON` type also gives `double`
+ * and `float` for numbers), its text (VARCHAR2: a `""` is NULL, so `length()` tells it), its number and its boolean,
+ * each NULL where the element isn't one.
+ */
+const elementRows = (sql: string): string =>
+  `JSON_TABLE(${sql}, '$[*]' COLUMNS (t VARCHAR2(30) PATH '$.type()', s VARCHAR2(4000) PATH '$', n BINARY_DOUBLE PATH '$', l NUMBER PATH '$.length()', b BOOLEAN PATH '$'))`;
+
+/** One element `x` (a row of {@link elementRows}) read as `kind`, as `evaluate` reads a served element. */
+function elementView(x: string, kind: Exclude<Kind, "fold">, fn: (name: string) => string): View {
+  const text = `CASE WHEN ${x}.t = 'string' THEN ${x}.s END`;
+  switch (kind) {
+    case "text":
+      return textView(`(${text})`);
+    case "number":
+      return { sql: `(CASE WHEN ${x}.t IN ('number', 'double', 'float') THEN ${x}.n END)`, cast: "", wrap: double, value: numberText };
+    case "boolean":
+      return { sql: `(CASE WHEN ${x}.t = 'boolean' THEN ${x}.b END)`, cast: "" };
+    case "day":
+      return textView(`${fn("cql2_day")}(${text})`);
+    case "instant":
+      return textView(`${fn("cql2_instant")}(${text})`);
+  }
+}
+
+/**
+ * An array column's elements, for the walker's element-by-element SQL: one `JSON_TABLE` row per element (JSON null is
+ * no value); NULL unless the value is a JSON array, and, as text, strict JSON (Oracle's default, lax, also reads
+ * `['a']` or `[1,]`, which `JSON.parse` refuses). Text is read through `JSON(…)`, as the `JSON` type reads it: read as
+ * text, a number goes through NUMBER, so beyond about 1e126 it is infinite and below about 1e-130 zero (measured), where
+ * `JSON.parse` keeps the double. Every view is a `CASE` on the element's type: Oracle answers some ORs of
+ * `t = … AND s = …` over `JSON_TABLE` columns wrongly, never these (measured). A `""` is NULL as VARCHAR2 (Oracle's
+ * `''`): its `length()`, 0, tells it (`empty`).
+ */
+function oracleElements(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined {
+  const array = arrayColumn(column);
+  if (array === undefined) return undefined;
+  const isArray = `JSON_VALUE(${sql}, '$.type()') = 'array'`;
+  const json = array === "json" ? sql : `JSON(${sql})`;
+  return {
+    some: (name, condition) => `EXISTS (SELECT 1 FROM ${elementRows(json)} ${name} WHERE ${condition(name)})`,
+    isArray: array === "json" ? isArray : `(${sql} IS JSON STRICT AND ${isArray})`,
+    present: (x) => `${x}.t <> 'null'`,
+    view: (x, kind) => elementView(x, kind, fn),
+    // As a CASE (never NULL), not `t = … AND l = 0`, which ORs of the walker's would hold (see above).
+    empty: (x) => `(CASE WHEN ${x}.t = 'string' AND ${x}.l = 0 THEN 1 ELSE 0 END = 1)`,
+  };
 }
 
 // --- Spatial -----------------------------------------------------------------------------------------------------
@@ -763,4 +832,5 @@ export const oracle: Dialect = {
   intersects: (sql, column, literal, param, positive, fn) => oracleSpatial("s_intersects", sql, column, literal, param, positive, fn),
   relate: oracleSpatial,
   spatialPair: oraclePair,
+  arrayElements: oracleElements,
 };

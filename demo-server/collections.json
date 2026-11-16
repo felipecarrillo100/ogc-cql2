@@ -29,7 +29,18 @@
         { "table": "cql2demo.arrays", "title": "Arrays", "arrays": { "doc": {}, "raw": {} } }
       ]
     },
-    { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "STATES", "title": "US states" }, { "table": "KITCHEN_SINK", "title": "Kitchen sink", "days": ["day"] }] },
+    { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "STATES", "title": "US states" }, { "table": "KITCHEN_SINK", "title": "Kitchen sink", "days": ["day"] },
+      {
+        "table": "ARRAYS",
+        "title": "Arrays",
+        "arrays": {
+          "tags": { "type": "string" }, "codes": { "type": "string" }, "ratios": { "type": "number" }, "counts": { "type": "integer" },
+          "flags": { "type": "boolean" }, "days": { "type": "string", "format": "date" }, "moments": { "type": "string", "format": "date-time" }, "doc": {},
+          "tags_json": { "type": "string" }, "codes_json": { "type": "string" }, "ratios_json": { "type": "number" }, "counts_json": { "type": "integer" },
+          "flags_json": { "type": "boolean" }, "days_json": { "type": "string", "format": "date" }, "moments_json": { "type": "string", "format": "date-time" },
+          "doc_json": {}, "doc_clob": {}
+        }
+      }] },
     { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states", "title": "US states" }, { "table": "dbo.kitchen_sink", "title": "Kitchen sink" }] }
   ]
 }

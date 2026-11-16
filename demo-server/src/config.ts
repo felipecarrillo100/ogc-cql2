@@ -8,7 +8,7 @@
  *   { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-", "tables": ["states"] },
  *   { "source": "geopackage", "file": "data/arrays.gpkg", "prefix": "gpkg-", "arrays": { "arrays": { "tags": { "type": "string" } } } },
  *   { "source": "postgres", "prefix": "pg-", "functionSchema": "cql2demo", "tables": [{ "table": "cql2demo.states" }] },
- *   { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "KITCHEN_SINK", "days": ["day"] }] },
+ *   { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "KITCHEN_SINK", "days": ["day"] }, { "table": "ARRAYS", "arrays": { "tags": { "type": "string" } } }] },
  *   { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states" }] }
  * ] }
  * ```
@@ -17,7 +17,8 @@
  * `tables`), each with the id `prefix` + table name, and may list per table its TEXT columns that hold arrays as JSON
  * (`arrays`: table → column → `items`, `{}` for any), as GDAL writes list fields. A `postgres`, `oracle` or `sqlserver` entry is one collection per
  * listed table, from the database the environment names (`.env`: `PG*`, `ORACLE_*`, `MSSQL_*`); an Oracle table may list
- * its DATE columns that hold days (`days`). Files are relative to the directory of `collections.json`.
+ * its DATE columns that hold days (`days`), and a PostgreSQL or Oracle table its JSON columns that hold arrays (`arrays`:
+ * column → `items`). Files are relative to the directory of `collections.json`.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -55,15 +56,16 @@ export function readConfig(path: string): CollectionConfig[] {
       const tables = entry.tables;
       const days = (t: Record<string, unknown>) =>
         t.days === undefined || (entry.source === "oracle" && Array.isArray(t.days) && t.days.every((d) => typeof d === "string"));
-      // PostgreSQL: the jsonb / json columns that hold arrays, each with its items (a queryable, {} for any).
+      // PostgreSQL and Oracle: the JSON columns that hold arrays, each with its items (a queryable, {} for any).
       const arrays = (t: Record<string, unknown>) =>
-        t.arrays === undefined || (entry.source === "postgres" && typeof t.arrays === "object" && t.arrays !== null &&
+        t.arrays === undefined || (entry.source !== "sqlserver" && typeof t.arrays === "object" && t.arrays !== null &&
           !Array.isArray(t.arrays) && Object.values(t.arrays).every((q) => typeof q === "object" && q !== null && !Array.isArray(q)));
       const ok = Array.isArray(tables) && tables.length > 0 && tables.every((t: Record<string, unknown>) =>
         typeof t === "object" && t !== null && typeof t.table === "string" &&
         (t.id === undefined || typeof t.id === "string") && (t.title === undefined || typeof t.title === "string") && days(t) && arrays(t));
       if (!ok) {
-        const extra = entry.source === "oracle" ? `, "days"?` : entry.source === "postgres" ? `, "arrays"?: { "column": { "type": … } }` : "";
+        const arrays = `, "arrays"?: { "column": { "type": … } }`;
+        const extra = entry.source === "oracle" ? `, "days"?${arrays}` : entry.source === "postgres" ? arrays : "";
         problems.push(`${where}: "tables" must list { "table": "schema.table", "id"?, "title"?${extra} }.`);
         return;
       }

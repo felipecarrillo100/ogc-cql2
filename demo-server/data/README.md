@@ -21,6 +21,7 @@ To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if 
 - `arrays.parquet` and `arrays.gpkg`: the arrays table of `arrays.sql` (Array Functions), with the values where
   engines disagree:
   - `arrays.parquet` holds DuckDB lists (GeoParquet), made by `node data/make-arrays-parquet.ts`;
+  - the JSON stores (GeoPackage, Oracle) share their rows as JSON text in `arrays-rows.ts`;
   - `arrays.gpkg` holds a GeoPackage table whose arrays are TEXT JSON, as GDAL writes list fields (`application/json`
     in `gpkg_data_columns`), plus JSON that isn't an array and the values where SQLite's own JSON reading parts from
     JSON.parse. It is made by `node data/make-arrays-gpkg.ts`. GeoPackage has no array type, so `collections.json`
@@ -47,7 +48,10 @@ for Oracle Database 23ai or later with Oracle Spatial (the Free edition's full i
 Then, once, as that user: `node --env-file-if-exists=.env data/load-oracle.ts` (from `demo-server`, the package
 built). It creates `KITCHEN_SINK` and `KITCHEN_SINK_PLAIN` (the same rows, without spatial metadata or index) from
 `kitchen_sink.geojson`, `STATES` from `states.geojson`, the planar spatial indexes the `oracle` dialect uses, and
-ogc-cql2's `cql2_*` functions. Text is stored in NFC; Oracle stores `''` as NULL. Safe to run again.
+ogc-cql2's `cql2_*` functions, and `ARRAYS` (Array Functions): the rows of `arrays-rows.ts`, each column as VARCHAR2
+JSON text and again in the `JSON` type (`tags_json`…, NULL where Oracle refuses the text), and `doc` as a CLOB
+(`doc_clob`). Text is stored in NFC; Oracle stores `''` as NULL. Safe to run again. In `collections.json`, a table's
+optional `"arrays"` lists its JSON columns (`JSON`, VARCHAR2, CLOB) that hold arrays, each with what its elements hold.
 
 ## SQL Server
 

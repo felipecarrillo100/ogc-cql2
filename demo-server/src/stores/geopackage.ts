@@ -143,7 +143,7 @@ function hasRtree(db: DatabaseSync, table: string, column: string): boolean {
 }
 
 /** An array column's value as served: JSON.parse of its text, or the value itself when it isn't JSON text. */
-function servedArray(value: unknown): unknown {
+export function servedArray(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
     return JSON.parse(value);

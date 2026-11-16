@@ -66,7 +66,6 @@ describe("collections", () => {
 
   it("each with the classes its store evaluates, as ogc-cql2's engines report them", async () => {
     const all = Object.values(CONFORMANCE);
-    const sql = all.filter((x) => x !== CONFORMANCE.arrays); // Array Functions: not yet in the oracle dialect
     const spatial = [CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial];
     const { DatabaseSync } = await import("node:sqlite");
     const spatialite = loadSpatialite(new DatabaseSync(":memory:", { allowExtension: true }));
@@ -77,8 +76,7 @@ describe("collections", () => {
         // DuckDB's spatial extension can fail to install (offline): then no spatial class.
         : c.source === "geoparquet" ? (c.conformance.includes(CONFORMANCE.spatial) ? all : all.filter((x) => !spatial.includes(x)))
         : c.source === "sqlserver" ? sqlConformance({ dialect: "sqlserver" }) // all but Spatial Functions
-        : c.source === "geojson" || c.source === "postgres" ? all // in memory with GEOS; PostGIS
-        : sql; // Oracle Spatial
+        : all; // in memory with GEOS; PostGIS; Oracle Spatial
       assert.deepEqual(c.conformance, expected, c.id);
     }
     assert.deepEqual((await read(fetch(`${base}/collections/states`))).conformance, all);

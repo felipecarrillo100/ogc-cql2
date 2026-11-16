@@ -12,11 +12,14 @@
  *   planar spatial index on `cql2_planar(column)`, filters find their candidates through it first (`spatialIndex`). Another SRID: served without
  *   geometry, reported.
  * - Values are selected through `oracleValue`, so what is served is exactly what the SQL compares.
+ * - JSON columns that hold arrays (Array Functions) are listed in `arrays` with their `items`: a `JSON` column served
+ *   as the driver gives it, a VARCHAR2 or CLOB one as `JSON.parse` of its text (the text itself when it isn't JSON).
  */
 import oracledb from "oracledb";
 import type { Cql2Filter } from "ogc-cql2";
 import { oracleValue, sqlConformance, toSql, type SqlColumn } from "ogc-cql2/sql";
-import { type CollectionDescription, type Feature, type ScalarQueryable, type Store } from "./types.ts";
+import { servedArray } from "./geopackage.ts";
+import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface OracleTable {
   /** `TABLE` in the connection's schema, or `OWNER.TABLE`, as the data dictionary names them. */
@@ -26,6 +29,8 @@ export interface OracleTable {
   readonly title?: string;
   /** DATE columns that hold days, served as `YYYY-MM-DD` (their time dropped). */
   readonly days?: readonly string[];
+  /** JSON columns (`JSON`, or VARCHAR2 / CLOB text) that hold arrays, with what their elements hold (`items`, `{}` for any). */
+  readonly arrays?: Readonly<Record<string, ScalarQueryable>>;
 }
 
 export interface OracleSource {
@@ -118,7 +123,11 @@ export function createOraclePool(): Promise<oracledb.Pool> {
 const run = async <T = Record<string, unknown>>(pool: oracledb.Pool, sql: string, binds: unknown[] = []): Promise<T[]> => {
   const connection = await pool.getConnection();
   try {
-    const result = await connection.execute<T>(sql, binds as oracledb.BindParameters, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+    const result = await connection.execute<T>(sql, binds as oracledb.BindParameters, {
+      outFormat: oracledb.OUT_FORMAT_OBJECT,
+      // A CLOB (JSON text holding arrays) as a string, not a LOB to stream.
+      fetchTypeHandler: (m) => (m.dbType === oracledb.DB_TYPE_CLOB ? { type: oracledb.STRING } : undefined),
+    });
     return result.rows ?? [];
   } finally {
     await connection.close();
@@ -199,11 +208,26 @@ async function tableStore(pool: oracledb.Pool, id: string, entry: OracleTable, f
       warnings.push(`Its geometry column "${geometryInfo.NAME}" is in SRID ${srid}: features are served without geometry.`);
     }
   }
-  const queryables: Record<string, ScalarQueryable> = {};
+  const queryables: Record<string, Queryable> = {};
   const columns: Record<string, SqlColumn> = {};
   const days = new Set(entry.days ?? []);
+  const arrays = entry.arrays ?? {};
+  for (const name of Object.keys(arrays)) {
+    const c = columnsInfo.find((x) => x.NAME === name);
+    if (!c) warnings.push(`"arrays" lists "${name}", which isn't a column.`);
+    else if (!["JSON", "VARCHAR2", "CLOB"].includes(c.TYPE)) warnings.push(`"arrays" lists "${name}" (${c.TYPE}), which can't hold JSON: served as its type.`);
+  }
+  /** The array columns of JSON text, served parsed (a `JSON` column is served as the driver gives it). */
+  const textArrays = new Set<string>();
   for (const c of columnsInfo) {
     if (c.NAME === idColumn || c.NAME === geometryInfo?.NAME) continue;
+    if (Object.hasOwn(arrays, c.NAME) && ["JSON", "VARCHAR2", "CLOB"].includes(c.TYPE)) {
+      const items = arrays[c.NAME]!;
+      queryables[c.NAME] = { type: "array", items };
+      columns[c.NAME] = { sqlType: c.TYPE, items };
+      if (c.TYPE !== "JSON") textArrays.add(c.NAME);
+      continue;
+    }
     const q = queryableOf(c.TYPE, c.SCALE, days.has(c.NAME));
     if (!q) {
       warnings.push(`Column "${c.NAME}" (${c.TYPE}) isn't queryable and isn't served.`);
@@ -224,7 +248,7 @@ async function tableStore(pool: oracledb.Pool, id: string, entry: OracleTable, f
   const description: CollectionDescription = { id, title: entry.title ?? tableName.toLowerCase(), source: "oracle", featureCount, warnings };
   const toFeature = (row: Record<string, unknown>): Feature => {
     const properties: Record<string, unknown> = {};
-    for (const n of names) properties[n] = row[n];
+    for (const n of names) properties[n] = textArrays.has(n) ? servedArray(row[n] ?? null) : row[n];
     return { type: "Feature", id: row.id as string | number, geometry: sdoGeometry((row.geometry ?? null) as SdoObject | null), properties };
   };
 

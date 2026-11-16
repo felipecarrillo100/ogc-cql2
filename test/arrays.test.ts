@@ -309,7 +309,12 @@ describe("the engines", () => {
     );
   });
 
-  it.for(["oracle", "sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
+  it("oracle writes it, through JSON_TABLE (see test/sql-oracle.test.ts; demo-server's oracle-arrays.test.ts on Oracle)", () => {
+    expect(sqlConformance({ dialect: "oracle" })).toContain(CONFORMANCE.arrays);
+    expect(toSql(fn("a_contains", p("v"), ["a"]), { dialect: "oracle", columns: { v: { sqlType: "JSON", items: {} } } }).where).toContain("JSON_TABLE(");
+  });
+
+  it.for(["sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
     expect(sqlConformance({ dialect })).not.toContain(CONFORMANCE.arrays);
     expect(() => toSql(fn("a_contains", p("v"), ["a"]), { dialect, columns: { v: {} } })).toThrow(
       expect.objectContaining({ code: "unsupported", details: { conformance: CONFORMANCE.arrays } }),
