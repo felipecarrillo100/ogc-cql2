@@ -151,6 +151,12 @@ const NAME: Readonly<Record<Exclude<LiteralKind, "folded-string"> | Exclude<Held
   instant: "an instant", geometry: "a geometry", other: "a value the profile can't compare",
 };
 
+/** What an array property holds, in the plural: `"tags" holds strings`. */
+const ELEMENTS: Readonly<Record<Exclude<HeldKind, "any">, string>> = {
+  text: "strings", number: "numbers", boolean: "booleans", date: "dates", instant: "instants", geometry: "geometries",
+  other: "values the profile can't compare",
+};
+
 /** The literal kind a property of this kind is compared as, for two properties; `undefined` for any. */
 const AS_LITERAL: Readonly<Partial<Record<HeldKind, LiteralKind>>> = {
   text: "string", number: "number", boolean: "boolean", date: "date", instant: "timestamp",
@@ -788,13 +794,13 @@ class Checker {
         if ("elements" in o) {
           for (const e of o.elements) {
             if (!ACCEPTS[p.items].includes(e.kind)) {
-              this.report("type-mismatch", e.path, `"${p.name}" holds ${NAME[p.items as Exclude<HeldKind, "any">]} elements, and this is ${NAME[e.kind]}.`);
+              this.report("type-mismatch", e.path, `"${p.name}" holds ${ELEMENTS[p.items as Exclude<HeldKind, "any">]}, and this is ${NAME[e.kind]}.`);
             }
           }
         } else if (o.items !== "any" && o.items !== p.items && p === typed[0]) {
           this.report(
             "type-mismatch", o.path,
-            `"${p.name}" holds ${NAME[p.items as Exclude<HeldKind, "any">]} elements and "${o.name}" ${NAME[o.items as Exclude<HeldKind, "any">]}: they can't be compared.`,
+            `"${p.name}" holds ${ELEMENTS[p.items as Exclude<HeldKind, "any">]} and "${o.name}" ${ELEMENTS[o.items as Exclude<HeldKind, "any">]}: they can't be compared.`,
           );
         }
       }

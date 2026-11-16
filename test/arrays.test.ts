@@ -249,6 +249,22 @@ describe("validate", () => {
     expect(check(fn("a_contains", p("other"), ["a"]))).toEqual(["unknown-property /args/0"]);
   });
 
+  it("the messages name what the array property holds, in the plural (since 1.6.2)", () => {
+    const queryables = {
+      tags: { type: "array", items: { type: "string" } },
+      counts: { type: "array", items: { type: "integer" } },
+      days: { type: "array", items: { type: "string", format: "date" } },
+    };
+    const messages = (f: unknown) => {
+      const result = validate(f, { queryables });
+      return result.valid ? [] : result.problems.map((x) => x.message);
+    };
+    expect(messages(fn("a_contains", p("tags"), ["a", 1]))).toEqual(['"tags" holds strings, and this is a number.']);
+    expect(messages(fn("a_overlaps", p("counts"), ["5"]))).toEqual(['"counts" holds numbers, and this is a string.']);
+    expect(messages(fn("a_overlaps", p("days"), ["2010-02-10"]))).toEqual(['"days" holds dates, and this is a string.']);
+    expect(messages(fn("a_equals", p("tags"), p("counts")))).toEqual(['"tags" holds strings and "counts" numbers: they can\'t be compared.']);
+  });
+
   it("the classes: Array Functions; an array first, two properties or two literals also Property-Property", () => {
     const portable = fn("a_contains", p("v"), ["a"]);
     expect(requiredConformance(portable)).toEqual([CONFORMANCE.basic, CONFORMANCE.arrays]);

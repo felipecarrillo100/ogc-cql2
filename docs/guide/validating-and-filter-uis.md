@@ -78,6 +78,11 @@ filtering; a client can do the same before sending, so that a person or an AI wr
 | another type, or a geometry (`"format": "geometry-…"`) | nothing: only `isNull` |
 | no `type` | anything |
 
+An `"integer"` queryable is checked as a number: `storeys = 1.5` is valid, and `storeys > 1.5` is a meaningful filter
+(the same as `storeys >= 2`). CQL2 has one number type, and a queryable's type describes the property's values, not
+the filter's literals, so a decimal isn't refused. `storeys = 1.5` selects nothing; a UI that wants whole numbers in
+its inputs checks them itself.
+
 Both options combine: `validate(filter, { conformance, queryables })`.
 
 ## Offering only what is supported

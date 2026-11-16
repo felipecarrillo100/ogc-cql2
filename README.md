@@ -183,7 +183,37 @@ So code that reads filters, codes or dialects keeps a default case for what it d
 classes it declares (see the guide's [Validating](docs/guide/validating-and-filter-uis.md)).
 
 **Not covered:** messages (test the codes), the SQL text itself (what it selects is covered), and anything the entry
-points don't export.
+points don't export. Nor is accepting what the standard doesn't allow: when the package accepts input the standard
+refuses, or refuses input it allows, a patch version fixes that, as 1.6.1 and 1.6.2 did (below).
+
+## Upgrading to 1.6.1 and 1.6.2
+
+Both come from a review of the package against the standard's latest text (OGC 21-065r2, its grammar and JSON
+schema, the 1.0.1 draft, and its open issues), and from users' reports. Where the package read more, or less, than
+the standard allows, it now follows the standard. What may need action on your side:
+
+| Since | What changed | What to do |
+|---|---|---|
+| 1.6.1 | `fromText` refuses parentheses the grammar doesn't have. CQL2 puts them only around a boolean or an arithmetic expression, so `x = ('a')`, `x = (TRUE)`, `x = (DATE('2020-01-01'))`, `S_INTERSECTS(g, (POINT(1 2)))` and `(name) LIKE 'a%'` are now `invalid-text` | Remove those parentheses. `toText` never wrote them, so text it produced is unaffected |
+| 1.6.1 | A list in parentheses outside the array functions (`x = ('a', 'b')`, `x = ()`) is `invalid-text` | Use `IN (…)`, or an array function |
+| 1.6.1 | Inside an array, `(` always opens a nested array: `A_EQUALS(tags, (('a')))` is an array holding `('a')`, which the profile refuses (`invalid-filter`); it used to be read as `('a')` | Write `('a')` |
+| 1.6.1 | `interval` is a property name where no `(` follows (INTERVAL isn't in the standard's list of keywords); lowercase `t` and `z` are read in text timestamps | Nothing: more valid text is read |
+| 1.6.2 | SQL Server: text with trailing U+0000 is no longer equal to the same text without it (`'a'` ≠ `'a\u0000'`) | Nothing, unless you relied on that equality |
+| 1.6.2 | A leap second, `TIMESTAMP('…T23:59:60Z')`, is accepted and compared as `…:59.999`, in literals, `evaluate`'s data and the dialects' reading of text | Run `postgresFunctions`, `oracleFunctions` or `sqlserverFunctions` again, so `cql2_instant` reads it too |
+| 1.6.2 | `validate`'s message for an array element of the wrong kind reads `"tags" holds strings, and this is a number.` | Nothing, unless you match on messages (test the codes) |
+
+**Decided against, and why.** Requests and readings considered and not adopted; each can be raised again, and will
+be weighed again then:
+
+- **Refusing a decimal against an `integer` queryable** (`storeys = 1.5`). CQL2 has one number type, and a queryable's
+  type describes the property's values, not the filter's literals: `storeys > 1.5` is a meaningful filter. Refusing
+  it would be stricter than the standard. A UI that wants whole numbers checks its own inputs.
+- **Converting between dates and timestamps in an interval** (`INTERVAL('2020-01-01', '2020-01-02T12:00:00Z')`). The
+  standard lets an implementation either raise an error or cast (Permission 2, §7.8.3); the package keeps the error
+  (`type-mismatch`) rather than guess a conversion. A cast could come later as an explicit option, never as the
+  default.
+- **`MULTIPOINT(1 2, 3 4)` without each point's parentheses.** The grammar requires them (`MULTIPOINT((1 2), (3 4))`),
+  as OGC's WKT grammar does; the form appears only in the standard's test data files, not in filters.
 
 ## Tested versions
 

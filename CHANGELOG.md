@@ -19,6 +19,16 @@ All notable changes to this package are recorded here. The format follows
   in SQLite, DuckDB, PostgreSQL, Oracle and SQL Server): epoch time has no leap seconds. Native timestamp columns can't
   hold one (each engine rolls it over or refuses it), so they are unchanged. Second 61 stays refused. Users of
   `postgresFunctions`, `oracleFunctions` or `sqlserverFunctions` run them again to get the new `cql2_instant`.
+- **`validate`'s messages for array elements** read `"tags" holds strings, and this is a number.` and `"tags" holds
+  strings and "counts" numbers: they can't be compared.`, where they read "holds a string elements" (since 1.6.0). The
+  codes and paths are unchanged.
+
+### Documentation
+
+- **README, "Upgrading to 1.6.1 and 1.6.2":** what each change means for existing filters and what to do, and what was
+  decided against, with the reasons: refusing a decimal against an `integer` queryable, converting between dates and
+  timestamps in an interval, and `MULTIPOINT` without each point's parentheses.
+- **The validating guide:** an `integer` queryable is checked as a number, and why.
 
 ## [1.6.1] - 2026-11-16
 
