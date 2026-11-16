@@ -28,6 +28,11 @@ All notable changes to this package are recorded here. The format follows
     - with GEOS 3.13 or later, exactly what `evaluate` selects.
   - SQL without `literals` is unchanged, byte for byte.
 - **`SqlLiterals`** (the type) and **`sqlReprojects`** in `ogc-cql2/sql`.
+- **`unsupported`** gains a case: `toSql`'s `literals` in an SRID the dialect doesn't reproject (`details.srid`). A
+  filter valid against `sqlConformance` is still never refused otherwise.
+- demo-server's query route takes `"filter-crs"`:
+  - EPSG:4326 (latitude first) on every SQL store, EPSG:3857 on PostgreSQL;
+  - a 400 for a CRS the store doesn't take, or a 3857 literal outside EPSG's area of use.
 
 ### Documentation
 
@@ -39,7 +44,7 @@ All notable changes to this package are recorded here. The format follows
 - **JSTS as `evaluate`'s spatial engine,** beside GEOS: the adapter and what was measured (the standard's Table 14
   right, the same answers as GEOS on the US states, 5 to 6 times slower).
 
-## [1.6.2] - Unreleased
+## [1.6.2] - 2026-11-16
 
 ### Fixed
 

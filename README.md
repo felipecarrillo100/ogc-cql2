@@ -53,7 +53,8 @@ The package implements these conformance classes:
   DuckDB lists) or as JSON (PostgreSQL `jsonb`, GeoPackage text as GDAL writes list fields, Oracle, SQL Server)
   ([guide](docs/guide/arrays.md)).
 - **Each engine says what it supports:** `evaluateConformance(options)` and `sqlConformance(options)` return the
-  classes, as conformance URIs, to pass to `validate`; a filter valid against them is never refused as `unsupported`.
+  classes, as conformance URIs, to pass to `validate`; a filter valid against them is never refused as `unsupported`
+  (`toSql`'s `literals` in another SRID aside: `sqlReprojects` says where).
 - **Anything else that is valid CQL2** (custom functions) is refused as `outside-profile`, with the conformance class
   it would need.
 
@@ -153,6 +154,7 @@ them into PostgreSQL, Oracle and SQL Server). Its routes:
 | `GET /collections/{id}/queryables` | the properties and their types (a JSON Schema) |
 | `POST /collections/{id}/query` with `{ "filter": …, "limit": 50, "offset": 0 }` | the matching features, as GeoJSON |
 | … with `"filter-lang": "cql2-text"` and the filter as a CQL2-text string | the same, read with `ogc-cql2/parse` |
+| … with `"filter-crs"`: EPSG:4326 (latitude first) on the SQL stores, EPSG:3857 on PostgreSQL | the same, its geometries read in that CRS |
 
 An invalid filter, or one naming a property the collection doesn't have, is refused with HTTP 400 and the problems as
 `application/problem+json`. Neither the page nor the server is part of the npm package.

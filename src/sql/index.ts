@@ -93,7 +93,8 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
  * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
  * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite` is
  * `true`, and on `sqlserver` all but Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
- * `toSql` would refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the
+ * `toSql` would refuse as `unsupported`; a filter valid against it never is (but for `literals` in an SRID the dialect
+ * doesn't reproject: {@link sqlReprojects}). It says what the SQL needs, not what the
  * database has: the spatial classes also need PostGIS, DuckDB's spatial extension or Oracle Spatial, and the package's
  * functions installed (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`, `oracleFunctions`). A new array, in
  * `CONFORMANCE`'s order, to change at will.

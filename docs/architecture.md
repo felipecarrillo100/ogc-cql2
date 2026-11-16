@@ -73,7 +73,7 @@ drops the rest.
 | `ogc-cql2/validate` | `src/validate/` | `validate`, `assertValid`, `requiredConformance`, `filterProperties` | 0.1.0 |
 | `ogc-cql2/text` | `src/text/` | `toText`, `textProblem`, `isIdentifier`, `quoteString` | 0.1.0 |
 | `ogc-cql2/evaluate` | `src/evaluate/` | `toPredicate`, `toEvaluator`, `evaluate`; `evaluateConformance` (the classes it supports with its options) | 0.1.0; 1.4.0: `evaluateConformance` |
-| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqlConformance` (the classes a dialect supports with its options), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb`; 1.4.0: `sqlConformance` |
+| `ogc-cql2/sql` | `src/sql/` | `toSql` (CQL2-JSON → a parameterized `WHERE` clause), `sqlConformance` (the classes a dialect supports with its options), `sqlReprojects` (whether it reprojects `literals`), `sqliteFunctions`, `postgresFunctions`, `postgresValue`, `duckdbFunctions`, `duckdbValue` | 0.1.0: dialects `sqlite` and `postgres`; 0.2.0: `duckdb`; 1.4.0: `sqlConformance`; 1.7.0: `literals`, `sqlReprojects` |
 | `ogc-cql2/parse` | `src/parse/` | `fromText` (CQL2-text → CQL2-JSON, then the profile check), for a server that receives text | 0.11.0 |
 
 `text`, `parse`, `evaluate` and `sql` validate their input (or their result) first, so they load `validate` too.
