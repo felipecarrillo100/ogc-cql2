@@ -2,7 +2,8 @@
  * Dialect `sqlserver`, for SQL Server 2022 and later, with Basic Spatial Functions (S_INTERSECTS, S_DISJOINT):
  * - columns are statically typed; `SqlColumn.sqlType` (the type as `sys.types` names it) picks the view;
  * - text compares as its UTF-8 bytes (`CONVERT` to a `Latin1_General_100_BIN2_UTF8` varchar, as varbinary): code point
- *   order, and no blank padding (SQL Server compares `'a' = 'a '` as TRUE in every collation). It costs the column's
+ *   order, and no blank padding (SQL Server compares `'a' = 'a '` as TRUE in every collation), U+0000 and U+0001
+ *   recoded first, since a binary comparison ignores trailing zero bytes (`'a'` would equal `'a\u0000'`). It costs the column's
  *   index. Stored text is assumed to be in NFC (T-SQL has no normalization). An nvarchar column in
  *   `Latin1_General_100_BIN2`, the one collation measured to lose characters past U+FFFF on conversion, can't be
  *   compared exactly;
@@ -99,9 +100,15 @@ export function sqlserverValue(sqlColumn: string, column: SqlColumn): string | u
   return msText(sql, cls);
 }
 
-/** Text as its UTF-8 bytes: code point order, and no blank padding. */
+/**
+ * Text as its UTF-8 bytes: code point order, and no blank padding. SQL Server compares binary values as if the shorter
+ * had trailing zero bytes (`0x61 = 0x6100`, measured on 2022 and 2025), so U+0000 and U+0001 are first written as
+ * U+0001 U+0001 and U+0001 U+0002: a code that keeps code point order and leaves no zero byte, so that `'a'` <
+ * `'a\u0000'`, exactly.
+ */
 const bytes = (sql: string): string =>
-  `CAST(CONVERT(varchar(max), ${sql} COLLATE Latin1_General_100_BIN2_UTF8) AS varbinary(max))`;
+  `CAST(CONVERT(varchar(max), REPLACE(REPLACE(${sql} COLLATE Latin1_General_100_BIN2_UTF8, NCHAR(1), NCHAR(1) + NCHAR(2)), ` +
+  `NCHAR(0), NCHAR(1) + NCHAR(1)) COLLATE Latin1_General_100_BIN2_UTF8) AS varbinary(max))`;
 const utf8 = (sql: string): string => `CONVERT(varchar(max), ${sql} COLLATE Latin1_General_100_BIN2_UTF8)`;
 /** ASCII text (days, served dates) in byte order, whatever the database's collation (a linguistic one ignores `-`). */
 const BIN2 = " COLLATE Latin1_General_BIN2";
@@ -523,7 +530,9 @@ BEGIN
   ELSE RETURN NULL;
   DECLARE @y bigint = CAST(LEFT(@u, 4) AS int), @mo bigint = CAST(SUBSTRING(@u, 6, 2) AS int), @d bigint = CAST(SUBSTRING(@u, 9, 2) AS int),
           @h bigint = CAST(SUBSTRING(@u, 12, 2) AS int), @mi bigint = CAST(SUBSTRING(@u, 15, 2) AS int);
-  IF ${s}cql2_real_day(@y, @mo, @d) = 0 OR @h > 23 OR @mi > 59 OR @sec > 59 OR @oh > 23 OR @om > 59 RETURN NULL;
+  IF ${s}cql2_real_day(@y, @mo, @d) = 0 OR @h > 23 OR @mi > 59 OR @sec > 60 OR @oh > 23 OR @om > 59 RETURN NULL;
+  -- A leap second (60) is the last millisecond of its minute, as evaluate reads it.
+  IF @sec = 60 SELECT @sec = 59, @ms = 999;
   -- Days since 1970-01-01 in the proleptic Gregorian calendar.
   DECLARE @yy bigint = @y - CASE WHEN @mo <= 2 THEN 1 ELSE 0 END;
   DECLARE @era bigint = CASE WHEN @yy >= 0 THEN @yy ELSE @yy - 399 END / 400;

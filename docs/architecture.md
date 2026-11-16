@@ -304,10 +304,13 @@ is `NULL::boolean` when the SQL is built, and `SqlColumn.sqlType` (the declared 
 PostgreSQL 18 and is exact only with the `PG_UNICODE_FAST` provider. `postgresValue(column)` is the SELECT expression
 that serves each column as the dialect compares it.
 
-**Dates and instants are read strictly, the same in every engine:** a day must exist, hours are 00–23, minutes and
-seconds 00–59, a fraction is truncated to milliseconds. JavaScript's `Date.parse` is lenient (it reads 2023-02-30 as
-2 March); PostgreSQL rolls a leap second into the next minute. A leap second in a filter is refused
-(`invalid-timestamp`).
+**Dates and instants are read strictly, the same in every engine:** a day must exist, hours are 00–23, minutes
+00–59, seconds 00–60, a fraction is truncated to milliseconds. JavaScript's `Date.parse` is lenient (it reads
+2023-02-30 as 2 March). A leap second (second 60, RFC 3339) is the last millisecond of its minute, `…:59.999`, in
+literals and in text the package reads (since 1.6.2). No engine's own timestamp type holds one (measured):
+PostgreSQL rolls `:60` into the next minute; DuckDB, SQL Server and Oracle refuse it; `make_timestamp(…, 60)` rolls
+over in PostgreSQL and DuckDB. So a native timestamp column holds what its engine made of the input, and the package's
+readers never pass second 60 to an engine.
 
 The `duckdb` dialect, for DuckDB: **the same SQL in Node (`@duckdb/node-api`) and in the browser
 (`@duckdb/duckdb-wasm`)**, on tables or straight on files (GeoParquet, Parquet, CSV). Statically typed like

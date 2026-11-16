@@ -239,6 +239,26 @@ describe("the oracle dialect on values and sessions the kitchen sink doesn't hav
     });
   });
 
+  it("a leap second held as text (second 60) is the last millisecond of its minute, as in evaluate", async (t) => {
+    if (skip) return t.skip(skip);
+    // RFC 3339 allows second 60; no engine's own timestamp type holds it. The package reads it as the last
+    // millisecond of its minute, the same as evaluate.
+    const at = (op: string, timestamp: string): Cql2Filter => ({ op, args: [{ property: "x" }, { timestamp }] } as Cql2Filter);
+    const cases: [string, Cql2Filter][] = [
+      ["2016-12-31T23:59:60Z", at("=", "2016-12-31T23:59:59.999Z")], ["2016-12-31T23:59:60Z", at("=", "2016-12-31T23:59:60Z")],
+      ["2016-12-31T23:59:60.5Z", at("=", "2016-12-31T23:59:59.999Z")], ["2016-12-31T23:59:60Z", at("<", "2017-01-01T00:00:00Z")],
+      ["2016-12-31T23:59:60Z", at(">", "2016-12-31T23:59:59.998Z")], ["2017-01-01T00:59:60+01:00", at("=", "2016-12-31T23:59:59.999Z")],
+      ["2016-12-31T23:59:59.999Z", at("=", "2016-12-31T23:59:60Z")], ["2016-12-31T23:59:61Z", at("<", "2017-01-01T00:00:00Z")],
+    ];
+    const TEXT_INSTANT: SqlColumn = { type: "string", format: "date-time", sqlType: "VARCHAR2(40)" };
+    await session("", async (c) => {
+      for (const [x, filter] of cases) {
+        const r = await check(c, `CAST('${x}' AS VARCHAR2(40))`, TEXT_INSTANT, filter);
+        assert.deepEqual(r.sql, r.evaluate, `${x} ${JSON.stringify(filter)}`);
+      }
+    });
+  });
+
   it("a DATE before year 1 is served with its sign: no day, so NULL, as in evaluate", async (t) => {
     if (skip) return t.skip(skip);
     await session("", async (c) => {

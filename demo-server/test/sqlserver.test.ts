@@ -199,6 +199,47 @@ describe("the sqlserver dialect on values the kitchen sink doesn't have", () => 
     }
   });
 
+  it("text with trailing U+0000 and U+0001: a binary comparison would ignore trailing zero bytes ('a' = 'a\\u0000')", async (t) => {
+    if (skip) return t.skip(skip);
+    const values: [string, string][] = [
+      ["N'a'", "a"], ["N'a' + NCHAR(0)", "a\u0000"], ["N'a' + NCHAR(0) + NCHAR(0)", "a\u0000\u0000"], ["N'a' + NCHAR(1)", "a\u0001"],
+      ["N'a' + NCHAR(1) + NCHAR(1)", "a\u0001\u0001"], ["N'a' + NCHAR(2)", "a\u0002"], ["N''", ""], ["NCHAR(0)", "\u0000"],
+    ];
+    const VARCHAR: SqlColumn = { type: "string", sqlType: "varchar" };
+    for (const [x] of values) {
+      for (const [, literal] of values) {
+        for (const filter of [
+          f("=", literal), f("<>", literal), f("<", literal), f("<=", literal), f(">", literal), f(">=", literal),
+          f("in", [literal, "b"]), { op: "and", args: [f(">=", literal), f("<", "a\u0001")] } as Cql2Filter,
+          f("=", { op: "casei", args: [literal] }),
+        ]) {
+          for (const [column, sql] of [[TEXT, x], [VARCHAR, `CAST(${x} AS varchar(20)) COLLATE Latin1_General_100_CI_AS_SC_UTF8`]] as const) {
+            const r = await check(sql, column, filter);
+            assert.deepEqual(r.sql, r.evaluate, `${sql} ${JSON.stringify(filter)}: served ${JSON.stringify(r.served)}`);
+          }
+        }
+      }
+    }
+  });
+
+  it("a leap second held as text (second 60) is the last millisecond of its minute, as in evaluate", async (t) => {
+    if (skip) return t.skip(skip);
+    // RFC 3339 allows second 60; no engine's own timestamp type holds it. The package reads it as the last
+    // millisecond of its minute, the same as evaluate.
+    const at = (op: string, timestamp: string): Cql2Filter => ({ op, args: [{ property: "x" }, { timestamp }] } as Cql2Filter);
+    const cases: [string, Cql2Filter][] = [
+      ["2016-12-31T23:59:60Z", at("=", "2016-12-31T23:59:59.999Z")], ["2016-12-31T23:59:60Z", at("=", "2016-12-31T23:59:60Z")],
+      ["2016-12-31T23:59:60.5Z", at("=", "2016-12-31T23:59:59.999Z")], ["2016-12-31T23:59:60Z", at("<", "2017-01-01T00:00:00Z")],
+      ["2016-12-31T23:59:60Z", at(">", "2016-12-31T23:59:59.998Z")], ["2017-01-01T00:59:60+01:00", at("=", "2016-12-31T23:59:59.999Z")],
+      ["2016-12-31T23:59:59.999Z", at("=", "2016-12-31T23:59:60Z")], ["2016-12-31T23:59:61Z", at("<", "2017-01-01T00:00:00Z")],
+    ];
+    const TEXT_INSTANT: SqlColumn = { type: "string", format: "date-time", sqlType: "nvarchar" };
+    for (const [x, filter] of cases) {
+      const r = await check(`N'${x}'`, TEXT_INSTANT, filter);
+      assert.deepEqual(r.sql, r.evaluate, `${x} ${JSON.stringify(filter)}`);
+    }
+  });
+
   it("instants truncated to milliseconds, in UTC; subnormal numbers and overflow as evaluate has them", async (t) => {
     if (skip) return t.skip(skip);
     const TZ: SqlColumn = { type: "string", format: "date-time", sqlType: "datetimeoffset" };

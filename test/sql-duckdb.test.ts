@@ -46,6 +46,8 @@ const ROWS: string[][] = [
   ["TRUE", "9", "9", "9", "9", "'İstanbul'", "DATE '2022-02-02'", "TIMESTAMPTZ '2023-01-01 00:00:01+00'", "TIMESTAMP '2023-01-01 00:00:01'", "'2022-02-02'", "'2022-12-31T23:00:00Z'", "'ﬁle'"],
   ["FALSE", "4", "4", "4", "4", "'ﬁle'", "DATE '2020-07-26'", "TIMESTAMPTZ '2023-01-01 00:00:00.0005+00'", "TIMESTAMP '2023-01-01 00:00:00.0005'", "'0000-01-01'", "'2023-01-01T24:00:00Z'", "'FILE'"],
   ["TRUE", "6", "6", "6", "6", "'\uE000'", "DATE '2021-01-01'", "TIMESTAMPTZ '2023-01-01 00:00:00+00'", "TIMESTAMP '2023-01-01 10:00:00'", "'2021-01-01'", "'2023-01-01t00:00:00z'", "'a b'"],
+  // A leap second (RFC 3339 allows second 60) as text: the last millisecond of its minute, as the native column holds it.
+  ["FALSE", "26", "26", "26", "26", "'leap'", "DATE '2016-12-31'", "TIMESTAMPTZ '2016-12-31 23:59:59.999+00'", "TIMESTAMP '2016-12-31 23:59:59.999'", "'2016-12-31'", "'2016-12-31T23:59:60Z'", "'leap'"],
   ["FALSE", "3", "3", "1", "0.01", "'100%'", "DATE '2020-07-26'", "TIMESTAMPTZ '2023-01-01 00:00:00.001+00'", "TIMESTAMP '2023-01-01 00:00:00.001'", "'2020-07-26'", "'2023-01-01T00:00:00.0001Z'", "'ab'"],
   ["TRUE", "11", "11", "11", "11", "'a_b'", "DATE '2023-01-01'", "TIMESTAMPTZ '2022-12-31 19:00:00-05'", "TIMESTAMP '2022-12-31 19:00:00'", "'2023-01-01'", "'2023-01-01T00:00:00-00:00'", "'a\nb'"],
   ["FALSE", "12", "12", "12", "12", "'end\\'", "DATE '2023-01-01'", "TIMESTAMPTZ '2023-01-01 00:00:00+00'", "TIMESTAMP '2023-01-01 00:00:00'", "'2023-01-01'", "'2023-01-01T00:00:00Z'", "'end\\'"],
@@ -238,7 +240,7 @@ describe("Arithmetic Expressions: DuckDB selects exactly what evaluate selects",
 describe("Temporal Functions: DuckDB selects exactly what evaluate selects, given the columns as queryables", () => {
   // Literals among the table's values, sub-millisecond ones included.
   const filters = generateTemporalFilters(["day", "at", "sday", "sat"], ["2020-07-26", "2021-01-01", "2023-01-01", "1999-12-31"],
-    ["2023-01-01T00:00:00Z", "2023-01-01T00:00:00.001Z", "1969-12-31T23:59:59.999Z", "2022-12-31T23:00:00Z", "2023-01-01T00:00:00.0005Z"]);
+    ["2023-01-01T00:00:00Z", "2023-01-01T00:00:00.001Z", "1969-12-31T23:59:59.999Z", "2022-12-31T23:00:00Z", "2023-01-01T00:00:00.0005Z", "2016-12-31T23:59:60Z"]);
   const fromMemory = (filter: Cql2Filter): number[] =>
     served.filter(toPredicate(filter, { getProperty: (row, name) => row[name], queryables: COLUMNS })).map((r) => r.id as number);
 

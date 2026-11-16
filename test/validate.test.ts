@@ -91,7 +91,7 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["timestamp without Z", { op: "=", args: [p("t"), { timestamp: "2023-01-01T00:00:00" }] }, "invalid-timestamp", "/args/1/timestamp"],
   ["timestamp with a space", { op: "=", args: [p("t"), { timestamp: "2023-01-01 00:00:00Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
   ["hour 24", { op: "=", args: [p("t"), { timestamp: "2023-01-01T24:00:00Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
-  ["a leap second: no engine can compare it", { op: "=", args: [p("t"), { timestamp: "2016-12-31T23:59:60Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
+  ["second 61 (60, a leap second, is accepted)", { op: "=", args: [p("t"), { timestamp: "2016-12-31T23:59:61Z" }] }, "invalid-timestamp", "/args/1/timestamp"],
   ["deep path", { op: "and", args: [true, { op: "not", args: [{ op: "=", args: [p("a"), { date: "x" }] }] }] }, "invalid-date", "/args/1/args/0/args/1/date"],
 ];
 

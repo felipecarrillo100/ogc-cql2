@@ -182,7 +182,7 @@ describe("Arithmetic Expressions: SQLite selects exactly what evaluate selects",
 describe("Temporal Functions: SQLite selects exactly what evaluate selects, given the columns as queryables", () => {
   // Literals among the table's values, sub-millisecond ones included.
   const filters = generateTemporalFilters(["day", "ts", "x", "s"], ["2020-07-26", "2021-01-01", "2023-01-02", "1999-12-31"],
-    ["2023-01-01T00:00:00Z", "2022-12-31T23:00:00Z", "2023-01-01T00:00:00.5Z", "2023-01-02T00:00:00Z", "2022-12-31T22:59:59.9995Z"]);
+    ["2023-01-01T00:00:00Z", "2022-12-31T23:00:00Z", "2023-01-01T00:00:00.5Z", "2023-01-02T00:00:00Z", "2022-12-31T22:59:59.9995Z", "2016-12-31T23:59:60Z"]);
   const fromMemory = (filter: Cql2Filter): number[] =>
     stored.filter(toPredicate(filter, { getProperty, queryables: COLUMNS })).map((r) => r.id as number);
 

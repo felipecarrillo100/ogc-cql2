@@ -7,6 +7,9 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import type { Cql2Filter } from "ogc-cql2";
+import { toPredicate } from "ogc-cql2/evaluate";
+import { postgresValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { closeStores, createApp, loadStores } from "../src/server.ts";
 import { createPool, openPostgres } from "../src/stores/postgres.ts";
 import type { Store } from "../src/stores/types.ts";
@@ -150,5 +153,38 @@ describe("the routes on the PostgreSQL collections", () => {
     const res = await query("pg-sub_regions", { filter: { op: "=", args: [{ property: "STATE_NAME" }, "Texas"] } });
     assert.equal(res.status, 400);
     assert.equal((await read(res)).problems[0].code, "unknown-property");
+  });
+});
+
+describe("the postgres dialect on values the kitchen sink doesn't have", () => {
+  /** The value served for `x` (an SQL expression), and whether toSql's filter and its negation select it, beside evaluate. */
+  const check = async (x: string, column: SqlColumn, filter: Cql2Filter) => {
+    const selects = async (f: Cql2Filter) => {
+      const { where, params } = toSql(f, { dialect: "postgres", columns: { x: column }, functionSchema: "cql2demo" });
+      const { rows } = await pool!.query(`SELECT ${postgresValue("x", column)} AS v, CASE WHEN ${where} THEN 1 ELSE 0 END AS s FROM (SELECT ${x} AS x) t`, params);
+      return [rows[0].v, rows[0].s] as const;
+    };
+    const negation = { op: "not", args: [filter] } as Cql2Filter;
+    const [[served, selected], [, negated]] = [await selects(filter), await selects(negation)];
+    const evaluate = (f: Cql2Filter) => (toPredicate(f, { queryables: { x: column } })({ properties: { x: served } }) ? 1 : 0);
+    return { served, sql: [selected, negated], evaluate: [evaluate(filter), evaluate(negation)] };
+  };
+  const TEXT_INSTANT: SqlColumn = { type: "string", format: "date-time", sqlType: "text" };
+
+  it("a leap second held as text (second 60) is the last millisecond of its minute, as in evaluate", async (t) => {
+    if (skip) return t.skip(skip);
+    // RFC 3339 allows second 60; no engine's own timestamp type holds it. The package reads it as the last
+    // millisecond of its minute, the same as evaluate.
+    const at = (op: string, timestamp: string): Cql2Filter => ({ op, args: [{ property: "x" }, { timestamp }] } as Cql2Filter);
+    const cases: [string, Cql2Filter][] = [
+      ["2016-12-31T23:59:60Z", at("=", "2016-12-31T23:59:59.999Z")], ["2016-12-31T23:59:60Z", at("=", "2016-12-31T23:59:60Z")],
+      ["2016-12-31T23:59:60.5Z", at("=", "2016-12-31T23:59:59.999Z")], ["2016-12-31T23:59:60Z", at("<", "2017-01-01T00:00:00Z")],
+      ["2016-12-31T23:59:60Z", at(">", "2016-12-31T23:59:59.998Z")], ["2017-01-01T00:59:60+01:00", at("=", "2016-12-31T23:59:59.999Z")],
+      ["2016-12-31T23:59:59.999Z", at("=", "2016-12-31T23:59:60Z")], ["2016-12-31T23:59:61Z", at("<", "2017-01-01T00:00:00Z")],
+    ];
+    for (const [x, filter] of cases) {
+      const r = await check(`'${x}'::text`, TEXT_INSTANT, filter);
+      assert.deepEqual(r.sql, r.evaluate, `${x} ${JSON.stringify(filter)}`);
+    }
   });
 });

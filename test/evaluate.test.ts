@@ -132,10 +132,21 @@ describe("dates and instants", () => {
     const at = F({ op: "=", args: [p("v"), ts("2023-03-02T00:00:00Z")] });
     expect(evaluate(at, f({ v: "2023-02-30T00:00Z" }))).toBe(null); // Date.parse reads it as 2 March
     expect(evaluate(F({ op: "=", args: [p("v"), ts("2023-01-02T00:00:00Z")] }), f({ v: "2023-01-01T24:00Z" }))).toBe(null);
-    expect(evaluate(F({ op: "<", args: [p("v"), ts("2024-01-01T00:00:00Z")] }), f({ v: "2023-01-01T10:00:60Z" }))).toBe(null);
+    expect(evaluate(F({ op: "<", args: [p("v"), ts("2024-01-01T00:00:00Z")] }), f({ v: "2023-01-01T10:00:61Z" }))).toBe(null);
     expect(evaluate(F({ op: "=", args: [p("v"), { date: "2020-03-01" }] }), f({ v: "2020-02-30" }))).toBe(null);
     expect(evaluate(F({ op: "=", args: [p("v"), { date: "2020-02-29" }] }), f({ v: "2020-02-29" }))).toBe(true);
     expect(evaluate(F({ op: "=", args: [p("v"), ts("2023-01-01T10:00:00.123Z")] }), f({ v: "2023-01-01t10:00:00.123456z" }))).toBe(true);
+  });
+
+  it("a leap second (second 60, RFC 3339) is the last millisecond of its minute, in a literal and in the data", () => {
+    const leap = ts("2016-12-31T23:59:60Z");
+    expect(evaluate(F({ op: "=", args: [p("v"), leap] }), f({ v: "2016-12-31T23:59:59.999Z" }))).toBe(true);
+    expect(evaluate(F({ op: "=", args: [p("v"), leap] }), f({ v: "2016-12-31T23:59:60.5Z" }))).toBe(true);
+    expect(evaluate(F({ op: ">", args: [p("v"), leap] }), f({ v: "2017-01-01T00:00:00Z" }))).toBe(true);
+    expect(evaluate(F({ op: "<", args: [p("v"), leap] }), f({ v: "2016-12-31T23:59:59.998Z" }))).toBe(true);
+    expect(evaluate(F({ op: "=", args: [p("v"), ts("2016-12-31T23:59:59.999Z")] }), f({ v: "2016-12-31T23:59:60Z" }))).toBe(true);
+    expect(evaluate(F({ op: "=", args: [p("v"), ts("2017-01-01T00:59:59.999Z")] }), f({ v: "2017-01-01T01:59:60+01:00" }))).toBe(true);
+    expect(evaluate(F({ op: "t_before", args: [leap, ts("2017-01-01T00:00:00Z")] }), f({}))).toBe(true);
   });
 
   it("dates order by day", () => {

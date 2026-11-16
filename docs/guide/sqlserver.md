@@ -37,6 +37,8 @@ const { recordset } = await request.query(`SELECT ${select} FROM dbo.places WHER
   the column's index.
   - SQL Server compares `'a' = 'a '` as TRUE in every collation, and its LIKE ignores the value's trailing blanks, so
     neither is used as it is.
+  - It also compares binary values as if the shorter had trailing zero bytes, so U+0000 and U+0001 are recoded first
+    (since 1.6.2): `'a'` and `'a\u0000'` differ, and sort in code point order.
   - LIKE is SQL Server's when the pattern has no `_`, else `cql2_like`: SQL Server's `_` isn't one code point (on
     2022, one UTF-8 byte).
 - **Numbers** compare as float. Literals are bound as text; a subnormal one is scaled, since SQL Server reads its text

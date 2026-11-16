@@ -43,8 +43,9 @@ The rules are the standard's:
   order it.
 - **Dates and timestamps:** `{ "date" }` matches a `"YYYY-MM-DD"` string or a `Date`; `{ "timestamp" }` an ISO 8601
   string with `Z` or an offset, or a `Date`. Values are read strictly, the same in every engine: the day must exist
-  (no 30 February), hours are 00–23, minutes and seconds 00–59, and a fraction counts to the millisecond. A leap second
-  in a filter is refused (`invalid-timestamp`): no engine can compare it.
+  (no 30 February), hours are 00–23, minutes 00–59, seconds 00–60, and a fraction counts to the millisecond. A leap
+  second (second 60, which RFC 3339 allows) is the last millisecond of its minute, `…:59.999`, in a filter and in the
+  data alike, since 1.6.2: epoch time has no leap seconds, and no engine's timestamp type holds one.
 - **Strings** are compared after Unicode normalization (NFC). **`casei`** applies Unicode's full case folding, so
   `"Straße"` matches `"STRASSE"`; it folds exactly what it wraps.
 - **`accenti`** removes accents, as the standard defines it: the nonspacing marks after canonical decomposition, so

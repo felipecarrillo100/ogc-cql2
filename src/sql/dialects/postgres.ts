@@ -145,7 +145,8 @@ export function likePattern(pattern: string): string {
  * - `cql2_accenti(text)`: a string without accents, as `evaluate` computes it (NFD, the marks removed, NFC);
  * - `cql2_day(text)`: a `YYYY-MM-DD` text that exists, else NULL;
  * - `cql2_instant(text)`: an ISO 8601 date-time with `Z` or an offset that exists, as a timestamptz truncated to
- *   milliseconds, else NULL. The same strict rules as `evaluate`: hours 00–23, minutes and seconds 00–59.
+ *   milliseconds, else NULL. The same strict rules as `evaluate`: hours 00–23, minutes 00–59, seconds 00–60 (a leap
+ *   second as the last millisecond of its minute).
  * - `cql2_arithmetic(op, a, b)` (since 1.2.0): `a op b` of two doubles, exactly as `evaluate` computes it, never an
  *   error: PostgreSQL's own errors (division by zero, a power outside its domain, overflow) are NULL, as `evaluate`'s
  *   non-finite results are, and underflow is the 0 it rounds to.
@@ -272,13 +273,15 @@ DECLARE
   m text[] := regexp_match(t, '^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\\.([0-9]+))?)?(?:Z|([+-])([0-9]{2}):([0-9]{2}))$', 'i');
   off_minutes int;
 BEGIN
-  IF m IS NULL OR m[1] = '0000' OR m[4]::int > 23 OR m[5]::int > 59 OR coalesce(m[6], '0')::int > 59
+  IF m IS NULL OR m[1] = '0000' OR m[4]::int > 23 OR m[5]::int > 59 OR coalesce(m[6], '0')::int > 60
      OR coalesce(m[9], '0')::int > 23 OR coalesce(m[10], '0')::int > 59 THEN
     RETURN NULL;
   END IF;
   off_minutes := CASE WHEN m[8] IS NULL THEN 0 ELSE (CASE m[8] WHEN '-' THEN -1 ELSE 1 END) * (m[9]::int * 60 + m[10]::int) END;
+  -- A leap second (60) is the last millisecond of its minute, as evaluate reads it.
   RETURN (make_timestamp(m[1]::int, m[2]::int, m[3]::int, m[4]::int, m[5]::int,
-            coalesce(m[6], '0')::int + coalesce(rpad(left(m[7], 3), 3, '0'), '000')::int / 1000.0) AT TIME ZONE 'UTC')
+            CASE WHEN m[6] = '60' THEN 59.999
+                 ELSE coalesce(m[6], '0')::int + coalesce(rpad(left(m[7], 3), 3, '0'), '000')::int / 1000.0 END) AT TIME ZONE 'UTC')
          - off_minutes * interval '1 minute';
 EXCEPTION WHEN others THEN RETURN NULL;
 END

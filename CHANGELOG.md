@@ -5,7 +5,22 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
-## [1.6.1] - Unreleased
+## [1.6.2] - Unreleased
+
+### Fixed
+
+- **SQL Server: text with trailing U+0000** compares as `evaluate` compares it. SQL Server compares binary values as if
+  the shorter had trailing zero bytes, so the text views (`=`, `<>`, `<`, `<=`, `>`, `>=`, IN, with or without CASEI /
+  ACCENTI) found `'a'` = `'a\u0000'` and `'' = '\u0000'` (since 1.5.0). U+0000 and U+0001 are now recoded before the
+  comparison, keeping code point order. The SQL of the other dialects is unchanged.
+- **A leap second is accepted:** `TIMESTAMP('2016-12-31T23:59:60Z')` was refused as `invalid-timestamp`, though the
+  standard's grammar and RFC 3339 allow second 60. It is now compared as the last millisecond of its minute,
+  `2016-12-31T23:59:59.999Z`, in literals, in `evaluate`'s data, and in each dialect's reading of text (`cql2_instant`
+  in SQLite, DuckDB, PostgreSQL, Oracle and SQL Server): epoch time has no leap seconds. Native timestamp columns can't
+  hold one (each engine rolls it over or refuses it), so they are unchanged. Second 61 stays refused. Users of
+  `postgresFunctions`, `oracleFunctions` or `sqlserverFunctions` run them again to get the new `cql2_instant`.
+
+## [1.6.1] - 2026-11-16
 
 A review against the standard's latest text (OGC 21-065r2, its grammar and JSON schema, the 1.0.1 draft, and its open
 issues). Where the package read more than the standard allows, it now follows the standard.

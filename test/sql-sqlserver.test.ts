@@ -24,7 +24,8 @@ const p = (property: string) => ({ property });
 const casei = (arg: unknown) => ({ op: "casei", args: [arg] });
 const sql = (filter: unknown, functionSchema?: string) =>
   toSql(filter as Cql2Filter, { dialect: "sqlserver", columns: COLUMNS, ...(functionSchema ? { functionSchema } : {}) });
-const bytes = (x: string) => `CAST(CONVERT(varchar(max), ${x} COLLATE Latin1_General_100_BIN2_UTF8) AS varbinary(max))`;
+const bytes = (x: string) =>
+  `CAST(CONVERT(varchar(max), REPLACE(REPLACE(${x} COLLATE Latin1_General_100_BIN2_UTF8, NCHAR(1), NCHAR(1) + NCHAR(2)), NCHAR(0), NCHAR(1) + NCHAR(1)) COLLATE Latin1_General_100_BIN2_UTF8) AS varbinary(max))`;
 const MS = (x: string) => `DATEDIFF_BIG(millisecond, CAST('1970-01-01T00:00:00Z' AS datetimeoffset), ${x})`;
 
 describe("the sqlserver dialect", () => {

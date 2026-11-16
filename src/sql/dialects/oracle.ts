@@ -691,9 +691,11 @@ BEGIN
   END IF;
   y := TO_NUMBER(SUBSTR(t, 1, 4)); mo := TO_NUMBER(SUBSTR(t, 6, 2)); d := TO_NUMBER(SUBSTR(t, 9, 2));
   h := TO_NUMBER(SUBSTR(t, 12, 2)); mi := TO_NUMBER(SUBSTR(t, 15, 2));
-  IF NOT ${s}cql2_support.real_day(y, mo, d) OR h > 23 OR mi > 59 OR sec > 59 OR oh > 23 OR om > 59 THEN
+  IF NOT ${s}cql2_support.real_day(y, mo, d) OR h > 23 OR mi > 59 OR sec > 60 OR oh > 23 OR om > 59 THEN
     RETURN NULL;
   END IF;
+  -- A leap second (60) is the last millisecond of its minute, as evaluate reads it.
+  IF sec = 60 THEN sec := 59; ms := 999; END IF;
   -- Days since 1970-01-01 in the proleptic Gregorian calendar (Oracle's own dates are Julian before 1582), and back.
   yy := y - CASE WHEN mo <= 2 THEN 1 ELSE 0 END;
   era := FLOOR(yy / 400);

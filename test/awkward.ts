@@ -41,6 +41,9 @@ export const ROWS: Record<string, unknown>[] = [
   { b: 1, i: 14, d: 14, s: "Vie\u0323\u0302t Nam", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "Việt", label: "VIET NAM" },
   { b: 0, i: 15, d: 15, s: "Łódź", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "Lodz", label: "Øresund" },
   { b: 1, i: 16, d: 16, s: "はじめ", day: "2023-01-03", ts: "2023-01-03T00:00:00Z", x: "はしめ", label: "Mà" },
+  // A leap second (RFC 3339 allows second 60): the last millisecond of its minute, as the row after it.
+  { b: 0, i: 17, d: 17, s: "leap", day: "2016-12-31", ts: "2016-12-31T23:59:60Z", x: "2016-12-31T23:59:60.5Z", label: "leap" },
+  { b: 1, i: 18, d: 18, s: "leap", day: "2016-12-31", ts: "2016-12-31T23:59:59.999Z", x: "2017-01-01T00:59:60+01:00", label: "leap" },
 ];
 
 /** A row as an application reads it from the table: GeoPackage's BOOLEAN 0 / 1 become false / true. */

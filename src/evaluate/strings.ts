@@ -109,7 +109,8 @@ export function compareCodePoints(a: string, b: string): number {
 // --- Dates and instants --------------------------------------------------------------------------------------------
 
 // Strict, and the same in every engine (the PostgreSQL functions of `ogc-cql2/sql` mirror these rules): a day must
-// exist (years 0001-9999), hours are 00-23, minutes and seconds 00-59, an offset at most ±23:59. JavaScript's
+// exist (years 0001-9999), hours are 00-23, minutes 00-59, seconds 00-60 (60, a leap second, as …:59.999), an offset
+// at most ±23:59. JavaScript's
 // Date.parse is lenient (it turns 2023-02-30 into 2 March, and accepts 24:00), so it is not used for strings.
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:Z|([+-])(\d{2}):(\d{2}))$/i;
@@ -133,7 +134,8 @@ export function dayOf(value: unknown): string | undefined {
 
 /**
  * A value as an instant, in epoch milliseconds: an ISO 8601 date-time string with `Z` or an offset that exists
- * (seconds optional, a fraction truncated to milliseconds), or a `Date`; else `undefined`.
+ * (seconds optional, a fraction truncated to milliseconds), or a `Date`; else `undefined`. A leap second (second 60,
+ * which RFC 3339 allows) is the last millisecond of its minute, `…:59.999`: epoch time has no leap seconds.
  */
 export function instantOf(value: unknown): number | undefined {
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value.getTime();
@@ -143,12 +145,13 @@ export function instantOf(value: unknown): number | undefined {
   const [year, month, day, hour, minute, second] = [m[1], m[2], m[3], m[4], m[5], m[6] ?? "0"].map(Number) as number[];
   const offsetHours = m[8] ? Number(m[9]) : 0;
   const offsetMinutes = m[8] ? Number(m[10]) : 0;
-  if (!isRealDay(year!, month!, day!) || hour! > 23 || minute! > 59 || second! > 59 || offsetHours > 23 || offsetMinutes > 59) {
+  if (!isRealDay(year!, month!, day!) || hour! > 23 || minute! > 59 || second! > 60 || offsetHours > 23 || offsetMinutes > 59) {
     return undefined;
   }
   const date = new Date(0);
   date.setUTCFullYear(year!, month! - 1, day!); // not Date.UTC: it maps years 0-99 to 1900-1999
-  date.setUTCHours(hour!, minute!, second!, Number((m[7] ?? "").slice(0, 3).padEnd(3, "0")));
+  const ms = second === 60 ? 999 : Number((m[7] ?? "").slice(0, 3).padEnd(3, "0"));
+  date.setUTCHours(hour!, minute!, Math.min(second!, 59), ms);
   const offset = (m[8] === "-" ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
   return date.getTime() - offset;
 }

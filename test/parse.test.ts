@@ -399,6 +399,11 @@ describe("instants", () => {
     refusedAt("t = DATE(x)", 9);
   });
 
+  it("a leap second, second 60 (RFC 3339), is accepted; 61 isn't an instant", () => {
+    expect(fromText("t = TIMESTAMP('2016-12-31T23:59:60Z')")).toEqual(eq("t", { timestamp: "2016-12-31T23:59:60Z" }));
+    expect(() => fromText("t = TIMESTAMP('2016-12-31T23:59:61Z')")).toThrow(expect.objectContaining({ code: "invalid-filter" }));
+  });
+
   it("t and Z in any case (ABNF strings are case-insensitive, §8.2), read as CQL2-JSON writes them: T and Z", () => {
     expect(readText("t = TIMESTAMP('2020-01-01t00:00:00z')")).toEqual(eq("t", { timestamp: "2020-01-01T00:00:00Z" }));
     expect(readText("t = TIMESTAMP('2020-01-01t00:00:00.5Z')")).toEqual(eq("t", { timestamp: "2020-01-01T00:00:00.5Z" }));
