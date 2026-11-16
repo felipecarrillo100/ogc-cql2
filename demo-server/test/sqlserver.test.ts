@@ -118,7 +118,7 @@ describe("collections.json serves the SQL Server collections", () => {
       try {
         const answer = await read(fetch(`http://localhost:${(app.address() as AddressInfo).port}/collections`));
         const ours = answer.collections.filter((c: { id: string }) => c.id.startsWith("ms-"));
-        assert.deepEqual(ours.map((c: { id: string; featureCount: number }) => [c.id, c.featureCount]), [["ms-states", 51], ["ms-kitchen_sink", 24]], lines.join("\n"));
+        assert.deepEqual(ours.map((c: { id: string; featureCount: number }) => [c.id, c.featureCount]), [["ms-states", 51], ["ms-kitchen_sink", 24], ["ms-arrays", 13]], lines.join("\n"));
         for (const c of ours) assert.deepEqual(c.conformance, Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.spatial));
       } finally {
         app.close();

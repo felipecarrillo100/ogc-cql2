@@ -12,8 +12,8 @@
 import type { Fold } from "../../core/folds.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
 import type { MatrixRelation } from "../../core/relate.js";
-import type { BboxLiteral, Geometry, SpatialLiteral } from "../../core/types.js";
-import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import type { ArrayOperator, BboxLiteral, Geometry, SpatialLiteral } from "../../core/types.js";
+import { quote, type ArrayElements, type ArrayLiteralValue, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type PgClass = "text" | "number" | "boolean" | "date" | "timestamptz" | "timestamp" | "geometry" | "geography" | "other";
 
@@ -76,11 +76,24 @@ function pgText(sql: string, cls: PgClass): string | undefined {
 /**
  * The SQL expression to SELECT for a column, so that the application serves exactly the values the `postgres`
  * dialect compares: dates as `YYYY-MM-DD`, instants as UTC `YYYY-MM-DDTHH:MM:SS.sssZ`, timestamps without a time zone
- * the same without `Z`, numbers as double precision. Text and booleans as they are. `undefined` for a column type the
- * dialect can't compare (json, uuid, arrays…), which an application shouldn't serve as a queryable.
+ * the same without `Z`, numbers as double precision. Text and booleans as they are. An array column (Array Functions,
+ * since 1.6.0) as a JSON array (`jsonb`), each element served by the same rules; a multi-dimensional array, which is
+ * no CQL2 array of values, as its text; a `jsonb` / `json` column with `items` as it is. `undefined` for a column type
+ * the dialect can't compare (json without `items`, uuid…), which an application shouldn't serve as a queryable.
  */
 export function postgresValue(sqlColumn: string, column: SqlColumn): string | undefined {
-  const sql = quote(sqlColumn);
+  return valueOf(quote(sqlColumn), column);
+}
+
+function valueOf(sql: string, column: SqlColumn): string | undefined {
+  const array = arrayColumn(column);
+  if (array) {
+    if ("json" in array) return sql;
+    const element = valueOf("cql2_e.v", array.native);
+    if (element === undefined) return undefined;
+    return `(CASE WHEN ${sql} IS NULL THEN NULL WHEN array_ndims(${sql}) > 1 THEN to_jsonb(${sql}::text) ` +
+      `ELSE COALESCE((SELECT jsonb_agg(${element} ORDER BY cql2_e.o) FROM unnest(${sql}) WITH ORDINALITY AS cql2_e(v, o)), '[]'::jsonb) END)`;
+  }
   const cls = pgClass(column);
   if (cls === "text" || cls === "boolean") return sql;
   if (cls === "number") return `${sql}::double precision`;
@@ -136,6 +149,12 @@ export function likePattern(pattern: string): string {
  * - `cql2_arithmetic(op, a, b)` (since 1.2.0): `a op b` of two doubles, exactly as `evaluate` computes it, never an
  *   error: PostgreSQL's own errors (division by zero, a power outside its domain, overflow) are NULL, as `evaluate`'s
  *   non-finite results are, and underflow is the 0 it rounds to.
+ * - since 1.6.0, for Array Functions: `cql2_text_array(anyarray)`, `cql2_number_array`, `cql2_boolean_array`,
+ *   `cql2_date_array`, `cql2_instant_array`: a native array's elements as the dialect compares them (text in NFC,
+ *   numbers as doubles, instants in UTC to the millisecond), NULL elements left out, NULL for a multi-dimensional
+ *   array. IMMUTABLE: a GIN index on one (`CREATE INDEX … USING gin (cql2_text_array(tags))`) serves the array
+ *   functions on that column. And `cql2_json_double(jsonb)`: a JSON number as a double, NULL beyond a double's range
+ *   (as JavaScript reads it: Infinity, which equals no literal).
  */
 export function postgresFunctions(schema: string): string {
   const s = quote(schema);
@@ -209,6 +228,42 @@ EXCEPTION
       WHEN op = '^' AND (abs(a) < 1) = (b > 0) THEN 0
     END;
 END
+$f$;
+
+CREATE OR REPLACE FUNCTION ${s}.cql2_text_array(a anyarray) RETURNS text[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN coalesce(array_ndims(a), 1) = 1 THEN ARRAY(SELECT normalize(x::text, NFC) FROM unnest(a) AS x WHERE x IS NOT NULL) END
+$f$;
+
+CREATE OR REPLACE FUNCTION ${s}.cql2_number_array(a anyarray) RETURNS double precision[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN coalesce(array_ndims(a), 1) = 1 THEN ARRAY(SELECT x::double precision FROM unnest(a) AS x WHERE x IS NOT NULL) END
+$f$;
+
+CREATE OR REPLACE FUNCTION ${s}.cql2_boolean_array(a anyarray) RETURNS boolean[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN coalesce(array_ndims(a), 1) = 1 THEN ARRAY(SELECT x::boolean FROM unnest(a) AS x WHERE x IS NOT NULL) END
+$f$;
+
+CREATE OR REPLACE FUNCTION ${s}.cql2_date_array(a anyarray) RETURNS date[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN coalesce(array_ndims(a), 1) = 1 THEN ARRAY(SELECT x::date FROM unnest(a) AS x WHERE x IS NOT NULL) END
+$f$;
+
+-- UTC wall-clock time to the millisecond: date_trunc of a timestamp doesn't depend on the session's TimeZone.
+CREATE OR REPLACE FUNCTION ${s}.cql2_instant_array(a anyarray) RETURNS timestamp[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN coalesce(array_ndims(a), 1) = 1
+    THEN ARRAY(SELECT date_trunc('milliseconds', x::timestamptz AT TIME ZONE 'UTC') FROM unnest(a) AS x WHERE x IS NOT NULL) END
+$f$;
+
+-- A JSON number as JavaScript reads it: beyond a double's range Infinity (NULL here: it equals no literal), below
+-- its smallest subnormal 0. PostgreSQL's own cast would fail the query for both.
+CREATE OR REPLACE FUNCTION ${s}.cql2_json_double(j jsonb) RETURNS double precision
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $f$
+  SELECT CASE WHEN jsonb_typeof(j) = 'number' THEN (
+    SELECT CASE WHEN abs(n) >= ${DOUBLE_OVERFLOW} THEN NULL WHEN abs(n) <= ${DOUBLE_UNDERFLOW} THEN 0 ELSE n::double precision END
+    FROM (SELECT (j #>> '{}')::numeric AS n) AS cql2_n) END
 $f$;
 
 CREATE OR REPLACE FUNCTION ${s}.cql2_instant(t text) RETURNS timestamptz
@@ -342,6 +397,98 @@ function postgresPair(relation: "s_intersects" | MatrixRelation, a: PairSide, b:
   return relation === "s_equals" ? `(ST_Equals(${ga}, ${gb}) AND NOT (ST_IsEmpty(${ga}) AND ST_IsEmpty(${gb})))` : relationSql(relation, ga, gb);
 }
 
+// --- Array Functions -----------------------------------------------------------------------------------------------
+
+/** 2^1024 − 2^970, exactly: a decimal at least this large rounds to Infinity as a double. */
+const DOUBLE_OVERFLOW = (2n ** 1024n - 2n ** 970n).toString();
+/** 2^−1075, exactly: a decimal no larger than this rounds to 0 as a double. */
+const DOUBLE_UNDERFLOW = `0.${(5n ** 1075n).toString().padStart(1075, "0")}`;
+
+/** An array column: native (the declared type of its elements) or JSON (`jsonb` / `json` declared with `items`). */
+type ArrayColumn = { readonly native: SqlColumn } | { readonly json: string };
+type ArrayKind = Exclude<Kind, "fold">;
+
+/** What a column holds as arrays; `undefined` for a column that holds none. */
+function arrayColumn(column: SqlColumn): ArrayColumn | undefined {
+  if (column.sqlType === undefined) return undefined;
+  const t = bareType(column.sqlType);
+  if (t.endsWith("[]")) return { native: { sqlType: column.sqlType.replace(/(\s*\[\s*\])+\s*$/, "") } };
+  if ((t === "jsonb" || t === "json") && column.items !== undefined) return { json: t === "json" ? "::jsonb" : "" };
+  return undefined;
+}
+
+/** One element `x` (of `cql2_e(v)` or `cql2_f(v)`) read as `kind`, as `evaluate` reads a served element; `undefined`: none can be. */
+function elementView(array: ArrayColumn, x: string, kind: ArrayKind, fn: (name: string) => string): View | undefined {
+  if ("native" in array) return postgresView(x, kind, array.native, fn, []);
+  const text = `(CASE WHEN jsonb_typeof(${x}) = 'string' THEN ${x} #>> '{}' END)`;
+  switch (kind) {
+    case "text":
+      return { sql: `normalize(${text}, NFC) COLLATE "C"`, cast: "" };
+    case "number":
+      return { sql: `${fn("cql2_json_double")}(${x})`, cast: "::double precision" };
+    case "boolean":
+      return { sql: `(CASE WHEN jsonb_typeof(${x}) = 'boolean' THEN (${x} #>> '{}')::boolean END)`, cast: "::boolean" };
+    case "day":
+      return { sql: `${fn("cql2_day")}(${text}) COLLATE "C"`, cast: "" };
+    case "instant":
+      return { sql: `${fn("cql2_instant")}(${text})`, cast: "::timestamptz" };
+  }
+}
+
+/**
+ * An array column's elements, for the walker's element-by-element SQL: `unnest` of a native array (a NULL element is
+ * no value), `jsonb_array_elements` of a JSON array (JSON null is no value); NULL unless the value is a one-dimensional
+ * array (a matrix is no CQL2 array; an empty array has no dimension) or a JSON array.
+ */
+function postgresElements(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined {
+  const array = arrayColumn(column);
+  if (array === undefined) return undefined;
+  return "native" in array
+    ? {
+        some: (name, condition) => `EXISTS (SELECT 1 FROM unnest(${sql}) AS ${name}(v) WHERE ${condition(`${name}.v`)})`,
+        isArray: `(${sql} IS NOT NULL AND coalesce(array_ndims(${sql}), 1) = 1)`,
+        present: (x) => `${x} IS NOT NULL`,
+        view: (x, kind) => elementView(array, x, kind, fn),
+      }
+    : {
+        some: (name, condition) => `EXISTS (SELECT 1 FROM jsonb_array_elements(${sql}${array.json}) AS ${name}(v) WHERE ${condition(`${name}.v`)})`,
+        isArray: `jsonb_typeof(${sql}${array.json}) = 'array'`,
+        present: (x) => `jsonb_typeof(${x}) <> 'null'`,
+        view: (x, kind) => elementView(array, x, kind, fn),
+      };
+}
+
+/** A native array's own kind of element, the function that gives its elements as compared, and their type. */
+const NATURAL: Readonly<Partial<Record<PgClass, { readonly kind: ArrayKind; readonly fn: string; readonly type: string; readonly value?: (v: SqlValue) => SqlValue }>>> = {
+  text: { kind: "text", fn: "cql2_text_array", type: "text" },
+  number: { kind: "number", fn: "cql2_number_array", type: "double precision" },
+  boolean: { kind: "boolean", fn: "cql2_boolean_array", type: "boolean" },
+  date: { kind: "day", fn: "cql2_date_array", type: "date" },
+  // An instant as UTC wall-clock time, as cql2_instant_array gives the elements: the ISO text without its Z.
+  timestamptz: { kind: "instant", fn: "cql2_instant_array", type: "timestamp", value: (v) => String(v).replace(/Z$/, "") },
+};
+
+/**
+ * A native array against literals all of its own kind: PostgreSQL's array operators (`@>`, `<@`, `&&`, both for
+ * A_EQUALS) on a `cql2_*_array` function of the column, exact on their own (sets, NULL elements left out, NULL for a
+ * NULL or multi-dimensional array), and served by a GIN index on that function. `undefined` otherwise: the walker's
+ * element-by-element SQL.
+ */
+function postgresOwnKind(op: ArrayOperator, sql: string, column: SqlColumn, literals: readonly ArrayLiteralValue[], param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined {
+  const array = arrayColumn(column);
+  const natural = array && "native" in array ? NATURAL[pgClass(array.native)] : undefined;
+  if (!natural || !literals.every((l) => l.kind === natural.kind)) return undefined;
+  const p = `${fn(natural.fn)}(${sql})`;
+  const set = () => (literals.length === 0 ? `'{}'::${natural.type}[]`
+    : `ARRAY[${literals.map((l) => param(natural.value ? natural.value(l.value) : l.value)).join(", ")}]::${natural.type}[]`);
+  switch (op) {
+    case "a_contains": return `${p} @> ${set()}`;
+    case "a_containedBy": return `${p} <@ ${set()}`;
+    case "a_overlaps": return `${p} && ${set()}`;
+    case "a_equals": return `(${p} @> ${set()} AND ${p} <@ ${set()})`;
+  }
+}
+
 export const postgres: Dialect = {
   placeholder: (n) => `$${n}`,
   number: (value, param) => `${param(value)}::double precision`,
@@ -356,4 +503,6 @@ export const postgres: Dialect = {
   intersects: postgresIntersects,
   relate: postgresRelate,
   spatialPair: postgresPair,
+  arrayElements: postgresElements,
+  arraysOwnKind: postgresOwnKind,
 };

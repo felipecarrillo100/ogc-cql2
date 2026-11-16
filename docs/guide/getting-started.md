@@ -52,10 +52,11 @@ The package implements these:
 | Accent-insensitive Comparison | `accenti` | ✅ | ✅ | ✅ |
 | Basic Spatial Functions | `s_intersects` with a point or a bbox | ✅ | ✅ | ✅ |
 | Basic Spatial Functions with additional Spatial Literals | `s_intersects` with any geometry | ✅ | ✅ | ✅ |
-| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB; SQLite with SpatiaLite |
+| Spatial Functions | `s_intersects` `s_equals` `s_disjoint` `s_touches` `s_within` `s_overlaps` `s_crosses` `s_contains` | ✅ | ✅ with an engine plugged in | ✅ PostgreSQL, DuckDB, Oracle; SQLite with SpatiaLite |
 | Property-Property Comparisons | a property or a literal on either side: comparisons, `like` (a string on the left), `between`, `in`, the spatial functions | ✅ | ✅ | ✅ |
 | Arithmetic Expressions | `+` `-` `*` `/` `%` `div` `^` wherever a number goes | ✅ | ✅ | ✅ |
 | Temporal Functions | `t_after` `t_before` `t_disjoint` `t_equals` `t_intersects` `t_contains` `t_during` `t_finishedBy` `t_finishes` `t_meets` `t_metBy` `t_overlappedBy` `t_overlaps` `t_startedBy` `t_starts`, `{ "interval" }` literals | ✅ | ✅ | ✅ |
+| Array Functions | `a_equals` `a_contains` `a_containedBy` `a_overlaps`, array literals | ✅ | ✅ | ✅ |
 
 `CONFORMANCE` (from `ogc-cql2`) holds their URIs, as servers declare them, and grows as classes are implemented;
 `CQL2_CONFORMANCE` holds all twelve of the standard's filter classes. In code, ask the engines rather than copying
@@ -75,8 +76,10 @@ options (see [Filtering in memory](filtering-in-memory.md#the-classes-evaluate-s
   [Comparing two properties, and arithmetic](property-property-and-arithmetic.md).
 - **With Temporal Functions,** instants and intervals relate
   (`T_DURING(INTERVAL(start, end), INTERVAL('2023-01-01', '2023-12-31'))`). See [Temporal filters](temporal.md).
-- **Anything else that is valid CQL2** (array functions, custom functions) is refused as `outside-profile`, with the
-  conformance class it would need. More classes will follow.
+- **With Array Functions,** a property holding an array is compared with a set of values
+  (`A_CONTAINS(tags, ('a', 'b'))`), as sets. See [Array filters](arrays.md).
+- **Anything else that is valid CQL2** (custom functions) is refused as `outside-profile`, with the conformance class
+  it would need.
 
 ## LIKE patterns
 

@@ -83,3 +83,19 @@ const { rows } = await connection.execute(`SELECT ${select} FROM places WHERE ${
   on what Oracle serves, every spatial relation with GEOS (demo-server's tests, against Oracle Free 23ai; not in CI).
 - **The classes:** every class the package implements (`sqlConformance({ dialect: "oracle" })`); the spatial ones
   need Oracle Spatial, and all need `oracleFunctions` installed.
+
+## Array Functions
+
+- **JSON holds arrays:** the `JSON` type, or JSON text in VARCHAR2 or CLOB. Declare the column with `items`:
+  `{ sqlType: "JSON", items: { type: "string" } }`.
+- **The SQL reads each element as a row of `JSON_TABLE`,** and compares it only with literals of its own JSON type.
+  Text is an array only when it `IS JSON STRICT`: Oracle's default, lax JSON, also reads `['a']` or `[1,]`, which
+  `JSON.parse` refuses. Text is read through `JSON(…)`, so numbers keep a double's range.
+- **`""` is NULL in Oracle,** so an empty string element is told apart by its length, and still matches `""`.
+- **`oracleValue`** serves an array column as it is: the `JSON` type as the driver gives it, and text for the
+  application to `JSON.parse`.
+- **One limit:** a lone surrogate (`"\ud800"`, which isn't Unicode text) is stored as the same bytes in text and in
+  the `JSON` type, but served differently. Compared between a text column and a `JSON` column, it can be decided
+  otherwise than on the served values. No index serves these filters.
+
+More on arrays: [Array filters](arrays.md).

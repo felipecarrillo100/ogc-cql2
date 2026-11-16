@@ -357,6 +357,65 @@ describe("the SQL it builds", () => {
     expect(duckdbValue("n", { sqlType: "HUGEINT" })).toBe(`CAST("n" AS DOUBLE)`);
     expect(duckdbValue("d", { sqlType: "DATE" })).toBe(`strftime("d", '%Y-%m-%d')`);
     expect(duckdbValue("g", { sqlType: "GEOMETRY" })).toBeUndefined();
-    expect(duckdbValue("l", { sqlType: "VARCHAR[]" })).toBeUndefined();
+    expect(duckdbValue("l", { sqlType: "STRUCT(a INTEGER)[]" })).toBeUndefined(); // a list of what it can't compare
+  });
+});
+
+describe("Array Functions in the duckdb dialect (since 1.6.0): the SQL", () => {
+  const LISTS: Record<string, SqlColumn> = {
+    tags: { sqlType: "VARCHAR[]" },
+    ratios: { sqlType: "DOUBLE[]" },
+    flags: { sqlType: "BOOLEAN[]" },
+    days: { sqlType: "DATE[]" },
+    moments: { sqlType: "TIMESTAMP WITH TIME ZONE[]" },
+    pair: { sqlType: "VARCHAR[2]" },
+    nested: { sqlType: "VARCHAR[][]" },
+  };
+  const a = (op: string, x: unknown, y: unknown) => toSql({ op, args: [x, y] } as Cql2Filter, { dialect: "duckdb", columns: LISTS });
+
+  it("a list against literals of its own kind: list_has_all / list_has_any, the literals cast to its type, text in binary collation", () => {
+    expect(a("a_contains", p("tags"), ["a", "é"])).toEqual({
+      where: `list_has_all(list_filter(list_transform("tags", lambda cql2_e: nfc_normalize(cql2_e) COLLATE "binary"), lambda cql2_e: cql2_e IS NOT NULL), ` +
+        `list_transform(list_value($1::VARCHAR, $2::VARCHAR), lambda cql2_e: cql2_e COLLATE "binary"))`,
+      params: ["a", "é"],
+    });
+    expect(a("a_overlaps", p("ratios"), [2.5]).where).toContain(`list_has_any(list_filter(list_transform("ratios", lambda cql2_e: CAST(cql2_e AS DOUBLE)), `);
+    expect(a("a_overlaps", p("ratios"), [2.5]).params).toEqual(["2.5"]); // numbers as text, as the dialect binds them
+    expect(a("a_containedBy", p("days"), []).where).toBe(
+      `list_has_all(CAST([] AS DATE[]), list_filter(list_transform("days", lambda cql2_e: cql2_e), lambda cql2_e: cql2_e IS NOT NULL))`,
+    );
+    expect(a("a_contains", p("pair"), ["a"]).where).toContain(`list_transform(CAST("pair" AS VARCHAR[]), `); // a fixed-size ARRAY as a list
+  });
+
+  it("instants, mixed kinds: one list_filter lambda per test, never a subquery (node-api 1.4 deadlocks on its JavaScript functions there)", () => {
+    expect(a("a_overlaps", p("moments"), [{ timestamp: "2010-02-10T05:30:00.123Z" }])).toEqual({
+      where: `(CASE WHEN "moments" IS NOT NULL THEN len(list_filter("moments", lambda cql2_e: (floor(epoch_us(cql2_e) / 1000) = $1::DOUBLE) IS TRUE)) > 0 END)`,
+      params: ["1265779800123"],
+    });
+    const { where } = a("a_containedBy", p("tags"), ["a", { date: "2010-02-10" }]);
+    expect(where).not.toContain("SELECT");
+    expect(where).toContain("NOT len(list_filter(\"tags\", lambda cql2_e: cql2_e IS NOT NULL AND NOT (");
+  });
+
+  it("what can't be in the list is decided when the SQL is built; a list of lists holds no scalar", () => {
+    expect(a("a_contains", p("flags"), [true, 1]).where).toBe(`(CASE WHEN "flags" IS NOT NULL THEN FALSE END)`);
+    expect(a("a_contains", p("nested"), ["a"]).where).toBe(`(CASE WHEN "nested" IS NOT NULL THEN FALSE END)`);
+  });
+
+  it("two list columns: their keys in the one view they share, with no lambda in a lambda", () => {
+    const { where } = a("a_overlaps", p("tags"), p("days"));
+    expect(where).toBe(
+      `(CASE WHEN "tags" IS NOT NULL AND "days" IS NOT NULL THEN list_has_any(list_transform(list_filter("tags", lambda cql2_e: cql2_e IS NOT NULL), ` +
+        `lambda cql2_e: nfc_normalize(cql2_e) COLLATE "binary"), list_transform(list_filter("days", lambda cql2_e: cql2_e IS NOT NULL), ` +
+        `lambda cql2_e: strftime(cql2_e, '%Y-%m-%d') COLLATE "binary")) END)`,
+    );
+    expect(a("a_overlaps", p("ratios"), p("flags")).where).toBe(`(CASE WHEN "ratios" IS NOT NULL AND "flags" IS NOT NULL THEN FALSE END)`);
+  });
+
+  it("duckdbValue serves a list as a list, element by element, a list of lists alike", () => {
+    expect(duckdbValue("tags", LISTS.tags!)).toBe(`list_transform("tags", lambda cql2_e: cql2_e)`);
+    expect(duckdbValue("nested", LISTS.nested!)).toBe(`list_transform("nested", lambda cql2_e: list_transform(cql2_e, lambda cql2_e1: cql2_e1))`);
+    expect(duckdbValue("moments", LISTS.moments!)).toContain(`list_transform("moments", lambda cql2_e: COALESCE(strftime(`);
+    expect(duckdbValue("blobs", { sqlType: "BLOB[]" })).toBeUndefined();
   });
 });

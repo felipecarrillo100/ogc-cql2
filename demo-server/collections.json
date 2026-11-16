@@ -4,7 +4,19 @@
     { "id": "kitchen_sink", "title": "Kitchen sink", "source": "geojson", "file": "data/kitchen_sink.geojson" },
     { "id": "parquet-states", "title": "US states", "source": "geoparquet", "file": "data/states.parquet" },
     { "id": "parquet-kitchen_sink", "title": "Kitchen sink", "source": "geoparquet", "file": "data/kitchen_sink.parquet" },
+    { "id": "parquet-arrays", "title": "Arrays", "source": "geoparquet", "file": "data/arrays.parquet" },
     { "source": "geopackage", "file": "data/usa.gpkg", "prefix": "gpkg-" },
+    {
+      "source": "geopackage",
+      "file": "data/arrays.gpkg",
+      "prefix": "gpkg-",
+      "arrays": {
+        "arrays": {
+          "tags": { "type": "string" }, "codes": { "type": "string" }, "ratios": { "type": "number" }, "counts": { "type": "integer" },
+          "flags": { "type": "boolean" }, "days": { "type": "string", "format": "date" }, "moments": { "type": "string", "format": "date-time" }, "doc": {}
+        }
+      }
+    },
     {
       "source": "postgres",
       "prefix": "pg-",
@@ -13,10 +25,33 @@
         { "table": "cql2demo.states", "title": "US states" },
         { "table": "cql2demo.sub_regions", "title": "Census sub-regions" },
         { "table": "cql2demo.kitchen_sink", "title": "Kitchen sink" },
-        { "table": "cql2demo.kitchen_sink_3857", "title": "Kitchen sink (Web Mercator)" }
+        { "table": "cql2demo.kitchen_sink_3857", "title": "Kitchen sink (Web Mercator)" },
+        { "table": "cql2demo.arrays", "title": "Arrays", "arrays": { "doc": {}, "raw": {} } }
       ]
     },
-    { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "STATES", "title": "US states" }, { "table": "KITCHEN_SINK", "title": "Kitchen sink", "days": ["day"] }] },
-    { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states", "title": "US states" }, { "table": "dbo.kitchen_sink", "title": "Kitchen sink" }] }
+    { "source": "oracle", "prefix": "ora-", "tables": [{ "table": "STATES", "title": "US states" }, { "table": "KITCHEN_SINK", "title": "Kitchen sink", "days": ["day"] },
+      {
+        "table": "ARRAYS",
+        "title": "Arrays",
+        "arrays": {
+          "tags": { "type": "string" }, "codes": { "type": "string" }, "ratios": { "type": "number" }, "counts": { "type": "integer" },
+          "flags": { "type": "boolean" }, "days": { "type": "string", "format": "date" }, "moments": { "type": "string", "format": "date-time" }, "doc": {},
+          "tags_json": { "type": "string" }, "codes_json": { "type": "string" }, "ratios_json": { "type": "number" }, "counts_json": { "type": "integer" },
+          "flags_json": { "type": "boolean" }, "days_json": { "type": "string", "format": "date" }, "moments_json": { "type": "string", "format": "date-time" },
+          "doc_json": {}, "doc_clob": {}
+        }
+      }] },
+    { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states", "title": "US states" }, { "table": "dbo.kitchen_sink", "title": "Kitchen sink" },
+      {
+        "table": "dbo.arrays",
+        "title": "Arrays",
+        "arrays": {
+          "tags": { "type": "string" }, "codes": { "type": "string" }, "ratios": { "type": "number" }, "counts": { "type": "integer" },
+          "flags": { "type": "boolean" }, "days": { "type": "string", "format": "date" }, "moments": { "type": "string", "format": "date-time" }, "doc": {},
+          "tags_json": { "type": "string" }, "codes_json": { "type": "string" }, "ratios_json": { "type": "number" }, "counts_json": { "type": "integer" },
+          "flags_json": { "type": "boolean" }, "days_json": { "type": "string", "format": "date" }, "moments_json": { "type": "string", "format": "date-time" },
+          "doc_json": {}, "doc_utf8": {}
+        }
+      }] }
   ]
 }

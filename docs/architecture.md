@@ -46,6 +46,16 @@ of zero length, `'..'` is the only open end; an instant in a relation of interva
 says; dates and timestamps are never converted (an interval mixing them is refused); NULL for a NULL end or an
 interval beginning after it ends. A literal first, or a property second, also needs Property-Property Comparisons.
 
+Since 1.6.0, Array Functions: A_EQUALS, A_CONTAINS, A_CONTAINEDBY and A_OVERLAPS, on sets (Requirement 16 B). Where
+the standard is silent, the package decides as for the other classes:
+- a NULL or missing value, or one that isn't an array, gives NULL;
+- a NULL element is left out;
+- elements compare as `=` does, never converted;
+- a filter's elements are strings, numbers, booleans, dates and timestamps.
+
+A literal first is the converse function; it, two properties or two literals also need Property-Property
+Comparisons. The evidence and the decisions are in [array-research.md](array-research.md).
+
 Since 1.1.0, Property-Property Comparisons too: a property or a literal on either side of a comparison, as the bounds
 of `between`, among the items of `in`, on the left of `like` (whose pattern stays a literal), and in either place of a
 spatial function. A literal on the left is the property on the left, the operator mirrored, and a literal first in a
@@ -97,6 +107,10 @@ characters a string can hold).
   (west greater than east is a box across the antimeridian), 2 or 3 numbers per position. A geometry's own GeoJSON
   `bbox` member is refused, as the schema refuses it (`oneOf` geometry or bbox literal). The class named follows the
   standard: S_INTERSECTS with a point or a box is Basic, with another geometry Basic plus, another relation Full.
+- **Array functions** (since 1.6.0): an operand is a property or an array of scalar literals. A nested array, a
+  property, a function, arithmetic, an interval, a geometry or CASEI / ACCENTI inside an array is `outside-profile`; a
+  `null` element is `wrong-arguments`. With queryables, the property must be an array (`type: "array"`), and its
+  `items` type the literal elements (`type-mismatch`).
 - **Every problem** is reported, each with a code, a JSON Pointer and a message.
 - **The official schema is used in the tests:** every filter the tests treat as valid must pass it, and every
   structurally broken one must fail it.
@@ -198,6 +212,10 @@ as it is in CQL2-JSON: `invalid-filter`, naming the class. Text that isn't CQL2-
   geometries (the matrix `FFFFFFFF2`) from the engine, and an engine's error gives NULL. GEOS in WebAssembly (geos.js)
   is the engine recommended and tested; JSTS and turf were measured and not recommended (JSTS fails on collections,
   turf gives wrong answers). See [spatial-research.md](spatial-research.md).
+- **Array functions** (since 1.6.0): a set of the literal elements, each by its kind's key (the same keys as `=`:
+  NFC text, numbers, booleans, days, instants in milliseconds), against the value's elements read the same way. An
+  element of no scalar kind keys to nothing, and still counts against A_CONTAINEDBY. Two array properties compare as
+  their queryables' `items` say, else by each element's own kind.
 - **Compiled once:** `toPredicate` and `toEvaluator` validate the filter and prepare its patterns and literals, so
   each feature costs only the comparisons.
 
@@ -223,6 +241,16 @@ selects exactly the rows `evaluate` selects from the same values.
   has no boolean values (`truth`: SQL Server, where a condition used as a value is written as 1 / 0 / NULL), and the
   default schema of its functions (`functionSchema`: SQL Server calls them by two-part name). The spatial hooks receive
   the function namer too.
+- **Array Functions (since 1.6.0)** have one walker and two kinds of hook:
+  - **Element by element:** a dialect gives `arrayElements` for a column: "some element satisfies" (an `EXISTS` over
+    `unnest`, `JSON_TABLE` or `OPENJSON`, or a DuckDB lambda), "the value is an array", "the element is present",
+    each kind's view of an element, and optionally "the element is `""`" (Oracle, where `''` is NULL). The walker writes
+    the four functions from these, every match `IS TRUE` so that no NULL lets a `NOT EXISTS` keep a row, inside
+    `CASE WHEN <an array>`. In T-SQL, which has no boolean values (`truth`), it writes the 1 / 0 forms instead.
+  - **Faster shapes:** `arraysOwnKind` (a native array against literals of its own kind: PostgreSQL's operators, DuckDB's
+    `list_has_all`) and `arraysPair` (two columns).
+  - **Whole:** `arrayFunction` writes the function in one call, as SQLite's `cql2_array` does.
+  A column holds arrays by its native type or, for JSON, by `SqlColumn.items`.
 
 The `sqlite` dialect follows **GeoPackage** (OGC 12-128r19, version 1.4): its declared types (Table 1, Req 5), its
 BOOLEAN as INTEGER 0 / 1, DATE as `YYYY-MM-DD`, DATETIME as `YYYY-MM-DDTHH:MM[:SS.SSS]Z`, and its note that readers
@@ -242,6 +270,7 @@ SHOULD allow for values of an unexpected type, which SQLite permits in any colum
 | `like` | `cql2_like(view, pattern)`: case-sensitive, `%` `_` `\` |
 | the other relations (since 0.10.0, `spatialite: true`) | `COALESCE(NULLIF(ST_<Rel>(GeomFromGPB(c), L), -1), CASE length(cql2_wkt(c)) WHEN 0 THEN 0 ELSE NULLIF(ST_<Rel>(GeomFromText(cql2_wkt(c), 4326), L), -1) END)`, `L` = `GeomFromText(?, 4326)` (WKT from `src/core/wkt.ts`; SpatiaLite's GeoJSON reader drops collections). SpatiaLite reads GeoPackage blobs itself (13× faster than through JavaScript on a million rows); `cql2_wkt`, the package's reader, takes what it can't (WKB, extended WKB, empty collections), an empty geometry FALSE (SpatiaLite can't represent one); its −1 ("can't compute") is NULL. The R-tree first, outside a NOT. `s_disjoint`: `NOT (s_intersects)` |
 | `s_intersects` (since 0.9.0) | `cql2_intersects(c, $json) = 1` on a geometry column (`format: "geometry-…"`): a GeoPackage blob or WKB decoded (`src/sql/wkb.ts`) and tested by `evaluate`'s engine, after the header envelope's quick reject. With `rtree` (GeoPackage's R-tree table) and only outside a NOT: `rowid IN (SELECT id FROM rtree WHERE <boxes overlap>) AND …` first |
+| `a_equals` `a_contains` `a_containedBy` `a_overlaps` (since 1.6.0) | `cql2_array('a_contains', c, ?, ?) = 1` on a column with `items` (JSON text, as GDAL writes list fields): `evaluate`'s own code on the value as `JSON.parse` reads it, the literal and `items` bound as JSON; two columns, `cql2_array_pair`. SQLite's `json_each` isn't used: it errors on malformed JSON and reads integers beyond 2^53, lone surrogates and `\u0000` otherwise than `JSON.parse` |
 
 The `cql2_*` functions are `sqliteFunctions`, which the application registers on its connection. They run the same
 code as `evaluate` (`src/evaluate/strings.ts`). SQLite's own LIKE ignores ASCII case (its `case_sensitive_like`
@@ -268,6 +297,7 @@ is `NULL::boolean` when the SQL is built, and `SqlColumn.sqlType` (the declared 
 | `like` | native `LIKE` (case-sensitive, `\` escape) on the NFC text; a lone trailing `\` becomes a literal one |
 | `s_intersects` (PostGIS, since 0.8.0; this form since 0.9.1) | `geom && literal AND NOT ST_Relate(geom, literal, 'FF*FF****')`, the literal as `ST_SetSRID(ST_GeomFromGeoJSON($n), 4326)` or `ST_MakeEnvelope(…)` (across the antimeridian two, joined with OR: PostgreSQL's BitmapOr keeps the index; one multipolygon spanning the world is 4–5× slower); a GeometryCollection literal member by member (GEOS 3.11's `ST_Relate` refuses collections). `&&` uses the GiST index, DE-9IM's "disjoint" pattern decides from GEOS's full matrix. Neither `ST_Intersects` nor `ST_Disjoint`: PostGIS answers them for a point and a polygon with its own point-in-polygon test, whose side test arm64 compilers turn into a fused multiply-add, so it misses points exactly on an edge (`ST_Intersects` always on arm64, `ST_Disjoint` from PostGIS 3.7). Measured on PostGIS 3.1–3.7 (GEOS 3.9–3.15), amd64 and arm64: 0 of 5,805 literals differ from `evaluate`; the 0.8.0 form, on 3.7.0 arm64, 99. As fast as `ST_Intersects` with the index (under 0.1 ms for a small box, about 22 ms for a 40-vertex polygon on a million rows), 10–25% slower on a quarter of the world. Another SRID: the column transformed to 4326, fast with an expression index on `ST_Transform(geom, 4326)`; geography as `::geometry`, fast with one on `(geog::geometry)` (both measured: a full scan without) |
 | the other relations (PostGIS, since 0.10.0) | `ST_Equals(g, L)`; `g && L AND ST_Touches / ST_Overlaps / ST_Crosses(g, L)`; `g @ L AND ST_Relate(g, L, 'T*F**F***')` (S_WITHIN) and `g ~ L AND ST_Relate(g, L, 'T*****FF*')` (S_CONTAINS): `ST_Within` and `ST_Contains` take the point-in-polygon shortcut (plain `ST_Contains` measured wrong for 26 of 1,527 literals on every arm64 server). A box across the antimeridian `ST_Collect` of the halves. `s_disjoint`: `NOT (s_intersects)`, which no index speeds up. Measured on PostGIS 3.1–3.7, amd64 and arm64: 0 differences from `evaluate` with GEOS |
+| the array functions (since 1.6.0) | a native array against literals of its own kind: `cql2_text_array(c) @> ARRAY[$1, …]::text[]` (`<@`, `&&`; both for A_EQUALS), the `cql2_*_array` functions IMMUTABLE, so a GIN index on one serves them; otherwise element by element over `unnest` / `jsonb_array_elements` (`jsonb` and `json` with `items`), each match `IS TRUE`, inside `CASE WHEN <an array>` |
 
 `postgresFunctions(schema)` is the SQL creating `cql2_casefold` (the package's case-folding table), `cql2_casei`,
 `cql2_day` and `cql2_instant`. PostgreSQL's `lower()` isn't Unicode case folding, and `casefold()` only came with
@@ -297,6 +327,7 @@ PostgreSQL: `SqlColumn.sqlType` is the type `DESCRIBE` gives.
 | `like` | native `LIKE … ESCAPE '\'` (case-sensitive, `_` one code point) on the NFC text; a lone trailing `\` becomes a literal one |
 | `s_intersects` (since 0.9.0, the spatial extension) | `ST_Intersects(g, L)`, as DuckDB documents it, on a `GEOMETRY` column or on `TRY(ST_GeomFromWKB(c))` for a `BLOB` of WKB; `L` = `ST_GeomFromGeoJSON($n)` or `ST_MakeEnvelope(…)`, across the antimeridian `ST_Union` of the two halves (one literal, so an R-tree index still applies). With `SqlColumn.covering` (GeoParquet's bbox covering), outside a NOT: its four fields compared first, the box rounded outward to 32-bit floats |
 | the other relations (since 0.10.0) | `ST_Equals`, `ST_Touches`, `ST_Within`, `ST_Overlaps`, `ST_Crosses`, `ST_Contains` (g, L): exact on DuckDB 1.4.3, 1.5.4 and 2.0 and in DuckDB-WASM 1.32.0 and 1.33.1 (no `ST_Relate` there), each using the R-tree; the covering's overlap comparisons first, outside a NOT; `s_disjoint`: `NOT (s_intersects)` |
+| the array functions (since 1.6.0) | lists: `list_has_all` / `list_has_any` of the list's view (`list_filter(list_transform(c, lambda cql2_e: …), lambda cql2_e: cql2_e IS NOT NULL)`) and the literals'; other kinds element by element with `len(list_filter(c, lambda cql2_e: …)) > 0`. One lambda level only, never a correlated `unnest`: node-api 1.4 deadlocks on a registered function in either |
 
 `duckdbFunctions` are plain JavaScript functions with their DuckDB types, registered on the connection by the
 application (`registerScalarFunction` in Node, `createScalarFunction` in DuckDB-WASM's blocking build, run in a Web
@@ -396,6 +427,7 @@ The `oracle` dialect (since 1.5.0), for Oracle Database 23ai and later (it needs
 | `{timestamp}` | a TIMESTAMP WITH (LOCAL) TIME ZONE as UTC text truncated to milliseconds (Oracle's date arithmetic is Julian before 1582; the text orders right in both calendars); text through `cql2_instant` |
 | arithmetic | `+ - * / div` in BINARY_DOUBLE, a NaN or infinite result NULL; `%` and `^` through `cql2_arithmetic` (written inline, they would repeat their operands, and Oracle binds each placeholder it reads) |
 | the spatial relations | `cql2_relate(rel, column, literal) = 1`: one `SDO_GEOM.RELATE(…, 'DETERMINE', …)` with SRID NULL and tolerance 1e-10, then the dimensions (for two lines, of their intersection); the literal built exactly by `cql2_geometry` (Oracle's GeoJSON keeps 15 digits). With `spatialIndex`, outside a NOT: `SDO_FILTER(cql2_planar(column), literal)` first, a planar function-based index (the 4326 index is geodetic, and loses planar candidates) |
+| the array functions (since 1.6.0) | the rows of `JSON_TABLE(c, '$[*]' COLUMNS (t '$.type()', s, n BINARY_DOUBLE, l '$.length()', b BOOLEAN))`, each view a `CASE` on `t`, element by element; text read through `JSON(c)` and guarded by `IS JSON STRICT` (lax JSON reads `['a']`); `""` told by its length (`ArrayElements.empty`), since `''` is NULL |
 
 The `sqlserver` dialect (since 1.5.0), for SQL Server 2022 and later, with Basic Spatial Functions:
 
@@ -410,6 +442,7 @@ The `sqlserver` dialect (since 1.5.0), for SQL Server 2022 and later, with Basic
 | `{timestamp}` | a `datetimeoffset` as `DATEDIFF_BIG(millisecond, …)` in UTC (truncated); text through `cql2_instant` |
 | arithmetic | `cql2_arithmetic`: overflow decided from the operands' exponents (the float's bits) before any operation, since SQL Server would fail the whole query |
 | `s_intersects` | `(c.STIsEmpty() = 0 AND c.STDistance(L) <= 0)`, `L` from WKB in the column's SRID; the spatial index applies. The other relations aren't translated: SQL Server's grid differs from GEOS on boundaries |
+| the array functions (since 1.6.0) | the rows of `OPENJSON(c)` after `ISJSON(c, ARRAY) = 1` (OPENJSON fails the query on anything else), each view a `CASE` on `[type]`; strings as UTF-16 `varbinary` plus a final `0x01` (binary comparison ignores trailing zero bytes), numbers `TRY_CAST(… AS float)`, two columns' numbers by a key (17 digits, `-0` as `0`, `inf` beyond the range); matches and results as 1 / 0 (`Dialect.truth`) |
 
 ### Errors
 
@@ -509,7 +542,7 @@ filter selects). The server never knows which store it talks to.
   - the schema accepts every example;
   - the ones in the profile validate and convert to CQL2-text, and **that text means what the standard's own text
     example means**: both are read back with cql2-rs (`cql2-wasm`, a development dependency) and must give the
-    standard's JSON, for all 47. The texts differ only in presentation (spaces, keyword case, parentheses,
+    standard's JSON, for all 102. The texts differ only in presentation (spaces, keyword case, parentheses,
     `NOT (x IN …)` for `x NOT IN …`). cql2-rs 0.5.6 misreads one standard text (`example06a`: a BETWEEN followed by
     AND), so that one is checked through our text only;
   - every other one is refused only as `outside-profile` or `unknown-operator`, naming a conformance class;
@@ -533,17 +566,23 @@ filter selects). The server never knows which store it talks to.
   - the same filters in **DuckDB-WASM**, in Chrome: run for 0.2.0 and again for 0.5.0 (24,136 filters, 9,639 of them
     with ACCENTI) with a harness outside the repository (the same table and filters, the README's registration code,
     Vite's build), with the same result. The browser carries an
-    older engine (DuckDB 1.4.3, against 2.0 in Node), so passing in Node doesn't prove the browser;
+    older engine (then DuckDB 1.4.3, since 1.6.0 DuckDB 1.5.4, against 2.0 in Node), so passing in Node doesn't
+    prove the browser;
   - `demo-server/test/stores-agree.test.ts`: on the kitchen sink, 10,016 generated filters give the same features from
     the GeoJSON file, the GeoPackage, the GeoParquet file (DuckDB, with GDAL's float32 bbox covering) and PostgreSQL
     (when the database is set up; skipped otherwise), and so do the spatial literals and the seven other relations;
   - `test/naturalearth.test.ts`: the standard's own acceptance test for Basic Spatial Functions (Table 12, conformance
     test 26) on Natural Earth 1:110m (public domain, `test/fixtures/naturalearth/`): all eight counts;
+  - Array Functions (1.6.0): `test/arrays.test.ts` (the standard's examples, Tests 44 and 45, every decision and
+    refusal); generated array filters against `evaluate` in SQLite (`test/sql-arrays-sqlite.test.ts`), DuckDB 2.0
+    and 1.5.4 (`test/duckdb-arrays.ts`), and, live through demo-server's stores (`*-arrays.test.ts`), PostgreSQL
+    (native and `jsonb`), GeoPackage, GeoParquet, Oracle and SQL Server, over 13 rows of the values where engines
+    disagree (`demo-server/data/arrays-rows.ts`);
   - `test/engine-conformance.test.ts` (1.4.0): `evaluateConformance` and `sqlConformance` for each option set, and
     their promise on 6,525 filters (the standard's examples, spatial literals under every relation, the corpora): each
     filter compiles exactly when it validates against the list, and is otherwise refused as `unsupported`;
   - `test/temporal.test.ts` (1.3.0): the standard's 72 temporal rows (Annex A's, and Table 16's) on its test data, in
-    `evaluate` and SQLite, and in `test/duckdb-spatial.ts` on DuckDB 2.0 and 1.4.3; 17,394 generated temporal filters
+    `evaluate` and SQLite, and in `test/duckdb-spatial.ts` on DuckDB 2.0 and 1.5.4; 17,394 generated temporal filters
     against `evaluate` in `test/sql.test.ts` and `test/sql-duckdb.test.ts` (rows of ±infinity in DuckDB), and on the
     kitchen sink's `at` and `until` in the four stores;
   - `demo-server/test/spatial.test.ts`: S_INTERSECTS on the US states against GEOS (PostGIS's `NOT ST_Disjoint`), 5,705
@@ -559,7 +598,8 @@ filter selects). The server never knows which store it talks to.
   - `test/sql-spatial.test.ts` (0.9.0): 132 spatial filters, nested NOTs among them, in SQLite on GeoPackage blobs
     with and without the envelope, WKB, big-endian extended WKB, and with GeoPackage's R-tree, with empty geometries,
     NULL, text, bytes that aren't a geometry, and coordinates no 32-bit float holds: the same rows as `evaluate`;
-  - `test/duckdb-spatial.ts` (0.9.0), once on DuckDB 2.0 and once on DuckDB 1.4.3 (DuckDB-WASM's engine): the same 132
+  - `test/duckdb-spatial.ts` (0.9.0), once on DuckDB 2.0 and once on DuckDB 1.5.4 (DuckDB-WASM 1.33.1-dev57.0's
+    engine; DuckDB 1.4.3 until 1.6.0): the same 132
     filters on `GEOMETRY` and `BLOB` columns, each without a covering and with `DOUBLE` and `FLOAT` covering fields
     (values whose box survived without a geometry among them); the R-tree index used (`EXPLAIN`) for a box, a
     geometry parameter and the antimeridian; and the canaries of "DuckDB: what we rely on"; `npm run check:duckdb` runs
@@ -636,7 +676,30 @@ checks that they agree.
 | 1.3.0 | **Temporal Functions:** the fifteen relations of instants and intervals (OWL-Time, closed intervals, `'..'` open), in every part and engine; an instant refused where intervals only go; dates and timestamps never converted; the standard's 72 temporal rows on its test data. Fixed: infinite dates and timestamps NULL in every engine; DuckDB instants bound as text (node-api 1.4) |
 | 1.4.0 | **The classes each engine supports:** `evaluateConformance` and `sqlConformance`, the lists `toEvaluator` and `toSql` refuse by, so a filter valid against them is never `unsupported`; the **developer guide** (`docs/guide/`) and a short README; demo-server and the playground use the lists. Fixed: `filterProperties` on INTERVAL ends; the `s_disjoint` documentation |
 | 1.5.0 | **Oracle and SQL Server, for enterprise GIS:** the `oracle` dialect (every class, Oracle Spatial) and the `sqlserver` dialect (every class but Spatial Functions), on the dialect interface, tested live against each database (not in CI); `oracleFunctions` / `oracleValue`, `sqlserverFunctions` / `sqlserverValue`, `SqlColumn.spatialIndex`. Details below |
-| later | more conformance classes (arrays); JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
+| 1.6.0 | **Array Functions:** A_EQUALS, A_CONTAINS, A_CONTAINEDBY, A_OVERLAPS on sets, in every part and engine; native arrays (PostgreSQL, DuckDB lists) and JSON (PostgreSQL `jsonb`, GeoPackage text, Oracle, SQL Server) through `SqlColumn.items`; the walker's array hooks; `cql2_*_array` (GIN-indexable) in `postgresFunctions`, `cql2_array` / `cql2_array_pair` in `sqliteFunctions`. Details below |
+| later | JSON-FG: `place`, `coordRefSys`, `filter-crs` and 3D comparison; an index-friendly SQL mode |
+
+### 1.6.0: Array Functions
+
+Asked for by a user, for every engine. The standard defines the four functions on sets and says little else, so the
+decisions came first, from the standard, from what other implementations do (cql2-rs, pygeofilter, pgstac, GeoServer)
+and from measurements on every engine. They are in [array-research.md](array-research.md). Then the work went one
+engine at a time, each proved like the others: every generated filter selects exactly what `evaluate` selects, live,
+on values chosen where the engines disagree.
+
+| Engine | Arrays held as | How the SQL reads them | Exact but for |
+|---|---|---|---|
+| PostgreSQL | native arrays; `jsonb` / `json` with `items` | `@>` `<@` `&&` on `cql2_*_array` (GIN-indexable); else `unnest` / `jsonb_array_elements` | nothing measured |
+| DuckDB | lists | `list_has_all` / `list_has_any`, one lambda level | nothing measured |
+| SQLite / GeoPackage | JSON text with `items` | `cql2_array`: `evaluate`'s own code | nothing (it is `evaluate`) |
+| Oracle | `JSON`, VARCHAR2 / CLOB JSON text, with `items` | `JSON_TABLE`, text strict and through `JSON()` | a lone surrogate between text and `JSON` columns |
+| SQL Server | nvarchar / varchar JSON text, `json` (2025), with `items` | `OPENJSON` after `ISJSON(…, ARRAY)` | subnormal JSON numbers, read as 0 |
+
+Found along the way, each handled where it arose:
+- `@duckdb/node-api` 1.4 deadlocks when a registered function runs inside a correlated `unnest` or a nested lambda,
+  so the DuckDB SQL uses one lambda level. The stand-in for DuckDB-WASM's engine moved to node-api 1.5.4.
+- Oracle answers some ORs over `JSON_TABLE` columns wrongly; the `CASE` forms the dialect writes are right.
+- SQL Server compares binary values as if the shorter had trailing zero bytes, so strings carry a final `0x01`.
 
 ### 1.5.0: Oracle and SQL Server
 

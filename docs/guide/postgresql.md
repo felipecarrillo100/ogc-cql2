@@ -57,5 +57,27 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
 - **The classes:** every class the package implements (`sqlConformance({ dialect: "postgres" })`); the spatial ones
   need PostGIS in the database, and the others `postgresFunctions` installed.
 
+## Array Functions
+
+- **Native arrays** (`text[]`, `float8[]`, `int4[]`, `boolean[]`, `date[]`, `timestamptz[]`…) need only their
+  `sqlType`. A literal of the array's own kind is written with `@>`, `<@` and `&&` on `cql2_text_array(column)` (or
+  `cql2_number_array`, `cql2_boolean_array`, `cql2_date_array`, `cql2_instant_array`, all in `postgresFunctions`).
+  These read the elements as the dialect compares them: text in NFC, numbers as doubles, instants in UTC to the
+  millisecond. They leave NULL elements out, and give NULL for a multi-dimensional array, which isn't a CQL2 array.
+- **A GIN index** on that expression serves the four functions:
+
+  ```sql
+  CREATE INDEX ON places USING gin (cql2_text_array(tags));
+  ```
+
+- **JSON arrays** in `jsonb` or `json` need `items`: `{ sqlType: "jsonb", items: { type: "string" } }`. They are
+  compared element by element, each element only with literals of its own JSON type, and no index serves them. A
+  value that isn't a JSON array is NULL. A number beyond a double's range reads as infinite (`cql2_json_double`), as
+  `JSON.parse` reads it.
+- **`postgresValue`** serves a native array as a JSON array of its elements, each by the same rules as a column, and a
+  `jsonb` column with `items` as it is.
+
+More on arrays: [Array filters](arrays.md).
+
 More on the spatial rules: [Spatial filters](spatial.md); on infinite dates and timestamps:
 [Temporal filters](temporal.md#infinite-dates-and-timestamps).

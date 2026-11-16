@@ -28,6 +28,8 @@ overview; this guide has the details.
   other relations with GEOS.
 - [Temporal filters](temporal.md): instants, intervals and the fifteen relations.
 - [Comparing two properties, and arithmetic](property-property-and-arithmetic.md).
+- [Array filters](arrays.md): the four array functions as sets, array queryables, and array columns in each
+  database.
 
 **Reference**
 - [Errors](errors.md): `Cql2Error` and its codes.

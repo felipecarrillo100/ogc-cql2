@@ -28,10 +28,10 @@
 import { unwrap, type Fold } from "../core/folds.js";
 import { CONVERSE, dimension, literalGeometry, relates, transpose, type MatrixRelation } from "../core/relate.js";
 import { isArithmetic, operate } from "../core/arithmetic.js";
-import { heldKind } from "../core/queryables.js";
+import { heldKind, itemsKind } from "../core/queryables.js";
 import { OPEN, holds, isTemporal, type End } from "../core/temporal.js";
 import type {
-  ArithmeticOperand, Cql2Filter, FoldedString, Geometry, IntervalEnd, NumericOperand, Operand,
+  ArithmeticOperand, ArrayLiteral, ArrayOperator, Cql2Filter, FoldedString, Geometry, IntervalEnd, NumericOperand, Operand,
   PropertyRef, Queryable, ScalarLiteral, SpatialLiteral, SpatialOperator, TemporalOperand, TemporalOperator,
 } from "../core/types.js";
 import { CONFORMANCE } from "../core/conformance.js";
@@ -68,7 +68,8 @@ export interface EvaluateOptions<F = unknown> {
    * to compare: a property with `format: "date"` is then read as a day, one with `"date-time"` as an instant, as
    * against a date or a timestamp literal. Without them, two properties compare by their values' types: strings as
    * strings (exact for `YYYY-MM-DD` dates, and for UTC instants written alike), numbers, booleans, and `Date`s as
-   * instants. A SQL dialect selects what `evaluate` selects given the same queryables.
+   * instants. The same goes for the elements of two array properties, as their `items` say. A SQL dialect selects
+   * what `evaluate` selects given the same queryables.
    */
   readonly queryables?: Readonly<Record<string, Queryable | object>>;
 }
@@ -302,6 +303,77 @@ function temporal<F>(op: TemporalOperator, args: readonly [TemporalOperand, Temp
   };
 }
 
+// --- Array Functions ------------------------------------------------------------------------------------------------
+
+const ARRAY_OPERATORS: ReadonlySet<string> = new Set(["a_equals", "a_contains", "a_containedBy", "a_overlaps"]);
+
+/** What `heldKind` says, as the kind values are read as; `undefined` for any. */
+const READ_AS: Readonly<Partial<Record<string, ReadKind>>> = { text: "string", number: "number", boolean: "boolean", date: "date", instant: "instant" };
+
+/** An element of a set: a literal's key, or a value of the features with what its queryable's `items` say it holds. */
+type Item = { readonly key: Key; readonly kind: ReadKind } | { readonly raw: unknown; readonly held: ReadKind | undefined };
+
+/**
+ * Whether two elements are the same, as `=` would compare them (values are never converted): a value is read as the
+ * literal's kind; two values as their queryables' `items` say, else by their own types, which must match.
+ */
+function same(x: Item, y: Item): boolean {
+  if ("key" in x && "key" in y) return x.kind === y.kind && order(x.key, y.key) === 0;
+  if ("key" in x || "key" in y) {
+    const [l, v] = ("key" in x ? [x, y] : [y, x]) as [{ key: Key; kind: ReadKind }, { raw: unknown }];
+    const k = read(v.raw, l.kind, []);
+    return k !== undefined && order(k, l.key) === 0;
+  }
+  const own = kindOf(x.raw);
+  const kind = x.held ?? y.held ?? (own === kindOf(y.raw) ? own : undefined);
+  if (kind === undefined) return false;
+  const [a, b] = [read(x.raw, kind, []), read(y.raw, kind, [])];
+  return a !== undefined && b !== undefined && order(a, b) === 0;
+}
+
+const has = (set: readonly Item[], x: Item): boolean => set.some((y) => same(x, y));
+
+/** The function on two sets (Requirement 16 B and C): repeats and order don't matter. */
+function setRelation(op: ArrayOperator, a: readonly Item[], b: readonly Item[]): boolean {
+  const contains = () => b.every((y) => has(a, y));
+  const containedBy = () => a.every((x) => has(b, x));
+  switch (op) {
+    case "a_contains": return contains();
+    case "a_containedBy": return containedBy();
+    case "a_equals": return contains() && containedBy();
+    case "a_overlaps": return a.some((x) => has(b, x));
+  }
+}
+
+/**
+ * An array function, compiled once. A property that is NULL, missing or not an array gives NULL (as every other
+ * predicate does for a NULL operand); a NULL element is left out, since a set holds values.
+ */
+function arrays<F>(op: ArrayOperator, args: readonly [PropertyRef | ArrayLiteral, PropertyRef | ArrayLiteral], get: Getter<F>, queryables: Queryables): (feature: F) => Truth {
+  type ArrayOperand = { readonly items: readonly Item[] } | { readonly name: string; readonly held: ReadKind | undefined };
+  const operands = args.map((x): ArrayOperand => {
+    if (Array.isArray(x)) return { items: (x as ArrayLiteral).map((l) => literalSide(l) as { key: Key; kind: ReadKind }) };
+    const name = (x as PropertyRef).property;
+    const q = queryables && Object.hasOwn(queryables, name) ? itemsKind(queryables[name] as Queryable) : undefined;
+    return { name, held: q === undefined ? undefined : READ_AS[q] };
+  });
+  const values = (o: ArrayOperand, f: F): readonly Item[] | null => {
+    if ("items" in o) return o.items;
+    const v = get(f, o.name);
+    if (!Array.isArray(v)) return null; // NULL, missing, or not an array
+    return v.filter((e) => !isNullish(e)).map((raw) => ({ raw, held: o.held }));
+  };
+  const [a, b] = operands as [ArrayOperand, ArrayOperand];
+  if ("items" in a && "items" in b) {
+    const result = setRelation(op, a.items, b.items); // literals only: decided once
+    return () => result;
+  }
+  return (f) => {
+    const [x, y] = [values(a, f), values(b, f)];
+    return x === null || y === null ? null : setRelation(op, x, y);
+  };
+}
+
 // --- Spatial relations with a literal first, or two properties (Property-Property Comparisons) ---------------------
 
 const isRef = (x: PropertyRef | SpatialLiteral): x is PropertyRef => "property" in x;
@@ -342,6 +414,9 @@ function compile<F>(
   if (typeof filter === "boolean") return () => filter;
   const sub = (x: Cql2Filter) => compile(x, get, geometry, engine, queryables);
   if (isTemporal(filter.op)) return temporal(filter.op, filter.args as readonly [TemporalOperand, TemporalOperand], get, queryables);
+  if (ARRAY_OPERATORS.has(filter.op)) {
+    return arrays(filter.op as ArrayOperator, filter.args as readonly [PropertyRef | ArrayLiteral, PropertyRef | ArrayLiteral], get, queryables);
+  }
   if (filter.op in CONVERSE) {
     const op = filter.op as SpatialOperator;
     const [a, b] = filter.args as readonly [PropertyRef | SpatialLiteral, PropertyRef | SpatialLiteral];

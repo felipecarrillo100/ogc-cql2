@@ -29,7 +29,7 @@ of `like` (its pattern is always a literal), and the spatial functions.
   `s_intersects` and `s_disjoint`, by the database for the others.
 - **DuckDB:** two columns under `casei` / `accenti` go through `cql2_compare`, one more of `duckdbFunctions`.
 - **Tested** with the standard's own Table 16 (Annex A.12) on its test data, in `evaluate`, SQLite, DuckDB (2.0 and
-  1.4.3) and, for its spatial rows, on Natural Earth with GEOS; and with generated filters on every pair of columns,
+  1.5.4) and, for its spatial rows, on Natural Earth with GEOS; and with generated filters on every pair of columns,
   against `evaluate`, in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
 
 ## Arithmetic

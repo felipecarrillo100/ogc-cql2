@@ -91,9 +91,9 @@ open().then(({ db, connection }) => {
 - **Text compares in code point order** (`COLLATE "binary"`) after NFC normalization, whatever the database's
   `default_collation`.
 - **Instants compare as epoch milliseconds,** so the time-zone setting changes nothing.
-- **`duckdbFunctions` all return 32-bit integers:** DuckDB-WASM (1.32.0) returns text, DOUBLE and BIGINT results of a
+- **`duckdbFunctions` all return 32-bit integers:** DuckDB-WASM (measured on 1.32.0) returns text, DOUBLE and BIGINT results of a
   JavaScript function wrongly, so the functions avoid them, and work the same in both runtimes.
-- **Numbers are parameters as text** (`"0.9653517007827759"`, cast to DOUBLE in the SQL): DuckDB-WASM (1.32.0) binds
+- **Numbers are parameters as text** (`"0.9653517007827759"`, cast to DOUBLE in the SQL): DuckDB-WASM (measured on 1.32.0) binds
   about one number in ten that needs all 17 digits one unit off (`0.965351700782776`), and reads text exactly. It
   reads a SQL literal of 17 digits one unit off too, so insert such values as text (`'0.9653517007827759'::DOUBLE`).
   Instants (epoch milliseconds) are parameters as text too, since 1.3.0: `@duckdb/node-api` 1.4 binds a JavaScript
@@ -131,9 +131,37 @@ open().then(({ db, connection }) => {
   geometry is read with `geom::BLOB`, which is WKB.
 - **Tested in both runtimes:** 24,661 generated filters on a table of awkward values, and 5,705 spatial literals on the
   US states, select the same rows as `evaluate` in DuckDB (Node) and in DuckDB-WASM (Chrome), also with a `nocase`
-  default collation and another time zone. Tested with `@duckdb/node-api` 2.0.0 and `@duckdb/duckdb-wasm` 1.32.0; the
-  spatial tests also run, in Node, on DuckDB 1.4.3, the engine DuckDB-WASM 1.32.0 ships.
+  default collation and another time zone. Tested with `@duckdb/node-api` 2.0.0 and `@duckdb/duckdb-wasm`
+  1.33.1-dev57.0 (and before it 1.32.0). The tests also run in Node on DuckDB 1.5.4, the engine DuckDB-WASM
+  1.33.1-dev57.0 ships.
 - **The classes:** every class the package implements (`sqlConformance({ dialect: "duckdb" })`); the spatial ones
   need the spatial extension loaded.
+
+## Array Functions
+
+- **Lists hold arrays:** give the column's type as `DESCRIBE` gives it (`VARCHAR[]`, `DOUBLE[]`, `DATE[]`, or a
+  fixed-size `VARCHAR[3]`); no `items` is needed. Each element is read in the dialect's own view of its type, as a
+  column of that type is. DuckDB holds arrays as lists only: JSON text in a VARCHAR isn't read as an array.
+- **The SQL uses one level of lambdas** (`list_filter`, `list_transform`, `list_has_all`), never a correlated `unnest`
+  subquery or a lambda inside a lambda. `@duckdb/node-api` 1.4 deadlocked when a registered JavaScript function
+  (`cql2_day`, `cql2_instant`…) ran inside either of those, after a few thousand queries. DuckDB 1.5 and 2.0, in Node
+  and in DuckDB-WASM, never did.
+- **`duckdbValue`** serves a list as a list, each element by the same rules as a column. In DuckDB-WASM, read a list
+  by iterating it: its `toArray()` gives a typed array for numbers, where a NULL element becomes 0.
+
+More on arrays: [Array filters](arrays.md).
+
+## Known DuckDB issues
+
+These are in DuckDB's spatial extension, not in the SQL the package writes: its own tests don't meet them. An
+application that builds its own R-tree indexes should know them (reported upstream as duckdb-spatial #908 and #909;
+measured with each engine's own reproductions):
+- **An R-tree index on one geometry, with a generated column on another:** the query finds no rows (DuckDB 1.4.3,
+  1.5.4, 1.5.6, 2.0.0).
+- **An R-tree index on a struct field, joined on another field:** the query finds no rows (DuckDB 1.5.6, 2.0.0).
+- **A snapshot read through an R-tree index, after another connection's DELETE or geometry UPDATE:** wrong counts
+  (DuckDB 1.5.4, 1.5.6; DuckDB-WASM 1.33.1-dev57.0 is engine 1.5.4).
+
+Without the index, every count is right.
 
 More on the spatial rules: [Spatial filters](spatial.md).

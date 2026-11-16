@@ -10,6 +10,9 @@
  * - `KITCHEN_SINK_PLAIN`: the same rows, with neither metadata nor index (its geometry read as CRS84, found without
  *   an index).
  * - `STATES`, from states.geojson: `STATE_NAME` and the geometry, as `KITCHEN_SINK`'s.
+ * - `ARRAYS` (Array Functions), the rows of arrays-rows.ts: each column of JSON text twice, as VARCHAR2 text (in NFC,
+ *   as stored) and in the `JSON` type (`tags_json`…: what Oracle accepts of the text; NULL where it refuses it), and
+ *   `doc` a third time as a CLOB (`doc_clob`). List them in the store's `arrays`, with their items.
  * Geometries are bound as SDO_GEOMETRY objects, their ordinates the file's numbers exactly (Oracle's
  * SDO_UTIL.FROM_GEOJSON keeps 15 significant digits). Rings are stored as Oracle requires them, the exterior counter-clockwise and the holes clockwise (GeoJSON allows
  * either); heights, which GEOS ignores, aren't stored.
@@ -19,6 +22,7 @@
 import { readFileSync } from "node:fs";
 import oracledb from "oracledb";
 import { oracleFunctions } from "ogc-cql2/sql";
+import { COLUMNS, ROWS } from "./arrays-rows.ts";
 
 type G = { type: string; coordinates?: unknown; geometries?: G[] };
 const file = JSON.parse(readFileSync(new URL("./kitchen_sink.geojson", import.meta.url), "utf8")) as {
@@ -87,7 +91,7 @@ try {
     const attributes = sdo(g);
     return attributes === null ? null : new Sdo(attributes);
   };
-  for (const table of ["kitchen_sink", "kitchen_sink_plain", "states"]) await connection.execute(`DROP TABLE IF EXISTS ${table} PURGE`);
+  for (const table of ["kitchen_sink", "kitchen_sink_plain", "states", "arrays"]) await connection.execute(`DROP TABLE IF EXISTS ${table} PURGE`);
   await connection.execute("DELETE FROM user_sdo_geom_metadata WHERE table_name IN ('KITCHEN_SINK', 'STATES')");
   // cql2_planar first: the planar indexes below are built on it.
   for (const statement of oracleFunctions()) await connection.execute(statement);
@@ -147,10 +151,27 @@ try {
       SDO_DIM_ARRAY(SDO_DIM_ELEMENT('X', -180, 180, 1e-10), SDO_DIM_ELEMENT('Y', -90, 90, 1e-10)), NULL)`);
     await connection.execute(`CREATE INDEX ${table}_planar ON ${table} (cql2_planar(geom)) INDEXTYPE IS MDSYS.SPATIAL_INDEX_V2`);
   }
+  const arrayColumns = [...COLUMNS.map((c) => `"${c}" VARCHAR2(4000)`), ...COLUMNS.map((c) => `"${c}_json" JSON`), `"doc_clob" CLOB`];
+  await connection.execute(`CREATE TABLE arrays ("id" NUMBER(10) PRIMARY KEY, "title" VARCHAR2(200 CHAR), ${arrayColumns.join(", ")})`);
+  await connection.execute("COMMENT ON TABLE arrays IS 'Arrays as JSON: text, the JSON type and a CLOB'");
+  for (const [id, title, ...values] of ROWS) {
+    const texts = values.map((v) => (v === null ? null : v.normalize("NFC")));
+    await connection.execute(
+      `INSERT INTO arrays ("id", "title", ${COLUMNS.map((c) => `"${c}"`).join(", ")}, "doc_clob") VALUES (:1, :2, ${COLUMNS.map((_, i) => `:${i + 3}`).join(", ")}, :${COLUMNS.length + 3})`,
+      [id, title, ...texts, texts[COLUMNS.indexOf("doc")]!],
+    );
+    for (const [i, c] of COLUMNS.entries()) {
+      try {
+        await connection.execute(`UPDATE arrays SET "${c}_json" = :1 WHERE "id" = :2`, [texts[i]!, id]);
+      } catch {
+        // Not JSON to Oracle: NULL in the JSON type.
+      }
+    }
+  }
   await connection.commit();
   const errors = (await connection.execute("SELECT name, line, text FROM user_errors")).rows ?? [];
   if (errors.length > 0) throw new Error(`oracleFunctions: ${JSON.stringify(errors)}`);
-  for (const table of ["kitchen_sink", "kitchen_sink_plain", "states"]) {
+  for (const table of ["kitchen_sink", "kitchen_sink_plain", "states", "arrays"]) {
     console.log(`${table}: ${(await connection.execute<[number]>(`SELECT COUNT(*) FROM ${table}`)).rows![0]![0]}`);
   }
   console.log("the cql2_* functions created");

@@ -79,3 +79,20 @@ const { recordset } = await request.query(`SELECT ${select} FROM dbo.places WHER
   `evaluate` on what SQL Server serves, on SQL Server 2022 and 2025 (demo-server's tests; not in CI).
 - **The classes:** every class the package implements but Spatial Functions
   (`sqlConformance({ dialect: "sqlserver" })`); all need `sqlserverFunctions` installed.
+
+## Array Functions
+
+- **JSON holds arrays:** text in nvarchar or varchar, or the `json` type of SQL Server 2025. Declare the column with
+  `items`: `{ sqlType: "nvarchar", items: { type: "string" } }`. char and nchar, which are padded, hold none.
+- **The SQL reads each element as a row of `OPENJSON`,** after `ISJSON(column, ARRAY)`, because `OPENJSON` fails the
+  whole query on anything but a JSON array. It needs compatibility level 130 or later.
+  - Each element compares only with literals of its own JSON type.
+  - Strings compare as their UTF-16 code units, exactly, whatever the collation, padding or case.
+  - A number beyond a float reads as infinite, as `JSON.parse` reads it.
+- **The `json` type stores some values otherwise than the text it was given:** `1.5e-10` as `0.0000000001`, `-0` as
+  `0`, a lone surrogate as U+FFFD. It refuses numbers with an exponent of 38 or more. The SQL compares what is
+  stored, and `sqlserverValue` serves it (as nvarchar text, for the application to `JSON.parse`), so the two agree.
+- **One limit:** a JSON number below 2.2250738585072014e-308 in magnitude (subnormal) reads as 0, as SQL Server reads
+  such text. No index serves these filters.
+
+More on arrays: [Array filters](arrays.md).

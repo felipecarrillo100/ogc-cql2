@@ -12,7 +12,7 @@ applies) and `details`:
 | `not-expressible` | `toText` | valid, but CQL2-text can't write it (a property name that isn't an identifier, a backslash in a string…) |
 | `invalid-text` | `fromText` | not CQL2-text; `details.position` says where (a JavaScript string index), `details.expected` what could come there |
 | `unknown-property` | `toSql` | a property that isn't one of the table's columns |
-| `unsupported` | `evaluate`, `toEvaluator`, `toPredicate`, `toSql` | a valid filter of a class there is no engine for with those options: Spatial Functions without `spatialEngine`, or on SQLite without SpatiaLite; `details.conformance` names it |
+| `unsupported` | `evaluate`, `toEvaluator`, `toPredicate`, `toSql` | a valid filter of a class there is no engine for with those options: Spatial Functions without `spatialEngine`, on SQLite without SpatiaLite, or on SQL Server; `details.conformance` names it |
 
 Test `error.code`, not `instanceof`: that keeps working when two copies of the package end up in one application.
 

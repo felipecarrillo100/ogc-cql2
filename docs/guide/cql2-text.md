@@ -40,8 +40,8 @@ same options). So:
 
 - text that isn't CQL2-text throws `invalid-text`, with `details.position` (where, as a JavaScript string index) and
   `details.expected`. Nothing is guessed, and nothing is left unread: `a = 1)` is refused, not read as `a = 1`;
-- valid CQL2 outside the profile (array functions, custom functions) throws `invalid-filter`, naming the class it
-  needs, exactly as the same filter in CQL2-JSON would.
+- valid CQL2 outside the profile (custom functions) throws `invalid-filter`, naming the class it needs, exactly as
+  the same filter in CQL2-JSON would.
 
 How it reads what the grammar allows in more than one way, or leaves open:
 
@@ -53,7 +53,9 @@ How it reads what the grammar allows in more than one way, or leaves open:
 - `-1` is a number; `<>`, `<=`, `>=` may have a space inside (`!=` isn't CQL2);
 - geometries: `Z` is optional, the coordinates tell the dimension; `EMPTY` and `MULTIPOINT(1 2, 3 4)` (without each
   point's parentheses) aren't in the grammar and are refused;
-- `TIMESTAMP('…')` in UTC, with `Z`, as the grammar writes it.
+- `TIMESTAMP('…')` in UTC, with `Z`, as the grammar writes it;
+- arrays in parentheses, `A_CONTAINS(tags, ('a', 'b'))`, and the empty array as `()`, which `toText` writes the same
+  way (see [Array filters](arrays.md)).
 
 It reads back exactly what `toText` writes.
 

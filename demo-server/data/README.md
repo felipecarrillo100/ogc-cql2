@@ -18,6 +18,14 @@ To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if 
   milliseconds, periods from `at` to `until` (equal ends, NULL ends, one ending before it begins), local times without
   an offset, text that looks like dates and numbers, every geometry type, NULLs in every column). The
   same rows go into `usa.gpkg`, `kitchen_sink.parquet` and PostgreSQL, so every store must answer alike.
+- `arrays.parquet` and `arrays.gpkg`: the arrays table of `arrays.sql` (Array Functions), with the values where
+  engines disagree:
+  - `arrays.parquet` holds DuckDB lists (GeoParquet), made by `node data/make-arrays-parquet.ts`;
+  - the JSON stores (GeoPackage, Oracle, SQL Server) share their rows as JSON text in `arrays-rows.ts`;
+  - `arrays.gpkg` holds a GeoPackage table whose arrays are TEXT JSON, as GDAL writes list fields (`application/json`
+    in `gpkg_data_columns`), plus JSON that isn't an array and the values where SQLite's own JSON reading parts from
+    JSON.parse. It is made by `node data/make-arrays-gpkg.ts`. GeoPackage has no array type, so `collections.json`
+    lists the columns and their elements (`"arrays": { "table": { "column": { "type": … } } }`).
 
 ## PostgreSQL
 
@@ -27,8 +35,11 @@ The connection is in `demo-server/.env` (copy `.env_sample`). Then, once:
    PostGIS and creates the schema `cql2demo`, owned by the demo's user.
 2. As the demo's user: `sh load-postgres.sh`. It creates the tables in `cql2demo` (`kitchen_sink` from
    `kitchen_sink.sql` and `kitchen_sink.geojson`, `kitchen_sink_3857` in Web Mercator, `states` and `sub_regions` from
-   `usa.gpkg`) and ogc-cql2's `cql2_*` functions. Safe to run again. Set `PSQL` / `OGR2OGR` if those aren't on the
-   path; with Postgres.app they are in `/Applications/Postgres.app/Contents/Versions/17/bin`.
+   `usa.gpkg`) and ogc-cql2's `cql2_*` functions, then `arrays` from `arrays.sql` (native and JSON arrays for the
+   array functions, with GIN indexes on the `cql2_*_array` functions). Safe to run again. Set `PSQL` / `OGR2OGR` if
+   those aren't on the path; with Postgres.app they are in `/Applications/Postgres.app/Contents/Versions/17/bin`.
+   In `collections.json`, a table's optional `"arrays"` lists its `jsonb` / `json` columns that hold arrays, each with
+   what its elements hold (`{}` for any, `{ "type": "string" }`…); native arrays (`text[]`…) need no entry.
 
 ## Oracle
 
@@ -37,7 +48,10 @@ for Oracle Database 23ai or later with Oracle Spatial (the Free edition's full i
 Then, once, as that user: `node --env-file-if-exists=.env data/load-oracle.ts` (from `demo-server`, the package
 built). It creates `KITCHEN_SINK` and `KITCHEN_SINK_PLAIN` (the same rows, without spatial metadata or index) from
 `kitchen_sink.geojson`, `STATES` from `states.geojson`, the planar spatial indexes the `oracle` dialect uses, and
-ogc-cql2's `cql2_*` functions. Text is stored in NFC; Oracle stores `''` as NULL. Safe to run again.
+ogc-cql2's `cql2_*` functions, and `ARRAYS` (Array Functions): the rows of `arrays-rows.ts`, each column as VARCHAR2
+JSON text and again in the `JSON` type (`tags_json`…, NULL where Oracle refuses the text), and `doc` as a CLOB
+(`doc_clob`). Text is stored in NFC; Oracle stores `''` as NULL. Safe to run again. In `collections.json`, a table's
+optional `"arrays"` lists its JSON columns (`JSON`, VARCHAR2, CLOB) that hold arrays, each with what its elements hold.
 
 ## SQL Server
 
@@ -46,4 +60,8 @@ The connection is in `demo-server/.env` (`MSSQL_SERVER`, `MSSQL_PORT`, `MSSQL_DA
 `node --env-file-if-exists=.env data/load-sqlserver.ts` (from `demo-server`, the package built). It creates
 `dbo.kitchen_sink` (three kinds of text column: nvarchar with a supplementary-character collation, varchar UTF-8, and
 nvarchar in the database's default collation), `dbo.states`, their spatial indexes, `dbo.bin2_text` (a column the store
-leaves out) and ogc-cql2's `cql2_*` functions. Text is stored in NFC. Safe to run again.
+leaves out), `dbo.arrays` (Array Functions: the rows of `arrays-rows.ts`, each column as nvarchar JSON text, `doc`
+again as UTF-8 varchar (`doc_utf8`), and on SQL Server 2025 each again in the `json` type, `tags_json`…, NULL where the
+type refuses the text) and ogc-cql2's `cql2_*` functions. Text is stored in NFC. Safe to run again. In
+`collections.json`, a table's optional `"arrays"` lists its JSON columns (nvarchar, varchar, `json`) that hold arrays,
+each with what its elements hold; on SQL Server 2022 the `*_json` columns are reported missing.

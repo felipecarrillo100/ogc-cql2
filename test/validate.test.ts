@@ -27,6 +27,7 @@ const accepted: [string, unknown][] = [
   ["timestamp with fraction", { op: "<", args: [p("t"), { timestamp: "2021-06-30T12:00:00.500Z" }] }],
   ["leap day", { op: "=", args: [p("d"), { date: "2024-02-29" }] }],
   ["isNull", { op: "isNull", args: [p("geometry")] }],
+  ["an array function", { op: "a_contains", args: [p("tags"), ["a", 1, true, { date: "2010-02-10" }]] }],
   ["not isNull", { op: "not", args: [{ op: "isNull", args: [p("geometry")] }] }],
   ["like", { op: "like", args: [p("name"), "Smith%"] }],
   ["like, escaped wildcard", { op: "like", args: [p("code"), "100\\%"] }],
@@ -69,7 +70,6 @@ const refused: [string, unknown, ProblemCode, string][] = [
   ["nested casei", { op: "=", args: [casei(casei(p("a"))), "x"] }, "outside-profile", "/args/0/args/0"],
   // The standard's conformance test (/conf/basic-spatial-functions/spatial-predicate): a latitude of 180 must fail.
   ["POINT(90 180)", { op: "s_intersects", args: [p("geometry"), { type: "Point", coordinates: [90, 180] }] }, "invalid-geometry", "/args/1/coordinates/1"],
-  ["array", { op: "a_contains", args: [p("tags"), ["a"]] }, "outside-profile", ""],
   ["an interval operand", { op: "=", args: [p("t"), { interval: ["2020-01-01", ".."] }] }, "wrong-arguments", "/args/1"],
   ["an array operand", { op: "=", args: [p("t"), ["a"]] }, "outside-profile", "/args/1"],
   ["isNull of a literal", { op: "isNull", args: ["a"] }, "outside-profile", "/args/0"],
@@ -122,8 +122,8 @@ describe("validate refuses, with a code and where", () => {
   );
 
   it("names the class that outside-profile CQL2 needs", () => {
-    const result = validate({ op: "a_contains", args: [p("tags"), ["a"]] });
-    expect(result.valid || result.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.arrays);
+    const result = validate({ op: "=", args: [{ op: "upper", args: [p("a")] }, "X"] });
+    expect(result.valid || result.problems[0]!.conformance).toBe(CQL2_CONFORMANCE.functions);
   });
 
   it("a property on the right, or a literal on the left: Property-Property Comparisons, needed when a server leaves it out", () => {

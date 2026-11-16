@@ -1,4 +1,5 @@
-// Runs the `duckdb` dialect's spatial suite (test/duckdb-spatial.ts) on the newest DuckDB engines, and reports what
+// Runs the `duckdb` dialect's spatial suite (test/duckdb-spatial.ts) and its Array Functions suite
+// (test/duckdb-arrays.ts) on the newest DuckDB engines, and reports what
 // changed against the pinned ones and what to update. The engines: the newest `@duckdb/node-api`, and the engine
 // inside the newest DuckDB-WASM (`latest` and `next`), each through the `@duckdb/node-api` of the same engine. All
 // installed in a temporary folder, removed at the end: package.json and the lock file are never touched. Exits with
@@ -83,7 +84,7 @@ function runSuite(engine, pkg) {
 
 let failed = false;
 try {
-  const pins = { node: pinned("@duckdb/node-api"), wasm: pinned("@duckdb/node-api-1.4") };
+  const pins = { node: pinned("@duckdb/node-api"), wasm: pinned("@duckdb/node-api-1.5") };
   const nodeVersions = npmView("@duckdb/node-api", "versions");
   console.log(`Pinned (npm test runs them): DuckDB ${pins.node} (Node), DuckDB ${pins.wasm} (DuckDB-WASM's engine)\n`);
 
@@ -124,7 +125,7 @@ try {
 
   if (wasm.latest && wasm.latest !== pins.wasm) {
     console.log(`DuckDB-WASM's latest ships DuckDB ${wasm.latest}, not ${pins.wasm}: when the browser moves to it, move the`);
-    console.log(`@duckdb/node-api-1.4 devDependency (and its test file's profile) to that engine, after this report is clean.`);
+    console.log(`@duckdb/node-api-1.5 devDependency (and its test file's profile) to that engine, after this report is clean.`);
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

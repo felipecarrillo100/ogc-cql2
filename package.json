@@ -1,7 +1,7 @@
 {
   "name": "ogc-cql2",
-  "version": "1.5.0",
-  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text (written and read), in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS) for CQL2-JSON filters, in browsers and Node.",
+  "version": "1.6.0",
+  "description": "OGC CQL2 1.0.0 (OGC 21-065r2) for JavaScript and TypeScript: validation, CQL2-text (written and read), in-memory evaluation and SQL (SQLite / GeoPackage, PostgreSQL / PostGIS, DuckDB / GeoParquet, Oracle, SQL Server) for CQL2-JSON filters, in browsers and Node.",
   "keywords": [
     "cql2",
     "cql2-json",
@@ -16,7 +16,12 @@
     "sqlite",
     "geopackage",
     "postgresql",
-    "postgis"
+    "postgis",
+    "duckdb",
+    "geoparquet",
+    "oracle",
+    "sqlserver",
+    "arrays"
   ],
   "author": "Felipe Carrillo Romero",
   "homepage": "https://github.com/felipecarrillo100/ogc-cql2#readme",
@@ -80,7 +85,7 @@
     "@arethetypeswrong/core": "^0.18.5",
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
     "@duckdb/node-api": "^2.0.0-r.1",
-    "@duckdb/node-api-1.4": "npm:@duckdb/node-api@1.4.3-r.3",
+    "@duckdb/node-api-1.5": "npm:@duckdb/node-api@1.5.4-r.1",
     "@types/node": "^24.19.2",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",

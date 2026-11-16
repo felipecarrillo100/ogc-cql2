@@ -57,10 +57,10 @@ describe("collections", () => {
     assert.deepEqual(
       files.map((c: { id: string; source: string; featureCount: number }) => [c.id, c.source, c.featureCount]),
       [["states", "geojson", 51], ["kitchen_sink", "geojson", 24], ["parquet-states", "geoparquet", 51],
-        ["parquet-kitchen_sink", "geoparquet", 24], ["gpkg-kitchen_sink", "geopackage", 24],
-        ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["dupes", "geojson", 2]],
+        ["parquet-kitchen_sink", "geoparquet", 24], ["parquet-arrays", "geoparquet", 13], ["gpkg-kitchen_sink", "geopackage", 24],
+        ["gpkg-states", "geopackage", 51], ["gpkg-sub_regions", "geopackage", 9], ["gpkg-arrays", "geopackage", 13], ["dupes", "geojson", 2]],
     );
-    assert.match(files[7].warnings[0], /Dropped 1 feature/);
+    assert.match(files[9].warnings[0], /Dropped 1 feature/);
     assert.ok(log.includes(`states: 51 features from ${fileURLToPath(new URL("../data/states.geojson", import.meta.url))}`));
   });
 
@@ -76,7 +76,7 @@ describe("collections", () => {
         // DuckDB's spatial extension can fail to install (offline): then no spatial class.
         : c.source === "geoparquet" ? (c.conformance.includes(CONFORMANCE.spatial) ? all : all.filter((x) => !spatial.includes(x)))
         : c.source === "sqlserver" ? sqlConformance({ dialect: "sqlserver" }) // all but Spatial Functions
-        : all; // GeoJSON with GEOS, PostGIS, Oracle Spatial
+        : all; // in memory with GEOS; PostGIS; Oracle Spatial
       assert.deepEqual(c.conformance, expected, c.id);
     }
     assert.deepEqual((await read(fetch(`${base}/collections/states`))).conformance, all);
@@ -184,8 +184,10 @@ describe('CQL2-text filters ("filter-lang": "cql2-text")', () => {
   it("valid CQL2-text that doesn't fit the profile or the queryables: invalid-filter, with the problems", async () => {
     const unknown = await read(query("states", { filter: "NOPE = 1", "filter-lang": "cql2-text" }));
     assert.deepEqual([unknown.code, unknown.problems[0].code], ["invalid-filter", "unknown-property"]);
-    const arrays = await read(query("states", { filter: "A_CONTAINS(STATE_NAME, ('a'))", "filter-lang": "cql2-text" }));
-    assert.deepEqual([arrays.code, arrays.problems[0].code], ["invalid-filter", "outside-profile"]);
+    const notAnArray = await read(query("states", { filter: "A_CONTAINS(STATE_NAME, ('a'))", "filter-lang": "cql2-text" }));
+    assert.deepEqual([notAnArray.code, notAnArray.problems[0].code], ["invalid-filter", "type-mismatch"]);
+    const outside = await read(query("states", { filter: "upper(STATE_NAME) = 'X'", "filter-lang": "cql2-text" }));
+    assert.deepEqual([outside.code, outside.problems[0].code], ["invalid-filter", "outside-profile"]);
   });
 
   it("an unknown filter-lang, or cql2-text with a filter that isn't a string: invalid-request", async () => {

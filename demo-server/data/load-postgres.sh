@@ -3,7 +3,8 @@
 # - kitchen_sink (kitchen_sink.sql, then filled from kitchen_sink.geojson), and kitchen_sink_3857, the same rows in
 #   Web Mercator;
 # - states and sub_regions, from usa.gpkg, column names kept as they are;
-# - ogc-cql2's cql2_* functions (postgresFunctions), which the postgres dialect calls.
+# - ogc-cql2's cql2_* functions (postgresFunctions), which the postgres dialect calls;
+# - arrays (arrays.sql): native and JSON arrays, for the array functions, with GIN indexes on the cql2_*_array functions.
 # Prerequisite: setup-postgres-admin.sql, run once by a superuser. Safe to run again: it replaces the tables.
 # Usage: sh load-postgres.sh   (PSQL / OGR2OGR to choose the binaries; the package must be built: npm start does it)
 set -e
@@ -29,6 +30,7 @@ export PGOPTIONS="-c client_min_messages=warning" # no NOTICEs for objects that 
   -lco SCHEMA=cql2demo -lco FID=fid -lco GEOMETRY_NAME=geom -lco LAUNDER=NO
 (cd .. && node --input-type=module -e "process.stdout.write((await import('ogc-cql2/sql')).postgresFunctions('cql2demo'))") \
   | "$PSQL" -X -q -v ON_ERROR_STOP=1
-for table in kitchen_sink kitchen_sink_3857 states sub_regions cql2_casefold; do
+"$PSQL" -X -q -v ON_ERROR_STOP=1 -f arrays.sql # after the functions: its GIN indexes are on them
+for table in kitchen_sink kitchen_sink_3857 states sub_regions arrays cql2_casefold; do
   "$PSQL" -X -At -c "SELECT 'cql2demo.$table: ' || count(*) FROM cql2demo.$table"
 done

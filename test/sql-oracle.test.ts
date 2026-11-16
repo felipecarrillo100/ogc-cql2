@@ -288,3 +288,64 @@ describe("oracleFunctions", () => {
     expect(statements.some((s) => s.includes("('C39F', '7373')"))).toBe(true);
   });
 });
+
+describe("Array Functions: JSON arrays, element by element through JSON_TABLE", () => {
+  const ARRAYS: Record<string, SqlColumn> = {
+    tags: { sqlType: "VARCHAR2(4000)", items: { type: "string" } },
+    doc: { sqlType: "JSON", items: {} },
+    big: { sqlType: "CLOB", items: {} },
+    plain: { type: "string", sqlType: "VARCHAR2(100)" }, // no items: text, not an array
+  };
+  const array = (filter: unknown) => toSql(filter as Cql2Filter, { dialect: "oracle", columns: ARRAYS });
+  const ROWS = (sql: string) =>
+    `JSON_TABLE(${sql}, '$[*]' COLUMNS (t VARCHAR2(30) PATH '$.type()', s VARCHAR2(4000) PATH '$', n BINARY_DOUBLE PATH '$', l NUMBER PATH '$.length()', b BOOLEAN PATH '$'))`;
+  const TEXT = (x: string) => `(CASE WHEN ${x}.t = 'string' THEN ${x}.s END)`;
+
+  it("the JSON type as it is; text read through JSON(…), and only when it is strict JSON (lax reads ['a'] or [1,])", () => {
+    expect(array({ op: "a_contains", args: [p("doc"), ["a"]] })).toEqual({
+      where: `(CASE WHEN JSON_VALUE("doc", '$.type()') = 'array' THEN EXISTS (SELECT 1 FROM ${ROWS(`"doc"`)} cql2_e WHERE (${TEXT("cql2_e")} = :1 COLLATE BINARY) IS TRUE) END)`,
+      params: ["a"],
+    });
+    for (const c of ["tags", "big"]) {
+      expect(array({ op: "a_contains", args: [p(c), ["a"]] }).where).toBe(
+        `(CASE WHEN ("${c}" IS JSON STRICT AND JSON_VALUE("${c}", '$.type()') = 'array') THEN EXISTS (SELECT 1 FROM ${ROWS(`JSON("${c}")`)} cql2_e WHERE (${TEXT("cql2_e")} = :1 COLLATE BINARY) IS TRUE) END)`,
+      );
+    }
+  });
+
+  it("each literal element against elements of its own JSON type: numbers as BINARY_DOUBLE, booleans, days and instants from strings", () => {
+    const { where, params } = array({ op: "a_overlaps", args: [p("doc"), [1, true, { date: "2010-02-10" }, { timestamp: "2010-02-10T05:30:00Z" }]] });
+    expect(where).toContain(`((CASE WHEN cql2_e.t IN ('number', 'double', 'float') THEN cql2_e.n END) = ${DOUBLE(1)}) IS TRUE`);
+    expect(where).toContain(`((CASE WHEN cql2_e.t = 'boolean' THEN cql2_e.b END) = :2) IS TRUE`);
+    expect(where).toContain(`(cql2_day(CASE WHEN cql2_e.t = 'string' THEN cql2_e.s END) = :3 COLLATE BINARY) IS TRUE`);
+    expect(where).toContain(`(cql2_instant(CASE WHEN cql2_e.t = 'string' THEN cql2_e.s END) = :4 COLLATE BINARY) IS TRUE`);
+    expect(params).toEqual(["1e+0", true, "2010-02-10", "02010-02-10T05:30:00.000"]);
+  });
+
+  it("'' is NULL in Oracle: a literal \"\" matches an element whose length() is 0, with no parameter; two \"\" are equal", () => {
+    const { where, params } = array({ op: "a_contains", args: [p("doc"), [""]] });
+    expect(where).toContain(`EXISTS (SELECT 1 FROM ${ROWS(`"doc"`)} cql2_e WHERE (CASE WHEN cql2_e.t = 'string' AND cql2_e.l = 0 THEN 1 ELSE 0 END = 1))`);
+    expect(params).toEqual([]);
+    expect(array({ op: "a_equals", args: [p("tags"), p("doc")] }).where).toContain(
+      "OR ((CASE WHEN cql2_e.t = 'string' AND cql2_e.l = 0 THEN 1 ELSE 0 END = 1) AND (CASE WHEN cql2_f.t = 'string' AND cql2_f.l = 0 THEN 1 ELSE 0 END = 1))",
+    );
+  });
+
+  it("A_CONTAINEDBY: no element but JSON null outside the set; a literal first is the converse", () => {
+    const expected = `(CASE WHEN JSON_VALUE("doc", '$.type()') = 'array' THEN NOT EXISTS (SELECT 1 FROM ${ROWS(`"doc"`)} cql2_e WHERE cql2_e.t <> 'null' AND NOT ((${TEXT("cql2_e")} = :1 COLLATE BINARY) IS TRUE)) END)`;
+    expect(array({ op: "a_containedBy", args: [p("doc"), ["a"]] }).where).toBe(expected);
+    expect(array({ op: "a_contains", args: [["a"], p("doc")] }).where).toBe(expected);
+  });
+
+  it("a column without items holds no arrays: no value can match (NULL)", () => {
+    expect(array({ op: "a_contains", args: [p("plain"), ["a"]] })).toEqual({ where: "CAST(NULL AS BOOLEAN)", params: [] });
+  });
+
+  it("oracleValue: an array column as it is (the JSON type as the driver gives it, text to JSON.parse); without items, a CLOB or JSON column isn't served", () => {
+    expect(oracleValue("doc", ARRAYS.doc!)).toBe(`"doc"`);
+    expect(oracleValue("big", ARRAYS.big!)).toBe(`"big"`);
+    expect(oracleValue("tags", ARRAYS.tags!)).toBe(`"tags"`);
+    expect(oracleValue("big", { sqlType: "CLOB" })).toBeUndefined();
+    expect(oracleValue("doc", { sqlType: "JSON" })).toBeUndefined();
+  });
+});

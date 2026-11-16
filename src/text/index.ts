@@ -11,7 +11,7 @@ import { unwrap, type Fold } from "../core/folds.js";
 import { IDENTIFIER, KEYWORDS, NOT_A_CHARACTER } from "../core/grammar.js";
 import { isTemporal } from "../core/temporal.js";
 import type {
-  ArithmeticExpression, ArithmeticOperand, Cql2Filter, FoldedString, Geometry, NumericOperand, PropertyRef, ScalarLiteral,
+  ArithmeticExpression, ArithmeticOperand, ArrayLiteral, Cql2Filter, FoldedString, Geometry, NumericOperand, PropertyRef, ScalarLiteral,
   SpatialLiteral, TemporalOperand,
 } from "../core/types.js";
 import { assertValid } from "../validate/index.js";
@@ -160,6 +160,10 @@ const temporalOperand = (x: TemporalOperand): string =>
     ? `INTERVAL(${x.interval.map((end) => (typeof end === "string" ? quoteString(end) : propertyName(end))).join(", ")})`
     : operand(x);
 
+/** An operand of an array function: a property, or an array, `('a', 'b')` (`()` when empty: the grammar's `array`). */
+const arrayOperand = (x: PropertyRef | ArrayLiteral): string =>
+  Array.isArray(x) ? `(${(x as ArrayLiteral).map(literal).join(", ")})` : propertyName(x as PropertyRef);
+
 // --- Geometries, as WKT per the grammar (`spatialInstance`) ------------------------------------------------------
 
 /** `scientificNumericLiteral = mantissa "E" exponent`: JavaScript writes 1e+21 and 1.5e-7 with a lowercase e. */
@@ -196,6 +200,11 @@ function write(filter: Cql2Filter): string {
     case "s_crosses":
     case "s_contains":
       return `${filter.op.toUpperCase()}(${filter.args.map((g) => ("property" in g ? propertyName(g as PropertyRef) : spatialLiteral(g))).join(", ")})`;
+    case "a_equals":
+    case "a_contains":
+    case "a_containedBy":
+    case "a_overlaps":
+      return `${filter.op.toUpperCase()}(${filter.args.map(arrayOperand).join(", ")})`;
     default:
       if (isTemporal(filter.op)) return `${filter.op.toUpperCase()}(${(filter.args as readonly TemporalOperand[]).map(temporalOperand).join(", ")})`;
       return `${operand(filter.args[0] as ArithmeticOperand)} ${filter.op} ${operand(filter.args[1] as ArithmeticOperand)}`;

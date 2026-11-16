@@ -187,3 +187,43 @@ export function generateTemporalFilters(
   }
   return [...valid, ...nots, ...pairs];
 }
+
+/**
+ * The literal sets of the array filters: empty, one element, repeats, the equality traps (`1` / `1.0`, `true` / `1`,
+ * `"1"` / `1`, `""`, `"a "`, `"A"`, NFC / NFD), dates and timestamps, and mixed kinds (the standard's examples 81, 82).
+ */
+export const ARRAY_LITERALS: readonly unknown[][] = [
+  [], ["a"], ["a", "b"], ["b", "a", "a"], ["", "a "], ["A"], ["é"], ["é"], ["1"], ["😀", ""],
+  [1], [1, 2.5], [0.1], [0], [9007199254740991, -1], [true], [false, true],
+  [{ date: "2010-02-10" }], [{ date: "1969-07-16" }, { date: "2010-02-10" }], ["2010-02-10"],
+  [{ timestamp: "2010-02-10T05:30:00.123Z" }], [{ timestamp: "2010-02-10T00:00:00Z" }, { timestamp: "1969-07-16T13:32:00Z" }],
+  ["a", true, 1.0, 8], [{ timestamp: "2012-08-10T05:30:00Z" }, { date: "2010-02-10" }, false],
+];
+
+/**
+ * Array filters on the given properties: the four functions with every literal set, the property first (the portable
+ * shape), the literal first, two properties and two literals; with NOT, AND and OR.
+ */
+export function generateArrayFilters(properties: readonly string[]): Cql2Filter[] {
+  const ops = ["a_equals", "a_contains", "a_containedBy", "a_overlaps"];
+  const leaves: unknown[] = [];
+  ops.forEach((op, k) => {
+    for (const a of properties) {
+      for (const [i, l] of ARRAY_LITERALS.entries()) {
+        leaves.push({ op, args: [p(a), l] });
+        if ((i + k) % 3 === 0) leaves.push({ op, args: [l, p(a)] });
+      }
+      for (const b of properties) leaves.push({ op, args: [p(a), p(b)] });
+    }
+    for (const [i, l] of ARRAY_LITERALS.entries()) {
+      if ((i + k) % 4 === 0) leaves.push({ op, args: [l, ARRAY_LITERALS[(i * 5 + k) % ARRAY_LITERALS.length]] });
+    }
+  });
+  const valid = leaves.filter((f) => validate(f).valid) as Cql2Filter[];
+  const nots = valid.map((f) => ({ op: "not", args: [f] }) as Cql2Filter);
+  const pairs: Cql2Filter[] = [];
+  for (let i = 0; i + 1 < valid.length; i += 7) {
+    pairs.push({ op: "and", args: [valid[i]!, valid[i + 1]!] }, { op: "or", args: [valid[i]!, { op: "not", args: [valid[i + 1]!] }] });
+  }
+  return [...valid, ...nots, ...pairs];
+}

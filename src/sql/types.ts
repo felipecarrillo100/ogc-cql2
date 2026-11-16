@@ -5,7 +5,7 @@
 
 import type { Fold } from "../core/folds.js";
 import type { MatrixRelation } from "../core/relate.js";
-import type { ArithmeticOperator, Queryable, SpatialLiteral } from "../core/types.js";
+import type { ArithmeticOperator, ArrayLiteral, ArrayOperator, Queryable, SpatialLiteral } from "../core/types.js";
 
 export type SqlDialect = "sqlite" | "postgres" | "duckdb" | "oracle" | "sqlserver";
 
@@ -193,6 +193,55 @@ export interface Dialect {
    * `evaluate` decides it; `undefined` when a column holds no geometry. No prefilter: neither side is a constant box.
    */
   spatialPair?(relation: "s_intersects" | MatrixRelation, a: PairSide, b: PairSide, param: (value: SqlValue) => string, fn: (name: string) => string): string | undefined;
+  /**
+   * How the dialect reaches and reads an array column's elements (Array Functions); `undefined` when the column holds
+   * no arrays (no value can match). With it, the walker writes the array functions element by element, exactly as
+   * `evaluate` decides them on the served values. Absent: the class is `unsupported`.
+   */
+  arrayElements?(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined;
+  /**
+   * The array function of a column and literals, in the dialect's own operators, when it has an exact one (PostgreSQL's
+   * `@>` on its `cql2_*_array` functions, which a GIN index serves); `undefined`: the walker's element-by-element SQL.
+   */
+  arraysOwnKind?(op: ArrayOperator, sql: string, column: SqlColumn, literals: readonly ArrayLiteralValue[], param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined;
+  /**
+   * The array function of two array columns in the dialect's own SQL; `undefined`: the walker's, a `some` inside a
+   * `some` (DuckDB writes its own: see duckdb.ts).
+   */
+  arraysPair?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: { readonly sql: string; readonly column: SqlColumn }, fn: (name: string) => string): string | undefined;
+  /**
+   * An array function of a column and a literal set, or of two columns, decided by one function of the database
+   * (SQLite: `cql2_array`, running `evaluate`'s own code); `undefined` when a column holds no arrays (no value can
+   * match). The alternative to `arrayElements`: a dialect with either supports the class.
+   */
+  arrayFunction?(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: { readonly sql: string; readonly column: SqlColumn } | { readonly literal: ArrayLiteral }, param: (value: SqlValue) => string): string | undefined;
+}
+
+/** An element of an array literal, keyed as `evaluate` keys it. */
+export interface ArrayLiteralValue {
+  readonly kind: Exclude<Kind, "fold">;
+  readonly value: SqlValue;
+}
+
+/** An array column's elements, as a dialect gives them (Dialect.arrayElements). */
+export interface ArrayElements {
+  /**
+   * "Some element satisfies `condition`", the element named `name`: `condition` is given the SQL of one element and
+   * returns a condition on it (PostgreSQL: `EXISTS (SELECT 1 FROM unnest(…) AS name(v) WHERE …)`; DuckDB: one
+   * `list_filter` lambda).
+   */
+  some(name: string, condition: (x: string) => string): string;
+  /** The condition that the column's value is an array (else the function is NULL). */
+  readonly isArray: string;
+  /** The condition that element `x` is a value (no NULL element, no JSON null). */
+  present(x: string): string;
+  /** Element `x` read as `kind`, as `evaluate` reads a served element; `undefined` when none can be. */
+  view(x: string, kind: Exclude<Kind, "fold">): View | undefined;
+  /**
+   * The condition that element `x` is the empty string, for a dialect that reads `''` as NULL (Dialect.emptyStringIsNull:
+   * Oracle), whose text view of `""` is NULL: the walker uses it for a literal `""` and for two empty strings.
+   */
+  empty?(x: string): string;
 }
 
 /** A side of a spatial relation of two geometries: a column, or a literal. */

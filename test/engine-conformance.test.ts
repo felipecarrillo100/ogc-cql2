@@ -9,7 +9,7 @@ import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { evaluateConformance, toEvaluator, type SpatialEngine } from "ogc-cql2/evaluate";
 import { sqlConformance, toSql, type SqlOptions } from "ogc-cql2/sql";
 import { filterProperties, validate } from "ogc-cql2/validate";
-import { generateArithmeticFilters, generateFilters, generatePropertyFilters, generateTemporalFilters } from "./corpus.ts";
+import { generateArithmeticFilters, generateArrayFilters, generateFilters, generatePropertyFilters, generateTemporalFilters } from "./corpus.ts";
 import { leaf, LITERALS } from "./spatial-cases.ts";
 
 /** An engine that is never called: the lists depend on whether one is given, not on what it answers. */
@@ -25,7 +25,7 @@ describe("the lists", () => {
     expect(evaluateConformance({ spatialEngine: engine })).toEqual(ALL);
   });
 
-  it("sql: every class on postgres, duckdb and oracle; on sqlite, Spatial Functions only with SpatiaLite; on sqlserver, all but Spatial Functions", () => {
+  it("sql: every class on postgres, duckdb and oracle, and on sqlite with SpatiaLite (without it, all but Spatial Functions); on sqlserver, all but Spatial Functions", () => {
     expect(sqlConformance({ dialect: "postgres" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "duckdb" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "sqlite" })).toEqual(BUT_SPATIAL);
@@ -37,7 +37,8 @@ describe("the lists", () => {
 
   it("the guard: a class added to CONFORMANCE is in every list that has all of them", () => {
     // Written out, so that adding a class to CONFORMANCE without deciding where it is evaluated fails here.
-    expect(ALL).toHaveLength(10);
+    expect(ALL).toHaveLength(11);
+    expect(ALL.at(-1)).toBe(CONFORMANCE.arrays); // appended: the other classes keep their places in every list
     expect(evaluateConformance({ spatialEngine: engine })).toEqual(ALL);
   });
 
@@ -74,6 +75,7 @@ const FILTERS: Cql2Filter[] = [
   ...generatePropertyFilters(properties).filter((_, i) => i % 3 === 0),
   ...generateArithmeticFilters(properties).filter((_, i) => i % 3 === 0),
   ...generateTemporalFilters(properties).filter((_, i) => i % 5 === 0),
+  ...generateArrayFilters(properties).filter((_, i) => i % 2 === 0),
 ].filter((f) => validate(f).valid) as Cql2Filter[];
 
 const codeOf = (compile: () => unknown): string | undefined => {

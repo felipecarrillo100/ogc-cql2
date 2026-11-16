@@ -2,7 +2,7 @@
  * S_INTERSECTS in `toSql`'s `duckdb` dialect, run once per DuckDB engine, each in a test file (so a process) of its
  * own: a process loads one DuckDB native library, whichever it loads first.
  * - DuckDB 2.0 (`@duckdb/node-api`), as in Node;
- * - DuckDB 1.4.3 (`@duckdb/node-api-1.4`), the engine of DuckDB-WASM 1.32.0, as in the browser.
+ * - DuckDB 1.5.4 (`@duckdb/node-api-1.5`), the engine of DuckDB-WASM 1.33.1-dev57.0, as in the browser.
  *
  * The differential test runs every spatial filter of spatial-cases.ts on a `GEOMETRY` and a `BLOB` (WKB) column, each
  * without and with GeoParquet's bbox covering (`DOUBLE` and `FLOAT` fields), against `evaluate` on the same values.

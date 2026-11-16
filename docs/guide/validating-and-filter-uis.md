@@ -74,6 +74,7 @@ filtering; a client can do the same before sending, so that a person or an AI wr
 | `"type": "string"`, `"format": "date-time"` | `{ "timestamp": … }` |
 | `"type": "number"` or `"integer"` | numbers; BETWEEN |
 | `"type": "boolean"` | `true`, `false` |
+| `"type": "array"`, `"items": …` | an array function's array, its elements as `items` says (any without `items`); see [Array filters](arrays.md#queryables) |
 | another type, or a geometry (`"format": "geometry-…"`) | nothing: only `isNull` |
 | no `type` | anything |
 
@@ -95,6 +96,7 @@ const offer = {
   s_intersects: supported.includes(CONFORMANCE.basicSpatial),
   s_within: supported.includes(CONFORMANCE.spatial), // false here
   t_during: supported.includes(CONFORMANCE.temporal),
+  a_contains: supported.includes(CONFORMANCE.arrays),
 };
 ```
 

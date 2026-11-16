@@ -5,20 +5,23 @@
  * The shapes are the portable ones every server of those classes must accept: a property on the left and a literal
  * on the right (`/per/basic-cql2/cql2filter` and `/per/advanced-comparison-operators/*` let a server refuse
  * anything else). With the Property-Property Comparisons class, either side may be a property or a literal (the
- * `Operand…` shapes), with Arithmetic Expressions a number may be computed (the `Arithmetic…` shapes), and Temporal
- * Functions relate instants and intervals (`TemporalPredicate`). `validate`
- * checks a value against them; these types describe what it lets through.
+ * `Operand…` shapes), with Arithmetic Expressions a number may be computed (the `Arithmetic…` shapes), Temporal
+ * Functions relate instants and intervals (`TemporalPredicate`), and Array Functions compare sets of values
+ * (`ArrayPredicate`). `validate` checks a value against them; these types describe what it lets through.
  */
 
 /**
  * What a property holds, as a queryable describes it (OGC API Features Part 3): the JSON Schema `type` (or a list of
  * them, `["string", "null"]` for a nullable one), and `format` for dates (`date`) and instants (`date-time`). A queryables response's `properties` can be passed as it comes; other
- * keys (`title`, `description`…) are ignored. `string`, `number`, `integer` and `boolean` can be compared; other types
- * (`array`, `object`) and geometries (`format: "geometry-…"`) can only be tested with `isNull` in the profile.
+ * keys (`title`, `description`…) are ignored. `string`, `number`, `integer` and `boolean` can be compared; an `array`
+ * is tested with the array functions (`a_contains`…), its elements typed by `items`; `object` and geometries
+ * (`format: "geometry-…"`, tested with the spatial functions) can't be compared, only tested with `isNull`.
  */
 export interface Queryable {
   readonly type?: string | readonly string[];
   readonly format?: string;
+  /** For an `array`: what its elements hold, e.g. `{ "type": "string" }`. Without it, any scalar. */
+  readonly items?: Queryable;
 }
 
 /** A reference to a property of the features, `{ "property": "name" }`. */
@@ -307,6 +310,33 @@ export interface TemporalPredicate {
   readonly args: readonly [TemporalOperand, TemporalOperand];
 }
 
+// --- Array Functions: two arrays compared as sets ------------------------------------------------------------------
+
+export type ArrayOperator = "a_equals" | "a_contains" | "a_containedBy" | "a_overlaps";
+
+/**
+ * An array literal, `["a", "b"]` (CQL2-text `('a', 'b')`): a set of strings, numbers, booleans, dates and timestamps,
+ * in any mix. Order and repeats don't matter.
+ */
+export type ArrayLiteral = readonly ScalarLiteral[];
+
+/**
+ * `A_CONTAINS(property, (…))` and the other array functions, on sets (Requirement 16): A_EQUALS the same elements,
+ * A_CONTAINS a superset of the literal's, A_CONTAINEDBY a subset, A_OVERLAPS at least one in common. Elements compare
+ * as `=` does, never converted. A NULL or missing property, or a value that isn't an array, gives NULL; a NULL element
+ * is left out.
+ */
+export interface ArrayPredicate {
+  readonly op: ArrayOperator;
+  readonly args: readonly [PropertyRef, ArrayLiteral];
+}
+
+/** An array function with the Property-Property Comparisons class: a literal first, two properties, two literals. */
+export interface OperandArrayPredicate {
+  readonly op: ArrayOperator;
+  readonly args: readonly [PropertyRef | ArrayLiteral, PropertyRef | ArrayLiteral];
+}
+
 /** A CQL2-JSON filter in the profile. `true` and `false` are filters too: all features, or none. */
 export type Cql2Filter =
   | boolean
@@ -326,4 +356,6 @@ export type Cql2Filter =
   | ArithmeticComparison
   | ArithmeticBetween
   | ArithmeticIn
-  | TemporalPredicate;
+  | TemporalPredicate
+  | ArrayPredicate
+  | OperandArrayPredicate;

@@ -84,6 +84,19 @@ const SUB_REGION_EXAMPLES: readonly Example[] = [
   { label: "All sub-regions", filter: true },
 ];
 
+/** The arrays tables (Array Functions): the same columns in every store that serves them. */
+const ARRAY_EXAMPLES: readonly Example[] = [
+  { label: "Tags contain both “a” and “b” (A_CONTAINS)", filter: { op: "a_contains", args: [p("tags"), ["a", "b"]] } },
+  { label: "Tags are exactly “a” and “b”: order and repeats don't matter (A_EQUALS)", filter: { op: "a_equals", args: [p("tags"), ["a", "b"]] } },
+  { label: "Tags share one of “c”, “x” (A_OVERLAPS)", filter: { op: "a_overlaps", args: [p("tags"), ["c", "x"]] } },
+  { label: "Ratios only among 1 and 2.5: 1.0 is 1 (A_CONTAINEDBY)", filter: { op: "a_containedBy", args: [p("ratios"), [1, 2.5]] } },
+  { label: "A day among the days (a date literal)", filter: { op: "a_overlaps", args: [p("days"), [{ date: "2010-02-10" }]] } },
+  { label: "Tags and codes hold the same values (two properties)", filter: { op: "a_equals", args: [p("tags"), p("codes")] } },
+  { label: "Tags don't contain “a” (a NULL array stays out of both)", filter: { op: "not", args: [{ op: "a_contains", args: [p("tags"), ["a"]] }] } },
+  { label: "A number among strings: a type mismatch (the server refuses it)", filter: { op: "a_contains", args: [p("tags"), [1]] } },
+  { label: "All features", filter: true },
+];
+
 /** Examples for a server collection (or a GeoParquet file in this browser), by its id. A collection without its own gets {@link ANY_COLLECTION}. */
 export const SERVER_EXAMPLES: Readonly<Record<string, readonly Example[]>> = {
   states: STATE_EXAMPLES,
@@ -97,6 +110,11 @@ export const SERVER_EXAMPLES: Readonly<Record<string, readonly Example[]>> = {
   "pg-kitchen_sink": KITCHEN_SINK_EXAMPLES,
   "parquet-kitchen_sink": KITCHEN_SINK_EXAMPLES,
   "pg-kitchen_sink_3857": KITCHEN_SINK_EXAMPLES,
+  "parquet-arrays": ARRAY_EXAMPLES,
+  "gpkg-arrays": ARRAY_EXAMPLES,
+  "pg-arrays": ARRAY_EXAMPLES,
+  "ora-arrays": ARRAY_EXAMPLES,
+  "ms-arrays": ARRAY_EXAMPLES,
 };
 
 export const ANY_COLLECTION: readonly Example[] = [{ label: "All features", filter: true }];

@@ -45,8 +45,8 @@ inside them is complete. The first release covers:
 | Advanced Comparison Operators | `LIKE`, `BETWEEN`, `IN` |
 | Case-insensitive Comparison | `CASEI` |
 
-Further classes follow one at a time: spatial and temporal functions, arrays, property-to-property comparisons,
-arithmetic.
+Further classes followed one at a time, each in every part and every engine: the spatial classes, property-to-property
+comparisons, arithmetic, temporal functions (1.3.0) and array functions (1.6.0).
 
 ### Refuse with a reason, never silently
 

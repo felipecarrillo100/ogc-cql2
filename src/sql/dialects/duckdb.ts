@@ -21,8 +21,9 @@ import type { Fold } from "../../core/folds.js";
 import type { MatrixRelation } from "../../core/relate.js";
 import { literalParts } from "../../evaluate/spatial.js";
 import { caseiKey, compareCodePoints, dayNumber, dayOf, foldKey, instantOf } from "../../evaluate/strings.js";
-import type { ArithmeticOperator, SpatialLiteral } from "../../core/types.js";
-import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import type { ArithmeticOperator, ArrayOperator, SpatialLiteral } from "../../core/types.js";
+import { quote, type ArrayElements, type ArrayLiteralValue, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { heldKind } from "../../core/queryables.js";
 import { bareType, likePattern, queryableClass } from "./postgres.js";
 import { cachedLike } from "./sqlite.js";
 
@@ -72,11 +73,21 @@ function servedText(sql: string, cls: DuckClass): string | undefined {
 /**
  * The SQL expression to SELECT for a column, so that the application serves exactly the values the `duckdb` dialect
  * compares: dates as `YYYY-MM-DD`, instants as UTC `YYYY-MM-DDTHH:MM:SS.sssZ`, timestamps without a time zone the
- * same without `Z`, numbers as DOUBLE. Text and booleans as they are. `undefined` for a column type the dialect can't
- * compare (lists, structs, BLOB, GEOMETRY…), which an application shouldn't serve as a queryable.
+ * same without `Z`, numbers as DOUBLE. Text and booleans as they are. A list (Array Functions, since 1.6.0) as a list,
+ * each element served by the same rules, a list of lists alike. `undefined` for a column type the dialect can't
+ * compare (structs, BLOB, GEOMETRY, lists of them…), which an application shouldn't serve as a queryable.
  */
 export function duckdbValue(sqlColumn: string, column: SqlColumn): string | undefined {
-  const sql = quote(sqlColumn);
+  return valueOf(quote(sqlColumn), column, 0);
+}
+
+function valueOf(sql: string, column: SqlColumn, depth: number): string | undefined {
+  const list = listOf(sql, column);
+  if (list) {
+    const x = `cql2_e${depth || ""}`;
+    const element = valueOf(x, list.element, depth + 1);
+    return element && `list_transform(${list.sql}, lambda ${x}: ${element})`;
+  }
   const cls = duckClass(column);
   if (cls === "text" || cls === "boolean") return sql;
   if (cls === "number") return `CAST(${sql} AS DOUBLE)`;
@@ -347,6 +358,102 @@ function duckdbArithmetic(op: ArithmeticOperator, a: string, b: string): string 
   return `NULLIF(NULLIF(NULLIF(${e}, 'inf'::DOUBLE), '-inf'::DOUBLE), 'nan'::DOUBLE)`;
 }
 
+// --- Array Functions -----------------------------------------------------------------------------------------------
+
+/**
+ * A list column (`DESCRIBE`'s `VARCHAR[]`, `DOUBLE[]`, `VARCHAR[][]`…): its elements' declared type, and the column as
+ * a LIST. A fixed-size ARRAY (`VARCHAR[3]`) is cast to one: DuckDB 1.4's `unnest` refuses an ARRAY. `undefined` for a
+ * column that holds no lists.
+ */
+function listOf(sql: string, column: SqlColumn): { readonly element: SqlColumn; readonly sql: string } | undefined {
+  const m = column.sqlType === undefined ? null : /^(.*\S)\s*\[\s*(\d*)\s*\]\s*$/s.exec(column.sqlType);
+  if (!m) return undefined;
+  return { element: { sqlType: m[1]! }, sql: m[2] === "" ? sql : `CAST(${sql} AS ${m[1]}[])` };
+}
+
+/**
+ * A list column's elements, for the walker's element-by-element SQL, each in the dialect's own views of its declared
+ * type (a NULL element is no value). "Some element satisfies" is one `list_filter` lambda, never a correlated `unnest`
+ * subquery or a lambda in a lambda: @duckdb/node-api 1.4 deadlocks when a registered JavaScript function (cql2_day,
+ * cql2_instant…) runs in either (measured: after ~1,300 and ~2,600 queries; one lambda level ran 15,000). A list of
+ * lists has elements of no scalar kind: they equal nothing, and still count, as `evaluate` reads a nested array.
+ */
+function duckdbElements(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined {
+  const list = listOf(sql, column);
+  if (list === undefined) return undefined;
+  return {
+    some: (name, condition) => `len(list_filter(${list.sql}, lambda ${name}: ${condition(name)})) > 0`,
+    isArray: `${sql} IS NOT NULL`,
+    present: (x) => `${x} IS NOT NULL`,
+    view: (x, kind) => duckdbView(x, kind, list.element, fn, []),
+  };
+}
+
+/** A list's own kind of element, for the fast shape, and its type. Not instants: an infinite one has no millisecond view. */
+const OWN: Readonly<Partial<Record<DuckClass, { readonly kind: ArrayLiteralValue["kind"]; readonly type: string }>>> = {
+  text: { kind: "text", type: "VARCHAR" },
+  number: { kind: "number", type: "DOUBLE" },
+  boolean: { kind: "boolean", type: "BOOLEAN" },
+  date: { kind: "day", type: "DATE" },
+};
+
+/**
+ * A list against literals all of its own kind (text, number, boolean, date): `list_has_all` / `list_has_any`, which
+ * ignore NULLs (DuckDB's documentation), on the elements in their view, NULL elements left out, against the literals
+ * cast to that type (DuckDB would otherwise cast between kinds: `true` to `1`); text `COLLATE "binary"` on both sides,
+ * whatever `default_collation` says. `undefined` otherwise: the walker's element-by-element SQL.
+ */
+function duckdbOwnKind(op: ArrayOperator, sql: string, column: SqlColumn, literals: readonly ArrayLiteralValue[], param: (value: SqlValue, cast?: string) => string, fn: (name: string) => string): string | undefined {
+  const list = listOf(sql, column);
+  const own = list && OWN[duckClass(list.element)];
+  if (!list || !own || !literals.every((l) => l.kind === own.kind)) return undefined;
+  const view = duckdbView("cql2_e", own.kind, list.element, fn, [])!;
+  const binary = (x: string) => (own.kind === "text" ? `${x} COLLATE "binary"` : x);
+  const p = `list_filter(list_transform(${list.sql}, lambda cql2_e: ${view.sql}), lambda cql2_e: cql2_e IS NOT NULL)`;
+  const set = () => literals.length === 0 ? `CAST([] AS ${own.type}[])`
+    : `list_transform(list_value(${literals.map((l) => param(view.value ? view.value(l.value) : l.value, view.cast)).join(", ")}), lambda cql2_e: ${binary("cql2_e")})`;
+  switch (op) {
+    case "a_contains": return `list_has_all(${p}, ${set()})`;
+    case "a_containedBy": return `list_has_all(${set()}, ${p})`;
+    case "a_overlaps": return `list_has_any(${p}, ${set()})`;
+    case "a_equals": return `(list_has_all(${p}, ${set()}) AND list_has_all(${set()}, ${p}))`;
+  }
+}
+
+/**
+ * Two list columns, without a lambda in a lambda (see {@link duckdbElements}). A LIST holds one element type, so the
+ * two columns share at most one kind of view, the one `evaluate` compares their served elements in: as their `items`
+ * say (days, instants…), else by their own kinds (text, number, boolean). Each column becomes the list of its elements'
+ * keys in that view; `list_has_all` / `list_has_any` (which ignore NULLs) compare them, and "every element has a key"
+ * keeps an element of no kind (an inner list, text that is no date) counting, as `evaluate` counts it.
+ */
+function duckdbArrayPair(op: ArrayOperator, a: { readonly sql: string; readonly column: SqlColumn }, b: { readonly sql: string; readonly column: SqlColumn }, fn: (name: string) => string): string | undefined {
+  const [la, lb] = [listOf(a.sql, a.column), listOf(b.sql, b.column)];
+  if (la === undefined || lb === undefined) return undefined;
+  const held = [a.column.items, b.column.items].map((q) => (q === undefined ? undefined : heldKind(q))).find((h) => h !== undefined && h !== "any");
+  const kinds: ArrayLiteralValue["kind"][] = held === "text" ? ["text"] : held === "number" ? ["number"] : held === "boolean" ? ["boolean"]
+    : held === "date" ? ["day"] : held === "instant" ? ["instant"] : ["text", "number", "boolean"];
+  const kind = kinds.find((k) => duckdbView("x", k, la.element, fn, []) && duckdbView("x", k, lb.element, fn, []));
+  const guard = (body: string) => `(CASE WHEN ${a.sql} IS NOT NULL AND ${b.sql} IS NOT NULL THEN ${body} END)`;
+  if (kind === undefined) {
+    // No element of one can equal an element of the other: only empty sets meet.
+    const empty = (l: { sql: string }) => `len(list_filter(${l.sql}, lambda cql2_e: cql2_e IS NOT NULL)) = 0`;
+    const body = op === "a_contains" ? empty(lb) : op === "a_containedBy" ? empty(la) : op === "a_overlaps" ? "FALSE" : `${empty(la)} AND ${empty(lb)}`;
+    return guard(body);
+  }
+  const keys = (l: { element: SqlColumn; sql: string }) => {
+    const v = duckdbView("cql2_e", kind, l.element, fn, [])!;
+    return `list_transform(list_filter(${l.sql}, lambda cql2_e: cql2_e IS NOT NULL), lambda cql2_e: ${v.pair ?? v.sql})`;
+  };
+  /** Every element of `l` has a key (else it equals nothing, yet counts). */
+  const keyed = (l: { element: SqlColumn; sql: string }) => `len(list_filter(${keys(l)}, lambda cql2_e: cql2_e IS NULL)) = 0`;
+  /** Every element of `q` has an equal one in `p`. */
+  const contains = (p: typeof la, q: typeof lb) => `(${keyed(q)} AND list_has_all(${keys(p)}, ${keys(q)}))`;
+  const body = op === "a_contains" ? contains(la, lb) : op === "a_containedBy" ? contains(lb, la)
+    : op === "a_overlaps" ? `list_has_any(${keys(la)}, ${keys(lb)})` : `${contains(la, lb)} AND ${contains(lb, la)}`;
+  return guard(body);
+}
+
 export const duckdb: Dialect = {
   placeholder: (n) => `$${n}`,
   // As text, as the number views bind them (DuckDB-WASM binds a 17-digit number one unit off).
@@ -368,4 +475,7 @@ export const duckdb: Dialect = {
   intersects: duckdbIntersects,
   relate: duckdbRelate,
   spatialPair: duckdbPair,
+  arrayElements: duckdbElements,
+  arraysOwnKind: duckdbOwnKind,
+  arraysPair: duckdbArrayPair,
 };

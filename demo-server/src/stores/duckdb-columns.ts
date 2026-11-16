@@ -17,6 +17,13 @@ const NUMBER = ["float", "real", "double", "decimal", "numeric"];
 
 /** A DuckDB type (as `DESCRIBE` names it) → queryable; `undefined` for a type the dialect can't compare. */
 export function queryableOf(sqlType: string): Queryable | undefined {
+  // A list (VARCHAR[], DOUBLE[]…) or a fixed-size ARRAY (VARCHAR[3]): an array of its elements' type, a list of lists
+  // an array of values of no kind ({}), as the dialect compares them.
+  const list = /^(.*\S)\s*\[\s*\d*\s*\]\s*$/s.exec(sqlType);
+  if (list) {
+    const items = queryableOf(list[1]!);
+    return items === undefined ? undefined : { type: "array", items: items.type === "array" ? {} : items };
+  }
   const t = bare(sqlType);
   if (TEXT.includes(t)) return { type: "string" };
   if (INTEGER.includes(t)) return { type: "integer" };
@@ -103,7 +110,18 @@ export interface ParquetTable {
 }
 
 /** BIGINT comes back as a bigint: served as a number, as GeoJSON has it. */
-const plain = (value: unknown): unknown => (typeof value === "bigint" ? Number(value) : value);
+/**
+ * A value as JSON serves it: a BIGINT as a number; a LIST as an array (@duckdb/node-api gives `{ items }`, DuckDB-WASM
+ * an Arrow vector), element by element. An Arrow vector is iterated, not read with `toArray()`: that gives a typed
+ * array for numbers, where a NULL element becomes 0.
+ */
+const plain = (value: unknown): unknown => {
+  if (typeof value === "bigint") return Number(value);
+  if (value === null || typeof value !== "object" || value instanceof Uint8Array) return value;
+  if (Array.isArray((value as { items?: unknown }).items)) return (value as { items: unknown[] }).items.map(plain);
+  if (typeof (value as { toArray?: unknown }).toArray === "function" && Symbol.iterator in value) return Array.from(value as Iterable<unknown>, plain);
+  return value;
+};
 
 /**
  * The file's table, from what {@link describeSql} and {@link geoSql} read. Throws if it can't be served: no id
@@ -132,7 +150,8 @@ export function parquetTable(
       continue;
     }
     queryables[name] = q;
-    columns[name] = { ...q, sqlType };
+    // An array column is declared to the dialect by its type and its items (SqlColumn's type names scalars).
+    columns[name] = q.type === "array" ? { sqlType, items: q.items } : { ...q, sqlType };
   }
 
   const from = `read_parquet(${literal(file)})`;

@@ -22,7 +22,7 @@ import { heldKind, type HeldKind } from "../core/queryables.js";
 import { CONVERSE } from "../core/relate.js";
 import { OPEN, RELATIONS, isTemporal, type End } from "../core/temporal.js";
 import type {
-  ArithmeticOperand, Cql2Filter, FoldedString, IntervalEnd, PropertyRef, ScalarLiteral, SpatialLiteral, SpatialOperator,
+  ArithmeticOperand, ArrayLiteral, ArrayOperator, Cql2Filter, FoldedString, IntervalEnd, PropertyRef, ScalarLiteral, SpatialLiteral, SpatialOperator,
   StringSubject, TemporalOperand, TemporalPredicate,
 } from "../core/types.js";
 import { toEvaluator } from "../evaluate/index.js";
@@ -38,7 +38,7 @@ import { sqlserver } from "./dialects/sqlserver.js";
 import { postgres } from "./dialects/postgres.js";
 import { sqlite } from "./dialects/sqlite.js";
 import {
-  quote, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlOptions, type SqlValue, type SqlWhere, type View,
+  quote, type ArrayElements, type ArrayLiteralValue, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlOptions, type SqlValue, type SqlWhere, type View,
 } from "./types.js";
 
 export type { SqlColumn, SqlDialect, SqlOptions, SqlValue, SqlWhere } from "./types.js";
@@ -49,6 +49,11 @@ export { oracleFunctions, oracleValue } from "./dialects/oracle.js";
 export { sqlserverFunctions, sqlserverValue } from "./dialects/sqlserver.js";
 
 const DIALECTS: Readonly<Record<SqlOptions["dialect"], Dialect>> = { sqlite, postgres, duckdb, oracle, sqlserver };
+
+/** `op(a, b)` of two sets is `CONVERSE_ARRAY[op](b, a)`. */
+const CONVERSE_ARRAY: Readonly<Record<ArrayOperator, ArrayOperator>> = {
+  a_equals: "a_equals", a_contains: "a_containedBy", a_containedBy: "a_contains", a_overlaps: "a_overlaps",
+};
 
 /** `a op b` is `b MIRROR[op] a`. */
 const MIRROR: Readonly<Record<string, string>> = { "=": "=", "<>": "<>", "<": ">", ">": "<", "<=": ">=", ">=": "<=" };
@@ -85,8 +90,8 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
 
 /**
  * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
- * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite`
- * is `true`, and on `sqlserver` all but Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
+ * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite` is
+ * `true`, and on `sqlserver` all but Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
  * `toSql` would refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the
  * database has: the spatial classes also need PostGIS, DuckDB's spatial extension or Oracle Spatial, and the package's
  * functions installed (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`, `oracleFunctions`). A new array, in
@@ -94,9 +99,11 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
  */
 export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pick<SqlOptions, "columns">>): string[] {
   // A dialect with spatial SQL evaluates S_INTERSECTS (the two basic classes), and with `relate` Spatial Functions too.
-  if (relateOf(options)) return implementedBut([]);
-  if (DIALECTS[options.dialect].intersects) return implementedBut([CONFORMANCE.spatial]);
-  return implementedBut([CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial]);
+  // Array Functions where the dialect writes them (Dialect.arrayElements or Dialect.arrayFunction).
+  const arrays = DIALECTS[options.dialect].arrayElements || DIALECTS[options.dialect].arrayFunction ? [] : [CONFORMANCE.arrays];
+  if (relateOf(options)) return implementedBut(arrays);
+  if (DIALECTS[options.dialect].intersects) return implementedBut([CONFORMANCE.spatial, ...arrays]);
+  return implementedBut([CONFORMANCE.basicSpatial, CONFORMANCE.basicSpatialPlus, CONFORMANCE.spatial, ...arrays]);
 }
 
 /**
@@ -105,7 +112,7 @@ export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pi
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
  * @throws Cql2Error `unsupported` for a filter of a class not in {@link sqlConformance}: Spatial Functions on `sqlite`
- * without `spatialite` (S_DISJOINT included).
+ * without `spatialite` (S_DISJOINT included), Spatial Functions on `sqlserver`.
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
@@ -390,6 +397,99 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     return parts.length === 0 ? dialect.never : parts.length === 1 ? parts[0]! : coalesce(parts);
   };
 
+  /**
+   * An array function (Array Functions): a column and a literal set (a literal first is the converse function, so it
+   * is written one way), two columns, or two literal sets (decided here, exactly as `evaluate` decides them).
+   */
+  const arrays = (op: ArrayOperator, args: readonly (PropertyRef | ArrayLiteral)[], path: string): string => {
+    const [a, b] = args as [PropertyRef | ArrayLiteral, PropertyRef | ArrayLiteral];
+    const isRef = (x: PropertyRef | ArrayLiteral): x is PropertyRef => !Array.isArray(x);
+    if (!isRef(a) && !isRef(b)) return constant({ op, args: [a, b] } as Cql2Filter);
+    const [ref, other, refPath, otherPath, relation] = isRef(a)
+      ? [a, b, `${path}/args/0`, `${path}/args/1`, op]
+      : [b as PropertyRef, a, `${path}/args/1`, `${path}/args/0`, CONVERSE_ARRAY[op]];
+    const c = columnOf(ref, refPath);
+    if (dialect.arrayFunction) {
+      return dialect.arrayFunction(relation, c, isRef(other) ? columnOf(other, otherPath) : { literal: other }, param) ?? dialect.never;
+    }
+    const elements = dialect.arrayElements!(c.sql, c.column, fn);
+    if (isRef(other)) {
+      const d = columnOf(other, otherPath);
+      const others = dialect.arrayElements!(d.sql, d.column, fn);
+      if (elements === undefined || others === undefined) return dialect.never;
+      return dialect.arraysPair?.(relation, c, d, fn) ?? columnArrays(relation, elements, c.column, others, d.column);
+    }
+    if (elements === undefined) return dialect.never;
+    const literals = other.map((x) => literal(x) as ArrayLiteralValue);
+    return dialect.arraysOwnKind?.(relation, c.sql, c.column, literals, param, fn) ?? literalArrays(relation, elements, literals);
+  };
+
+  /**
+   * An array function of a column and literals, element by element: each literal element in its kind's view of an
+   * element, `(view = literal) IS TRUE` ({@link isTrue}) so that no comparison is NULL (a NULL one would let
+   * `NOT EXISTS` keep a row), inside `CASE WHEN <an array> THEN … END`. A literal element of a kind the column can't hold is never in it:
+   * A_CONTAINS and A_EQUALS FALSE, the others leave it out.
+   */
+  const literalArrays = (op: ArrayOperator, elements: ArrayElements, literals: readonly ArrayLiteralValue[]): string => {
+    const some = (condition: (x: string) => string) => elements.some("cql2_e", condition);
+    const kinds = [...new Set(literals.map((l) => l.kind))];
+    const foreign = kinds.some((kind) => elements.view("x", kind) === undefined);
+    const known = literals.filter((l) => elements.view("x", l.kind) !== undefined);
+    const match = (x: string, l: ArrayLiteralValue) => {
+      if (l.kind === "text" && isEmptyString(l.value) && elements.empty) return elements.empty(x);
+      const v = elements.view(x, l.kind)!;
+      return isTrue(`${v.sql} = ${valueParam(v, l.value)}`);
+    };
+    const contains = () => foreign ? FALSE : known.length === 0 ? TRUE
+      : known.map((l) => some((x) => match(x, l))).join(" AND ");
+    const containedBy = () => `NOT ${some((x) => `${elements.present(x)} AND NOT (${known.length === 0 ? FALSE : known.map((l) => match(x, l)).join(" OR ")})`)}`;
+    const overlaps = () => (known.length === 0 ? FALSE : some((x) => known.map((l) => match(x, l)).join(" OR ")));
+    const body = op === "a_contains" ? contains() : op === "a_containedBy" ? containedBy() : op === "a_overlaps" ? overlaps()
+      : `(${contains()}) AND (${containedBy()})`;
+    return `(${arrayCase(elements.isArray, body)})`;
+  };
+
+  /**
+   * "Condition `c` is TRUE" (FALSE when it is NULL), and the constants, in array SQL: SQL's `IS TRUE`, `TRUE`, `FALSE`,
+   * or, in a database without boolean values (Dialect.truth: T-SQL), a CASE and the dialect's own constants.
+   */
+  const isTrue = (c: string): string => (dialect.truth ? `(CASE WHEN ${c} THEN 1 ELSE 0 END = 1)` : `(${c}) IS TRUE`);
+  const TRUE = dialect.truth ? dialect.true : "TRUE";
+  const FALSE = dialect.truth ? dialect.false : "FALSE";
+  /** An array function: NULL unless `guard` (the values are arrays), else `body`, which is never NULL (no match is). */
+  const arrayCase = (guard: string, body: string): string =>
+    dialect.truth ? `CASE WHEN ${guard} THEN CASE WHEN ${body} THEN 1 ELSE 0 END END = 1` : `CASE WHEN ${guard} THEN ${body} END`;
+
+  /**
+   * Two array columns (Property-Property Comparisons): every element of one has an equal element in the other.
+   * Elements compare as `evaluate` compares two served elements: as their columns' `items` say (days, instants,
+   * text…), else by their own kinds, text, number or boolean (a value has one kind, so only one of them can be equal).
+   */
+  const columnArrays = (op: ArrayOperator, a: ArrayElements, columnA: SqlColumn, b: ArrayElements, columnB: SqlColumn): string => {
+    const held = [columnA.items, columnB.items].map((q) => (q === undefined ? undefined : heldKind(q))).find((h) => h !== undefined && h !== "any");
+    const kinds: ArrayLiteralValue["kind"][] = held === "text" ? ["text"] : held === "number" ? ["number"] : held === "boolean" ? ["boolean"]
+      : held === "date" ? ["day"] : held === "instant" ? ["instant"] : ["text", "number", "boolean"];
+    /** Whether element `x` of `p` equals element `y` of `q`. */
+    const same = (p: ArrayElements, x: string, q: ArrayElements, y: string): string => {
+      const parts = kinds.flatMap((kind) => {
+        const [vx, vy] = [p.view(x, kind), q.view(y, kind)];
+        if (!vx || !vy) return [];
+        const equal = isTrue(`${vx.pair ?? vx.sql} = ${vy.pair ?? vy.sql}`);
+        // Where '' is NULL (Oracle), two empty strings are equal all the same.
+        return kind === "text" && p.empty && q.empty ? [equal, `(${p.empty(x)} AND ${q.empty(y)})`] : [equal];
+      });
+      return parts.length === 0 ? FALSE : parts.join(" OR ");
+    };
+    /** Every element of `q` has an equal one in `p`. */
+    const contains = (p: ArrayElements, q: ArrayElements) =>
+      `NOT ${q.some("cql2_f", (y) => `${q.present(y)} AND NOT ${p.some("cql2_e", (x) => same(p, x, q, y))}`)}`;
+    const body = op === "a_contains" ? contains(a, b)
+      : op === "a_containedBy" ? contains(b, a)
+      : op === "a_overlaps" ? a.some("cql2_e", (x) => b.some("cql2_f", (y) => same(a, x, b, y)))
+      : `(${contains(a, b)}) AND (${contains(b, a)})`;
+    return `(${arrayCase(`${a.isArray} AND ${b.isArray}`, body)})`;
+  };
+
   /** `positive`: under an even number of NOTs, where a NULL and FALSE select the same rows (see Dialect.intersects). */
   const write = (f: Cql2Filter, path: string, positive = true): string => {
     if (typeof f === "boolean") return f ? dialect.true : dialect.false;
@@ -431,6 +531,11 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       case "s_crosses":
       case "s_contains":
         return spatial(f.op, f.args, path, positive);
+      case "a_equals":
+      case "a_contains":
+      case "a_containedBy":
+      case "a_overlaps":
+        return arrays(f.op, f.args, path);
       case "in": {
         const [s, list] = f.args as readonly [ArithmeticOperand, readonly ArithmeticOperand[]];
         if (!reads(s) || list.some((item) => reads(item) || isArithmetic(item))) {

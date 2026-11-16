@@ -11,7 +11,9 @@
  *   `evaluate`'s own code. SQLite's own LIKE ignores ASCII case, and its `lower()` folds ASCII only;
  * - S_INTERSECTS on a geometry column (its queryable's `format` is `geometry-…`), whose values are GeoPackage blobs
  *   (or plain WKB), goes through `cql2_intersects`, which runs `evaluate`'s own engine: SQLite has no spatial
- *   functions of its own.
+ *   functions of its own;
+ * - Array Functions (since 1.6.0) on a column declared with `items`, its arrays JSON text (as GDAL writes list fields),
+ *   go through `cql2_array`, which runs `evaluate`'s own code on the value as JSON.parse reads it.
  */
 import type { Fold } from "../../core/folds.js";
 import { accentiKey, caseiKey, dayOf, instantOf, likeRegExp, plainKey } from "../../evaluate/strings.js";
@@ -21,7 +23,8 @@ import { geometryParts, literalParts } from "../../evaluate/spatial.js";
 import { intersectsStored, intersectsStoredPair } from "../intersects.js";
 import { OPERATORS, operate } from "../../core/arithmetic.js";
 import { gpkgEnvelope, readStoredGeometry } from "../wkb.js";
-import type { ArithmeticOperator, SpatialLiteral } from "../../core/types.js";
+import type { ArithmeticOperator, ArrayLiteral, ArrayOperator, Cql2Filter, SpatialLiteral } from "../../core/types.js";
+import { toEvaluator } from "../../evaluate/index.js";
 import { quote, type Dialect, type PairSide, type Kind, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 const likeCache = new Map<string, RegExp>();
@@ -36,6 +39,36 @@ export function cachedLike(pattern: string): RegExp {
   }
   return re;
 }
+
+const arrayCache = new Map<string, (feature: unknown) => boolean | null>();
+
+/**
+ * An array function compiled by `evaluate`, cached: the same filter is tested on every row. `items` is a column's
+ * `items` as JSON text (NULL: any element).
+ */
+function arrayTest(op: string, args: readonly unknown[], items: readonly unknown[]): (feature: unknown) => boolean | null {
+  const key = JSON.stringify([op, args, items]);
+  let test = arrayCache.get(key);
+  if (!test) {
+    const queryables = Object.fromEntries(items.map((q, i) => [`v${i}`, typeof q === "string" ? { type: "array", items: JSON.parse(q) } : { type: "array" }]));
+    test = toEvaluator({ op, args } as Cql2Filter, { queryables });
+    if (arrayCache.size > 1000) arrayCache.clear();
+    arrayCache.set(key, test);
+  }
+  return test;
+}
+
+/** A stored value as the application serves it: JSON text parsed, else as it is (so anything but an array is NULL). */
+function servedArray(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+const bit = (t: boolean | null): number | null => (t === null ? null : t ? 1 : 0);
 
 /**
  * The SQL functions the `sqlite` dialect calls. Register each on the connection before running the SQL, e.g. with
@@ -53,6 +86,8 @@ export const sqliteFunctions: {
   readonly cql2_intersects_pair: (a: unknown, b: unknown) => number | null;
   readonly cql2_arithmetic: (op: unknown, a: unknown, b: unknown) => number | null;
   readonly cql2_wkt: (geometry: unknown) => string | null;
+  readonly cql2_array: (op: unknown, value: unknown, literal: unknown, items: unknown) => number | null;
+  readonly cql2_array_pair: (op: unknown, a: unknown, b: unknown, itemsA: unknown, itemsB: unknown) => number | null;
 } = {
   /** A text value, NFC-normalized. */
   cql2_text: (value) => (typeof value === "string" ? plainKey(value) : null),
@@ -98,7 +133,36 @@ export const sqliteFunctions: {
     const g = readStoredGeometry(value);
     return g === undefined ? null : g === null || geometryParts(g)?.box === undefined ? "" : wkt(g);
   },
+  /**
+   * 1 or 0: an array function (`a_contains`…, Array Functions) of a stored array, JSON text as GDAL writes list fields,
+   * and a literal set (its CQL2-JSON), the elements typed by `items` (the column's `items` as JSON, NULL for any).
+   * `evaluate` decides on the value as JSON.parse reads it: NULL for a NULL, malformed JSON, or a value that isn't an
+   * array.
+   */
+  cql2_array: (op, value, literal, items) =>
+    typeof op === "string" && typeof literal === "string"
+      ? bit(arrayTest(op, [{ property: "v0" }, JSON.parse(literal)], [items])({ properties: { v0: servedArray(value) } }))
+      : null,
+  /** 1 or 0: an array function of two stored arrays (Property-Property Comparisons), as `cql2_array`. */
+  cql2_array_pair: (op, a, b, itemsA, itemsB) =>
+    typeof op === "string"
+      ? bit(arrayTest(op, [{ property: "v0" }, { property: "v1" }], [itemsA, itemsB])({ properties: { v0: servedArray(a), v1: servedArray(b) } }))
+      : null,
 };
+
+/**
+ * An array function (Array Functions) through `cql2_array` / `cql2_array_pair`: `evaluate`'s own code on the stored
+ * JSON text. A column holds arrays when it has `items` (GeoPackage has no array type; GDAL writes list fields as JSON
+ * text, `application/json` in `gpkg_data_columns`); `undefined` otherwise. Placeholders are positional: parameters are
+ * added in the order they stand in the SQL.
+ */
+function sqliteArrays(op: ArrayOperator, a: { sql: string; column: SqlColumn }, b: { sql: string; column: SqlColumn } | { literal: ArrayLiteral }, param: (value: SqlValue) => string): string | undefined {
+  if (a.column.items === undefined || ("column" in b && b.column.items === undefined)) return undefined;
+  const items = (c: SqlColumn) => param(JSON.stringify(c.items));
+  return "literal" in b
+    ? `cql2_array('${op}', ${a.sql}, ${param(JSON.stringify(b.literal))}, ${items(a.column)}) = 1`
+    : `cql2_array_pair('${op}', ${a.sql}, ${b.sql}, ${items(a.column)}, ${items(b.column)}) = 1`;
+}
 
 /**
  * A column read as values of this kind: anything else is NULL there. Checked on each value, not from the declared
@@ -231,4 +295,5 @@ export const sqlite: Dialect = {
   intersects: sqliteIntersects,
   relate: sqliteRelate,
   spatialPair: sqlitePair,
+  arrayFunction: sqliteArrays,
 };
