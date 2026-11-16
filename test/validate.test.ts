@@ -367,6 +367,64 @@ describe("spatial filters", () => {
   });
 });
 
+describe("options.crs84: false, literals in a filter-crs CRS (OGC API Features Part 3, Requirement 8)", () => {
+  const point = (coordinates: unknown) => ({ type: "Point", coordinates });
+  const problems = (literal: unknown, options: Parameters<typeof validate>[1] = { crs84: false }) => {
+    const result = validate({ op: "s_intersects", args: [p("geometry"), literal] }, options);
+    return result.valid ? [] : result.problems.map(({ code, path }) => `${code} ${path}`);
+  };
+
+  it("by default, CRS84: Part 3's Conformance Test 10 box without filter-crs is refused", () => {
+    expect(problems({ bbox: [1000000, 1000000, 2000000, 2000000] }, {})).toEqual([
+      "invalid-geometry /args/1/bbox/0", "invalid-geometry /args/1/bbox/2", "invalid-geometry /args/1/bbox/1", "invalid-geometry /args/1/bbox/3",
+    ]);
+    expect(problems({ bbox: [1000000, 1000000, 2000000, 2000000] }, { crs84: true })).toHaveLength(4);
+  });
+
+  it.each([
+    ["a point in EPSG:3857", point([489805, 6585991])],
+    ["a box in EPSG:3857", { bbox: [445277.96317309426, 6446275.841017158, 556597.4539663679, 6621293.722740165] }],
+    ["a box in EPSG:4326, latitude first (Tokyo)", { bbox: [35, 139, 36, 140] }],
+    ["a box in EPSG:4326 across the antimeridian (axis 2 backwards)", { bbox: [-10, 170, 10, -170] }],
+    ["a polygon in metres", { type: "Polygon", coordinates: [[[379000, 3610000], [380000, 3610000], [380000, 3611000], [379000, 3610000]]] }],
+    ["a box with heights", { bbox: [400000, 6000000, -10, 500000, 7000000, 10] }],
+  ])("accepts %s", (_, literal) => {
+    expect(problems(literal)).toEqual([]);
+    expect(problems(literal, {}).length).toBeGreaterThan(0); // and CRS84 refuses it
+  });
+
+  it.each([
+    ["a position of one number", point([1]), "invalid-geometry /args/1/coordinates"],
+    ["a position of four numbers", point([1, 2, 3, 4]), "invalid-geometry /args/1/coordinates"],
+    ["a ring not closed", { type: "Polygon", coordinates: [[[0, 0], [1000, 0], [1000, 1000], [0, 1000]]] }, "invalid-geometry /args/1/coordinates/0/3"],
+    ["a LineString of one position", { type: "LineString", coordinates: [[400000, 6000000]] }, "invalid-geometry /args/1/coordinates"],
+    ["a bbox of 5 numbers", { bbox: [0, 0, 1, 1, 1] }, "invalid-geometry /args/1/bbox"],
+    ["a bbox with min height above max", { bbox: [400000, 6000000, 100, 500000, 7000000, 50] }, "invalid-geometry /args/1/bbox"],
+  ])("still refuses %s", (_, literal, problem) => {
+    expect(problems(literal)).toEqual([problem]);
+  });
+
+  it("checks the rest as usual: conformance, queryables", () => {
+    const filter = { op: "s_within", args: [p("geometry"), point([489805, 6585991])] };
+    const declared = validate(filter, { crs84: false, conformance: [CONFORMANCE.basic, CONFORMANCE.basicSpatial] });
+    expect(declared.valid ? [] : declared.problems.map((x) => x.code)).toEqual(["needs-conformance"]);
+    const unknown = validate(filter, { crs84: false, queryables: { name: { type: "string" } } });
+    expect(unknown.valid ? [] : unknown.problems.map((x) => x.code)).toEqual(["unknown-property"]);
+  });
+
+  it("evaluate, toText and toSql stay CRS84: an unconverted filter is refused there", async () => {
+    const { toEvaluator } = await import("ogc-cql2/evaluate");
+    const { toText } = await import("ogc-cql2/text");
+    const { toSql } = await import("ogc-cql2/sql");
+    const filter = { op: "s_intersects", args: [p("geometry"), point([489805, 6585991])] } as never;
+    expect(validate(filter, { crs84: false }).valid).toBe(true);
+    const invalid = expect.objectContaining({ code: "invalid-filter" });
+    expect(() => toEvaluator(filter)).toThrow(invalid);
+    expect(() => toText(filter)).toThrow(invalid);
+    expect(() => toSql(filter, { dialect: "postgres", columns: { geometry: { sqlType: "geometry" } } })).toThrow(invalid);
+  });
+});
+
 describe("options.queryables: types from the queryables (/per/basic-cql2/type-casts)", () => {
   // A queryables response's `properties`, as OGC API Features Part 3 serves them: extra keys are ignored.
   const queryables = {
