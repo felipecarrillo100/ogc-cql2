@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { evaluate, evaluateConformance, toEvaluator, type Truth } from "ogc-cql2/evaluate";
 import { fromText } from "ogc-cql2/parse";
-import { sqlConformance, toSql, type SqlDialect } from "ogc-cql2/sql";
+import { sqlConformance, toSql } from "ogc-cql2/sql";
 import { toText } from "ogc-cql2/text";
 import { requiredConformance, validate } from "ogc-cql2/validate";
 import { casei, generateArrayFilters, p } from "./corpus.ts";
@@ -314,11 +314,8 @@ describe("the engines", () => {
     expect(toSql(fn("a_contains", p("v"), ["a"]), { dialect: "oracle", columns: { v: { sqlType: "JSON", items: {} } } }).where).toContain("JSON_TABLE(");
   });
 
-  it.for(["sqlserver"] as SqlDialect[])("%s doesn't write it yet: left out of sqlConformance, refused as unsupported", (dialect) => {
-    expect(sqlConformance({ dialect })).not.toContain(CONFORMANCE.arrays);
-    expect(() => toSql(fn("a_contains", p("v"), ["a"]), { dialect, columns: { v: {} } })).toThrow(
-      expect.objectContaining({ code: "unsupported", details: { conformance: CONFORMANCE.arrays } }),
-    );
-    expect(codes(fn("a_contains", p("v"), ["a"]), { conformance: sqlConformance({ dialect }) })).toEqual(["needs-conformance "]);
+  it("sqlserver writes it, through OPENJSON (see test/sql-sqlserver.test.ts; demo-server's sqlserver-arrays.test.ts on SQL Server)", () => {
+    expect(sqlConformance({ dialect: "sqlserver" })).toContain(CONFORMANCE.arrays);
+    expect(toSql(fn("a_contains", p("v"), ["a"]), { dialect: "sqlserver", columns: { v: { sqlType: "nvarchar", items: {} } } }).where).toContain("OPENJSON(");
   });
 });

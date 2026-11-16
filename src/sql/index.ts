@@ -91,7 +91,7 @@ const relateOf = (options: Pick<SqlOptions, "dialect" | "spatialite">): Dialect[
 /**
  * The conformance classes `toSql` translates with these options, as URIs (as in `CONFORMANCE`): every class the
  * package implements on `postgres`, `duckdb` and `oracle`, on `sqlite` all but Spatial Functions unless `spatialite` is
- * `true`, and on `sqlserver` all but Spatial Functions and Array Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
+ * `true`, and on `sqlserver` all but Spatial Functions. Pass it to `validate` (`{ conformance }`) to refuse up front, as `needs-conformance`, what
  * `toSql` would refuse as `unsupported`; a filter valid against it never is. It says what the SQL needs, not what the
  * database has: the spatial classes also need PostGIS, DuckDB's spatial extension or Oracle Spatial, and the package's
  * functions installed (`postgresFunctions`, `duckdbFunctions`, `sqliteFunctions`, `oracleFunctions`). A new array, in
@@ -112,7 +112,7 @@ export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pi
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
  * @throws Cql2Error `unsupported` for a filter of a class not in {@link sqlConformance}: Spatial Functions on `sqlite`
- * without `spatialite` (S_DISJOINT included), Spatial Functions and Array Functions on `sqlserver`.
+ * without `spatialite` (S_DISJOINT included), Spatial Functions on `sqlserver`.
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   const valid = assertValid(filter);
@@ -426,8 +426,8 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
 
   /**
    * An array function of a column and literals, element by element: each literal element in its kind's view of an
-   * element, `(view = literal) IS TRUE` so that no comparison is NULL (a NULL one would let `NOT EXISTS` keep a row),
-   * inside `CASE WHEN <an array> THEN … END`. A literal element of a kind the column can't hold is never in it:
+   * element, `(view = literal) IS TRUE` ({@link isTrue}) so that no comparison is NULL (a NULL one would let
+   * `NOT EXISTS` keep a row), inside `CASE WHEN <an array> THEN … END`. A literal element of a kind the column can't hold is never in it:
    * A_CONTAINS and A_EQUALS FALSE, the others leave it out.
    */
   const literalArrays = (op: ArrayOperator, elements: ArrayElements, literals: readonly ArrayLiteralValue[]): string => {
@@ -438,16 +438,27 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     const match = (x: string, l: ArrayLiteralValue) => {
       if (l.kind === "text" && isEmptyString(l.value) && elements.empty) return elements.empty(x);
       const v = elements.view(x, l.kind)!;
-      return `(${v.sql} = ${valueParam(v, l.value)}) IS TRUE`;
+      return isTrue(`${v.sql} = ${valueParam(v, l.value)}`);
     };
-    const contains = () => foreign ? "FALSE" : known.length === 0 ? "TRUE"
+    const contains = () => foreign ? FALSE : known.length === 0 ? TRUE
       : known.map((l) => some((x) => match(x, l))).join(" AND ");
-    const containedBy = () => `NOT ${some((x) => `${elements.present(x)} AND NOT (${known.length === 0 ? "FALSE" : known.map((l) => match(x, l)).join(" OR ")})`)}`;
-    const overlaps = () => (known.length === 0 ? "FALSE" : some((x) => known.map((l) => match(x, l)).join(" OR ")));
+    const containedBy = () => `NOT ${some((x) => `${elements.present(x)} AND NOT (${known.length === 0 ? FALSE : known.map((l) => match(x, l)).join(" OR ")})`)}`;
+    const overlaps = () => (known.length === 0 ? FALSE : some((x) => known.map((l) => match(x, l)).join(" OR ")));
     const body = op === "a_contains" ? contains() : op === "a_containedBy" ? containedBy() : op === "a_overlaps" ? overlaps()
       : `(${contains()}) AND (${containedBy()})`;
-    return `(CASE WHEN ${elements.isArray} THEN ${body} END)`;
+    return `(${arrayCase(elements.isArray, body)})`;
   };
+
+  /**
+   * "Condition `c` is TRUE" (FALSE when it is NULL), and the constants, in array SQL: SQL's `IS TRUE`, `TRUE`, `FALSE`,
+   * or, in a database without boolean values (Dialect.truth: T-SQL), a CASE and the dialect's own constants.
+   */
+  const isTrue = (c: string): string => (dialect.truth ? `(CASE WHEN ${c} THEN 1 ELSE 0 END = 1)` : `(${c}) IS TRUE`);
+  const TRUE = dialect.truth ? dialect.true : "TRUE";
+  const FALSE = dialect.truth ? dialect.false : "FALSE";
+  /** An array function: NULL unless `guard` (the values are arrays), else `body`, which is never NULL (no match is). */
+  const arrayCase = (guard: string, body: string): string =>
+    dialect.truth ? `CASE WHEN ${guard} THEN CASE WHEN ${body} THEN 1 ELSE 0 END END = 1` : `CASE WHEN ${guard} THEN ${body} END`;
 
   /**
    * Two array columns (Property-Property Comparisons): every element of one has an equal element in the other.
@@ -463,11 +474,11 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       const parts = kinds.flatMap((kind) => {
         const [vx, vy] = [p.view(x, kind), q.view(y, kind)];
         if (!vx || !vy) return [];
-        const equal = `(${vx.pair ?? vx.sql} = ${vy.pair ?? vy.sql}) IS TRUE`;
+        const equal = isTrue(`${vx.pair ?? vx.sql} = ${vy.pair ?? vy.sql}`);
         // Where '' is NULL (Oracle), two empty strings are equal all the same.
         return kind === "text" && p.empty && q.empty ? [equal, `(${p.empty(x)} AND ${q.empty(y)})`] : [equal];
       });
-      return parts.length === 0 ? "FALSE" : parts.join(" OR ");
+      return parts.length === 0 ? FALSE : parts.join(" OR ");
     };
     /** Every element of `q` has an equal one in `p`. */
     const contains = (p: ArrayElements, q: ArrayElements) =>
@@ -476,7 +487,7 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
       : op === "a_containedBy" ? contains(b, a)
       : op === "a_overlaps" ? a.some("cql2_e", (x) => b.some("cql2_f", (y) => same(a, x, b, y)))
       : `(${contains(a, b)}) AND (${contains(b, a)})`;
-    return `(CASE WHEN ${a.isArray} AND ${b.isArray} THEN ${body} END)`;
+    return `(${arrayCase(`${a.isArray} AND ${b.isArray}`, body)})`;
   };
 
   /** `positive`: under an even number of NOTs, where a NULL and FALSE select the same rows (see Dialect.intersects). */

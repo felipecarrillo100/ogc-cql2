@@ -11,6 +11,10 @@
  *   characters past U+FFFF when converted).
  * - The geometries as `geometry` in SRID 4326, from WKB (exact; the text forms needn't be), with a spatial index:
  *   the kitchen sink's `geom`, and `dbo.states` (`STATE_NAME`, `geom`) from states.geojson.
+ * - `dbo.arrays` (Array Functions), the rows of arrays-rows.ts: each column of JSON text as nvarchar(max) (in NFC, as
+ *   stored), `doc` again as varchar(max) in UTF-8 (`doc_utf8`), and on SQL Server 2025 each again in the `json` type
+ *   (`tags_json`…: what SQL Server stores of the text; NULL where it refuses it). List them in the store's `arrays`,
+ *   with their items.
  *
  * Usage (from demo-server, the package built): node --env-file-if-exists=.env data/load-sqlserver.ts
  */
@@ -18,6 +22,7 @@ import { readFileSync } from "node:fs";
 import mssql from "mssql";
 import { sqlserverFunctions } from "ogc-cql2/sql";
 import { createSqlServerPool } from "../src/stores/sqlserver.ts";
+import { COLUMNS, ROWS } from "./arrays-rows.ts";
 
 type G = { type: string; coordinates?: unknown; geometries?: G[] };
 const file = JSON.parse(readFileSync(new URL("./kitchen_sink.geojson", import.meta.url), "utf8")) as {
@@ -108,9 +113,30 @@ CREATE TABLE dbo.states (id int PRIMARY KEY, STATE_NAME nvarchar(100), geom geom
   await pool.request().batch(`DROP TABLE IF EXISTS dbo.bin2_text;
 CREATE TABLE dbo.bin2_text (id int PRIMARY KEY, kept nvarchar(20), lost nvarchar(20) COLLATE Latin1_General_100_BIN2);
 INSERT INTO dbo.bin2_text VALUES (1, N'a', N'b');`);
+  // Arrays as JSON: nvarchar text, UTF-8 varchar text, and (SQL Server 2025) the json type.
+  const [{ major }] = (await pool.request().query<{ major: number }>("SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int) AS major")).recordset as [{ major: number }];
+  const json = major >= 17;
+  await pool.request().batch(`DROP TABLE IF EXISTS dbo.arrays;
+CREATE TABLE dbo.arrays (id int PRIMARY KEY, title nvarchar(200), ${COLUMNS.map((c) => `${c} nvarchar(max)`).join(", ")},
+  doc_utf8 varchar(max) COLLATE Latin1_General_100_CI_AS_SC_UTF8${json ? `, ${COLUMNS.map((c) => `${c}_json json`).join(", ")}` : ""});`);
+  for (const [id, title, ...values] of ROWS) {
+    const texts = values.map((v) => (v === null ? null : v.normalize("NFC")));
+    const request = pool.request().input("id", mssql.Int, id).input("title", mssql.NVarChar(200), title);
+    texts.forEach((t, i) => request.input(`v${i}`, mssql.NVarChar(mssql.MAX), t));
+    await request.query(`INSERT INTO dbo.arrays (id, title, ${COLUMNS.join(", ")}, doc_utf8)
+      VALUES (@id, @title, ${COLUMNS.map((_, i) => `@v${i}`).join(", ")}, @v${COLUMNS.indexOf("doc")})`);
+    if (!json) continue;
+    for (const [i, c] of COLUMNS.entries()) {
+      try {
+        await pool.request().input("id", mssql.Int, id).input("v", mssql.NVarChar(mssql.MAX), texts[i]).query(`UPDATE dbo.arrays SET ${c}_json = CAST(@v AS json) WHERE id = @id`);
+      } catch {
+        // Not JSON the json type takes (a scalar, malformed JSON, a number out of its range): NULL there.
+      }
+    }
+  }
   for (const batch of sqlserverFunctions()) await pool.request().batch(batch);
   const [{ n }] = (await pool.request().query<{ n: number }>("SELECT COUNT(*) AS n FROM dbo.kitchen_sink")).recordset as [{ n: number }];
-  console.log(`kitchen_sink: ${n}; the cql2_* functions created`);
+  console.log(`kitchen_sink: ${n}; arrays: ${ROWS.length}${json ? " (with the json type)" : ""}; the cql2_* functions created`);
 } finally {
   await pool.close();
 }

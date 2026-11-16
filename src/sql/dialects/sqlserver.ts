@@ -16,6 +16,12 @@
  * - CASEI, ACCENTI, LIKE with `_`, the reading of dates and instants from text, and arithmetic (whose errors would fail
  *   the whole query) use the functions {@link sqlserverFunctions} creates once in the database. SQL Server calls a
  *   scalar function only by a two-part name: the schema is `functionSchema`, else `dbo`.
+ * - Array Functions on JSON arrays, as text (nvarchar, varchar) or in the `json` type (SQL Server 2025), for a column
+ *   with `items`: element by element through OPENJSON, guarded by `ISJSON(…, ARRAY)` (OPENJSON fails the whole query on
+ *   anything else; compatibility level 130 or later). Strings compare as their UTF-16 code units, exactly (NFC assumed,
+ *   as above), numbers as float, a number beyond a float as infinite. A JSON number below 2.2250738585072014e-308 in
+ *   magnitude (subnormal) reads as 0, as SQL Server reads such text (measured; no exact reading exists in T-SQL). No
+ *   index serves these filters;
  * - S_INTERSECTS through `column.STDistance(literal) <= 0` on `geometry` (planar whatever its SRID; `geography` isn't
  *   compared), which uses the spatial index. SQL Server computes on a grid (its relations since 2012): a point within
  *   rounding of a boundary may be decided either way (measured: points within 1.4e-14° of a US state's boundary). The
@@ -27,7 +33,7 @@ import type { Fold } from "../../core/folds.js";
 import type { ArithmeticOperator, BboxLiteral, Geometry, Position, SpatialLiteral } from "../../core/types.js";
 import { accentMarkEntries, caseFoldingEntries } from "../../evaluate/strings.js";
 import { COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS } from "./composition.js";
-import { quote, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlValue, type View } from "../types.js";
+import { quote, type ArrayElements, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlValue, type View } from "../types.js";
 
 type MsClass = "text" | "number" | "float" | "boolean" | "date" | "timestamp" | "timestamptz" | "geometry" | "other";
 
@@ -78,10 +84,14 @@ function msText(sql: string, cls: MsClass): string | undefined {
  * The SQL expression to SELECT for a column, so that the application serves exactly the values the `sqlserver`
  * dialect compares: a date as `YYYY-MM-DD`; datetime2, datetime and smalldatetime as `YYYY-MM-DDTHH:MM:SS.sss`
  * (truncated); a datetimeoffset as UTC `YYYY-MM-DDTHH:MM:SS.sssZ`; numbers as float; a geometry as WKB. Text (char and nchar with their
- * padding) and bit as they are. `undefined` for a type the dialect can't compare (text, ntext, xml, binary…).
+ * padding) and bit as they are. An array column (Array Functions: JSON text, or the `json` type as nvarchar text), as
+ * the JSON text for the application to `JSON.parse`. `undefined` for a type the dialect can't compare (text, ntext, xml,
+ * binary…).
  */
 export function sqlserverValue(sqlColumn: string, column: SqlColumn): string | undefined {
   const sql = quote(sqlColumn);
+  const array = arrayColumn(column);
+  if (array) return array === "json" ? `CAST(${sql} AS nvarchar(max))` : sql;
   const cls = msClass(column);
   if (cls === "boolean" || cls === "float") return sql;
   if (cls === "number") return `CAST(${sql} AS float)`;
@@ -169,6 +179,69 @@ function sqlserverView(sql: string, kind: Kind, column: SqlColumn, fn: (name: st
   }
 }
 
+// --- Array Functions -----------------------------------------------------------------------------------------------
+
+/**
+ * What a column holds as arrays: JSON, in the `json` type (SQL Server 2025) or as text (nvarchar, varchar), declared
+ * with `items`; `undefined` for a column that holds none.
+ */
+function arrayColumn(column: SqlColumn): "json" | "text" | undefined {
+  if (column.items === undefined || column.sqlType === undefined) return undefined;
+  const t = bareType(column.sqlType);
+  return t === "json" ? "json" : t === "nvarchar" || t === "varchar" ? "text" : undefined;
+}
+
+/**
+ * Text as its UTF-16 code units and a final 0x01, for equality only: SQL Server compares binary values as if the shorter
+ * had trailing zero bytes (`0x61 = 0x6100`, so `'a'` would equal `'a\u0000'`), which the final byte rules out; UTF-16,
+ * unlike UTF-8 conversion, keeps a lone surrogate (the `json` type stores it as U+FFFD, as it is then served).
+ */
+const units = (sql: string): string => `CAST(CAST(${sql} AS nvarchar(max)) AS varbinary(max)) + 0x01`;
+
+/** One element `x` (a row of OPENJSON: `[type]` 0 null, 1 string, 2 number, 3 boolean) read as `kind`. */
+function elementView(x: string, kind: Exclude<Kind, "fold">, fn: (name: string) => string): View {
+  const text = `CASE WHEN ${x}.[type] = 1 THEN ${x}.[value] END`;
+  switch (kind) {
+    case "text":
+      return { sql: `(${units(text)})`, cast: "", wrap: units };
+    case "number": {
+      // A number beyond a float (1e400) is NULL as a float; to `evaluate` it is infinite, which equals no literal but
+      // does equal another infinity of its sign. Two elements compare as a key: the float's 17 digits (style 3, one
+      // text per float), -0 as 0, and `inf` / `-inf` beyond the range.
+      const f = `TRY_CAST(${x}.[value] AS float)`;
+      const key = `CASE WHEN ${f} = 0 THEN '0' ELSE COALESCE(CONVERT(varchar(30), ${f}, 3), CASE WHEN LEFT(${x}.[value], 1) = '-' THEN '-inf' ELSE 'inf' END) END`;
+      return {
+        sql: `(CASE WHEN ${x}.[type] = 2 THEN ${f} END)`,
+        cast: "",
+        wrap: asFloat,
+        value: numberText,
+        pair: `(CASE WHEN ${x}.[type] = 2 THEN ${key} END)${BIN2}`,
+      };
+    }
+    case "boolean":
+      return { sql: `(CASE WHEN ${x}.[type] = 3 THEN CASE WHEN ${x}.[value] = 'true' THEN 1 ELSE 0 END END)`, cast: "" };
+    case "day":
+      return { sql: `${fn("cql2_day")}(${text})${BIN2}`, cast: "", wrap: (p) => `CAST(${p} AS varchar(10))` };
+    case "instant":
+      return { sql: `${fn("cql2_instant")}(${text})`, cast: "", wrap: (p) => `CAST(${p} AS bigint)` };
+  }
+}
+
+/**
+ * An array column's elements, for the walker's element-by-element SQL: one OPENJSON row per element (JSON null is no
+ * value), NULL unless the value is a JSON array (ISJSON, before OPENJSON, which fails the whole query on anything
+ * else). Every view gives a value only for elements of its JSON type.
+ */
+function sqlserverElements(sql: string, column: SqlColumn, fn: (name: string) => string): ArrayElements | undefined {
+  if (arrayColumn(column) === undefined) return undefined;
+  return {
+    some: (name, condition) => `EXISTS (SELECT 1 FROM OPENJSON(${sql}) AS ${name} WHERE ${condition(name)})`,
+    isArray: `ISJSON(${sql}, ARRAY) = 1`,
+    present: (x) => `${x}.[type] <> 0`,
+    view: (x, kind) => elementView(x, kind, fn),
+  };
+}
+
 // --- Spatial -----------------------------------------------------------------------------------------------------
 
 /** A literal as ISO WKB (2D, little-endian), in hex: a box as a polygon, across the antimeridian two. */
@@ -244,6 +317,7 @@ export const sqlserver: Dialect = {
   like: (v, pattern, param) => v.like!(pattern, param),
   intersects: (sql, column, literal, param) => sqlserverIntersects(sql, column, literal, param),
   spatialPair: (relation, a, b) => sqlserverPair(relation, a, b),
+  arrayElements: sqlserverElements,
 };
 
 // --- sqlserverFunctions ------------------------------------------------------------------------------------------

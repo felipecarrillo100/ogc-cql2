@@ -17,9 +17,6 @@ const engine: SpatialEngine = { prepare: () => ({ relate: () => "FFFFFFFF2" }) }
 
 const ALL = Object.values(CONFORMANCE);
 const BUT_SPATIAL = ALL.filter((c) => c !== CONFORMANCE.spatial);
-// Array Functions: postgres, duckdb, sqlite and oracle write them; sqlserver doesn't yet, until its phase.
-const SQL_ALL = ALL.filter((c) => c !== CONFORMANCE.arrays);
-const SQL_BUT_SPATIAL = SQL_ALL.filter((c) => c !== CONFORMANCE.spatial);
 
 describe("the lists", () => {
   it("evaluate: every class but Spatial Functions; with a spatialEngine, every class", () => {
@@ -28,14 +25,14 @@ describe("the lists", () => {
     expect(evaluateConformance({ spatialEngine: engine })).toEqual(ALL);
   });
 
-  it("sql: every class on postgres, duckdb and oracle, and on sqlite with SpatiaLite (without it, all but Spatial Functions); on sqlserver, no Spatial Functions or Array Functions", () => {
+  it("sql: every class on postgres, duckdb and oracle, and on sqlite with SpatiaLite (without it, all but Spatial Functions); on sqlserver, all but Spatial Functions", () => {
     expect(sqlConformance({ dialect: "postgres" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "duckdb" })).toEqual(ALL);
     expect(sqlConformance({ dialect: "sqlite" })).toEqual(BUT_SPATIAL);
     expect(sqlConformance({ dialect: "sqlite", spatialite: false })).toEqual(BUT_SPATIAL);
     expect(sqlConformance({ dialect: "sqlite", spatialite: true })).toEqual(ALL);
     expect(sqlConformance({ dialect: "oracle" })).toEqual(ALL);
-    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(SQL_BUT_SPATIAL);
+    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(BUT_SPATIAL);
   });
 
   it("the guard: a class added to CONFORMANCE is in every list that has all of them", () => {

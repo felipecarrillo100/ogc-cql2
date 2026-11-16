@@ -21,7 +21,7 @@ To regenerate `usa.gpkg`: `sh make-usa-gpkg.sh` (set `OGR2OGR` to the binary if 
 - `arrays.parquet` and `arrays.gpkg`: the arrays table of `arrays.sql` (Array Functions), with the values where
   engines disagree:
   - `arrays.parquet` holds DuckDB lists (GeoParquet), made by `node data/make-arrays-parquet.ts`;
-  - the JSON stores (GeoPackage, Oracle) share their rows as JSON text in `arrays-rows.ts`;
+  - the JSON stores (GeoPackage, Oracle, SQL Server) share their rows as JSON text in `arrays-rows.ts`;
   - `arrays.gpkg` holds a GeoPackage table whose arrays are TEXT JSON, as GDAL writes list fields (`application/json`
     in `gpkg_data_columns`), plus JSON that isn't an array and the values where SQLite's own JSON reading parts from
     JSON.parse. It is made by `node data/make-arrays-gpkg.ts`. GeoPackage has no array type, so `collections.json`
@@ -60,4 +60,8 @@ The connection is in `demo-server/.env` (`MSSQL_SERVER`, `MSSQL_PORT`, `MSSQL_DA
 `node --env-file-if-exists=.env data/load-sqlserver.ts` (from `demo-server`, the package built). It creates
 `dbo.kitchen_sink` (three kinds of text column: nvarchar with a supplementary-character collation, varchar UTF-8, and
 nvarchar in the database's default collation), `dbo.states`, their spatial indexes, `dbo.bin2_text` (a column the store
-leaves out) and ogc-cql2's `cql2_*` functions. Text is stored in NFC. Safe to run again.
+leaves out), `dbo.arrays` (Array Functions: the rows of `arrays-rows.ts`, each column as nvarchar JSON text, `doc`
+again as UTF-8 varchar (`doc_utf8`), and on SQL Server 2025 each again in the `json` type, `tags_json`…, NULL where the
+type refuses the text) and ogc-cql2's `cql2_*` functions. Text is stored in NFC. Safe to run again. In
+`collections.json`, a table's optional `"arrays"` lists its JSON columns (nvarchar, varchar, `json`) that hold arrays,
+each with what its elements hold; on SQL Server 2022 the `*_json` columns are reported missing.

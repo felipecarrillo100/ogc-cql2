@@ -41,6 +41,17 @@
           "doc_json": {}, "doc_clob": {}
         }
       }] },
-    { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states", "title": "US states" }, { "table": "dbo.kitchen_sink", "title": "Kitchen sink" }] }
+    { "source": "sqlserver", "prefix": "ms-", "tables": [{ "table": "dbo.states", "title": "US states" }, { "table": "dbo.kitchen_sink", "title": "Kitchen sink" },
+      {
+        "table": "dbo.arrays",
+        "title": "Arrays",
+        "arrays": {
+          "tags": { "type": "string" }, "codes": { "type": "string" }, "ratios": { "type": "number" }, "counts": { "type": "integer" },
+          "flags": { "type": "boolean" }, "days": { "type": "string", "format": "date" }, "moments": { "type": "string", "format": "date-time" }, "doc": {},
+          "tags_json": { "type": "string" }, "codes_json": { "type": "string" }, "ratios_json": { "type": "number" }, "counts_json": { "type": "integer" },
+          "flags_json": { "type": "boolean" }, "days_json": { "type": "string", "format": "date" }, "moments_json": { "type": "string", "format": "date-time" },
+          "doc_json": {}, "doc_utf8": {}
+        }
+      }] }
   ]
 }

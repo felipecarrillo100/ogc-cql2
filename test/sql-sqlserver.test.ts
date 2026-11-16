@@ -155,10 +155,81 @@ describe("Basic Spatial Functions in the sqlserver dialect", () => {
   });
 
   it("Spatial Functions refused, S_DISJOINT with them (it belongs to that class): write NOT S_INTERSECTS", () => {
-    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.spatial && c !== CONFORMANCE.arrays));
+    expect(sqlConformance({ dialect: "sqlserver" })).toEqual(Object.values(CONFORMANCE).filter((c) => c !== CONFORMANCE.spatial));
     for (const op of ["s_disjoint", "s_within", "s_touches", "s_equals"]) {
       expect(() => s({ op, args: [p("geometry"), pt(1, 2)] })).toThrowError(expect.objectContaining({ code: "unsupported" }));
     }
+  });
+});
+
+describe("Array Functions: JSON arrays, element by element through OPENJSON", () => {
+  const ARRAYS: Record<string, SqlColumn> = {
+    tags: { sqlType: "nvarchar(max)", items: { type: "string" } },
+    utf8: { sqlType: "varchar(max)", items: {} },
+    doc: { sqlType: "json", items: {} },
+    plain: { type: "string", sqlType: "nvarchar(100)" }, // no items: text, not an array
+    padded: { sqlType: "nchar(10)", items: {} }, // padded: holds no arrays
+  };
+  const array = (filter: unknown) => toSql(filter as Cql2Filter, { dialect: "sqlserver", columns: ARRAYS });
+  const units = (x: string) => `CAST(CAST(${x} AS nvarchar(max)) AS varbinary(max)) + 0x01`;
+  const TEXT = (x: string) => `(${units(`CASE WHEN ${x}.[type] = 1 THEN ${x}.[value] END`)})`;
+  /** T-SQL has no boolean values: an array function is 1, 0 or NULL, compared with 1, and each match a CASE. */
+  const fn = (column: string, body: string) => `(CASE WHEN ISJSON("${column}", ARRAY) = 1 THEN CASE WHEN ${body} THEN 1 ELSE 0 END END = 1)`;
+  const match = (c: string) => `(CASE WHEN ${c} THEN 1 ELSE 0 END = 1)`;
+
+  it("text and the json type alike: OPENJSON, only for a JSON array (ISJSON), strings as UTF-16 code units", () => {
+    for (const c of ["tags", "utf8", "doc"]) {
+      expect(array({ op: "a_contains", args: [p(c), ["a"]] })).toEqual({
+        where: fn(c, `EXISTS (SELECT 1 FROM OPENJSON("${c}") AS cql2_e WHERE ${match(`${TEXT("cql2_e")} = ${units("@p1")}`)})`),
+        params: ["a"],
+      });
+    }
+  });
+
+  it("each literal element against elements of its own JSON type: numbers as float, booleans, days and instants from strings", () => {
+    const { where, params } = array({ op: "a_overlaps", args: [p("doc"), [1, true, { date: "2010-02-10" }, { timestamp: "2010-02-10T05:30:00Z" }]] });
+    expect(where).toContain(match("(CASE WHEN cql2_e.[type] = 2 THEN TRY_CAST(cql2_e.[value] AS float) END) = CAST(@p1 AS float)"));
+    expect(where).toContain(match("(CASE WHEN cql2_e.[type] = 3 THEN CASE WHEN cql2_e.[value] = 'true' THEN 1 ELSE 0 END END) = @p2"));
+    expect(where).toContain(match(`"dbo".cql2_day(CASE WHEN cql2_e.[type] = 1 THEN cql2_e.[value] END) COLLATE Latin1_General_BIN2 = CAST(@p3 AS varchar(10))`));
+    expect(where).toContain(match(`"dbo".cql2_instant(CASE WHEN cql2_e.[type] = 1 THEN cql2_e.[value] END) = CAST(@p4 AS bigint)`));
+    expect(params).toEqual(["1e+0", true, "2010-02-10", "1265779800000"]);
+  });
+
+  it("no SQL boolean values anywhere: no IS TRUE, TRUE or FALSE; an empty set is 1 = 0", () => {
+    const filters = [
+      { op: "a_equals", args: [p("tags"), ["a", 1]] },
+      { op: "a_containedBy", args: [p("doc"), []] },
+      { op: "a_overlaps", args: [p("doc"), p("tags")] },
+      { op: "not", args: [{ op: "a_contains", args: [p("utf8"), [true]] }] },
+    ];
+    for (const f of filters) expect(array(f).where).not.toMatch(/IS TRUE|\bTRUE\b|\bFALSE\b/);
+    expect(array({ op: "a_overlaps", args: [p("doc"), []] }).where).toBe(fn("doc", "1 = 0"));
+  });
+
+  it("A_CONTAINEDBY: no element but JSON null outside the set; a literal first is the converse", () => {
+    const expected = fn("doc", `NOT EXISTS (SELECT 1 FROM OPENJSON("doc") AS cql2_e WHERE cql2_e.[type] <> 0 AND NOT (${match(`${TEXT("cql2_e")} = ${units("@p1")}`)}))`);
+    expect(array({ op: "a_containedBy", args: [p("doc"), ["a"]] }).where).toBe(expected);
+    expect(array({ op: "a_contains", args: [["a"], p("doc")] }).where).toBe(expected);
+  });
+
+  it("two columns: numbers by a key (17 digits, -0 as 0, beyond a float infinite), so 1e400 equals 2e400", () => {
+    const key = (x: string) => `CASE WHEN TRY_CAST(${x}.[value] AS float) = 0 THEN '0' ELSE COALESCE(CONVERT(varchar(30), TRY_CAST(${x}.[value] AS float), 3), CASE WHEN LEFT(${x}.[value], 1) = '-' THEN '-inf' ELSE 'inf' END) END`;
+    const where = array({ op: "a_overlaps", args: [p("doc"), p("utf8")] }).where;
+    expect(where).toMatch(/^\(CASE WHEN ISJSON\("doc", ARRAY\) = 1 AND ISJSON\("utf8", ARRAY\) = 1 THEN /);
+    expect(where).toContain(match(`${TEXT("cql2_e")} = ${TEXT("cql2_f")}`));
+    expect(where).toContain(match(`(CASE WHEN cql2_e.[type] = 2 THEN ${key("cql2_e")} END) COLLATE Latin1_General_BIN2 = (CASE WHEN cql2_f.[type] = 2 THEN ${key("cql2_f")} END) COLLATE Latin1_General_BIN2`));
+  });
+
+  it("a column without items, or padded (nchar), holds no arrays: no value can match (NULL)", () => {
+    expect(array({ op: "a_contains", args: [p("plain"), ["a"]] })).toEqual({ where: "1 = NULL", params: [] });
+    expect(array({ op: "a_contains", args: [p("padded"), ["a"]] })).toEqual({ where: "1 = NULL", params: [] });
+  });
+
+  it("sqlserverValue: an array column as its JSON text (the json type as nvarchar), for JSON.parse", () => {
+    expect(sqlserverValue("tags", ARRAYS.tags!)).toBe(`"tags"`);
+    expect(sqlserverValue("utf8", ARRAYS.utf8!)).toBe(`"utf8"`);
+    expect(sqlserverValue("doc", ARRAYS.doc!)).toBe(`CAST("doc" AS nvarchar(max))`);
+    expect(sqlserverValue("doc", { sqlType: "json" })).toBeUndefined();
   });
 });
 

@@ -10,12 +10,15 @@
  * - A `geometry` column in SRID 4326 is the geometry, served as WKB (exact); in another SRID, or `geography` (not
  *   planar), it is served without geometry, reported.
  * - Values are selected through `sqlserverValue`, so what is served is exactly what the SQL compares.
+ * - Columns of JSON (nvarchar or varchar text, or the `json` type of SQL Server 2025) that hold arrays (Array
+ *   Functions) are listed in `arrays` with their `items`, and served parsed.
  */
 import mssql from "mssql";
 import type { Cql2Filter } from "ogc-cql2";
 import { sqlConformance, sqlserverValue, toSql, type SqlColumn } from "ogc-cql2/sql";
 import { decodeWkb } from "../geopackage/binary.ts";
-import { type CollectionDescription, type Feature, type ScalarQueryable, type Store } from "./types.ts";
+import { servedArray } from "./geopackage.ts";
+import { type CollectionDescription, type Feature, type Queryable, type ScalarQueryable, type Store } from "./types.ts";
 
 export interface SqlServerTable {
   /** `schema.table`, or `table` in `dbo`. */
@@ -23,6 +26,8 @@ export interface SqlServerTable {
   /** The id column, when it isn't the (single-column) primary key. */
   readonly id?: string;
   readonly title?: string;
+  /** JSON columns (nvarchar, varchar, or `json`) that hold arrays, with what their elements hold (`items`, `{}` for any). */
+  readonly arrays?: Readonly<Record<string, ScalarQueryable>>;
 }
 
 export interface SqlServerSource {
@@ -36,6 +41,8 @@ export interface SqlServerSource {
 const bracket = (name: string): string => `[${name.replaceAll("]", "]]")}]`;
 const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const ID = /^[A-Za-z0-9_-]+$/;
+/** The types a column of JSON holding arrays can have. */
+const JSON_TYPES = ["nvarchar", "varchar", "json"];
 
 /** A SQL Server type → queryable; `undefined` for a type the dialect can't compare. */
 function queryableOf(type: string, scale: number): ScalarQueryable | undefined {
@@ -131,10 +138,26 @@ async function tableStore(pool: mssql.ConnectionPool, id: string, entry: SqlServ
     if (srid === 4326) geometryColumn = { format: "geometry-any", sqlType: "geometry", column: geometryInfo.name };
     else warnings.push(`Its geometry column "${geometryInfo.name}" is in SRID ${srid}: features are served without geometry.`);
   }
-  const queryables: Record<string, ScalarQueryable> = {};
+  const queryables: Record<string, Queryable> = {};
   const columns: Record<string, SqlColumn> = {};
+  const arrays = entry.arrays ?? {};
+  for (const name of Object.keys(arrays)) {
+    const c = columnsInfo.find((x) => x.name === name);
+    if (!c) warnings.push(`"arrays" lists "${name}", which isn't a column.`);
+    else if (!JSON_TYPES.includes(c.type)) warnings.push(`"arrays" lists "${name}" (${c.type}), which can't hold JSON: served as its type.`);
+  }
   for (const c of columnsInfo) {
     if (c.name === idColumn || c.name === geometryInfo?.name) continue;
+    if (Object.hasOwn(arrays, c.name) && JSON_TYPES.includes(c.type)) {
+      if (c.collation === "Latin1_General_100_BIN2" && c.type === "nvarchar") {
+        warnings.push(`Column "${c.name}" (${c.type} ${c.collation}) isn't served: that collation loses characters past U+FFFF when converted.`);
+        continue;
+      }
+      const items = arrays[c.name]!;
+      queryables[c.name] = { type: "array", items };
+      columns[c.name] = { sqlType: c.type, items };
+      continue;
+    }
     if (c.type === "geography") {
       warnings.push(`Column "${c.name}" (geography) isn't served: it is ellipsoidal, and CQL2 compares planar coordinates.`);
       continue;
@@ -162,7 +185,7 @@ async function tableStore(pool: mssql.ConnectionPool, id: string, entry: SqlServ
   const description: CollectionDescription = { id, title: entry.title ?? tableName, source: "sqlserver", featureCount: count!.n, warnings };
   const toFeature = (row: Record<string, unknown>): Feature => {
     const properties: Record<string, unknown> = {};
-    for (const n of names) properties[n] = row[n];
+    for (const n of names) properties[n] = columns[n]!.items ? servedArray(row[n] ?? null) : row[n];
     const bytes = row.geometry;
     return { type: "Feature", id: row.id as string | number, geometry: bytes instanceof Uint8Array ? decodeWkb(bytes) : null, properties };
   };

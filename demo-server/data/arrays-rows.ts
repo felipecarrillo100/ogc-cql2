@@ -1,6 +1,6 @@
 /**
  * The arrays table's rows as JSON text, shared by the stores that hold arrays as JSON (make-arrays-gpkg.ts for
- * GeoPackage, load-oracle.ts for Oracle): the values where engines disagree (NULL arrays, NULL elements, repeats, empty
+ * GeoPackage, load-oracle.ts for Oracle, load-sqlserver.ts for SQL Server): the values where engines disagree (NULL arrays, NULL elements, repeats, empty
  * arrays, `""`, `"a "`, `"A"`, NFC and NFD, `1` / `1.0`, `-0`, dates and instants as text), GDAL's pretty-printed JSON,
  * JSON that isn't an array or isn't JSON, and where engines' own JSON reading parts from JSON.parse (an integer beyond
  * 2^53, a lone surrogate, `\u0000`, `1e400`).
