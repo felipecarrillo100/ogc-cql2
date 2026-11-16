@@ -5,6 +5,40 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
+## [1.7.0] - Unreleased
+
+### Added
+
+- **Literals in another CRS** (OGC API Features Part 3's `filter-crs`, Requirement 8), asked for by a server built on
+  the package: a CQL2-text filter in EPSG:3857, or in EPSG:4326 east or west of 90°, was refused while it was read.
+  CQL2's own Example 12 (`filter-crs` EPSG:32635) was refused too.
+  - **`validate` and `fromText` take `crs84: false`:** the literals' numbers aren't checked against CRS84's ranges,
+    nor a box's axis order; everything else is. The default stays CRS84, strict, as Part 3's Conformance Test 10
+    requires.
+  - **`toSql` takes `literals: { srid, yx }`:**
+    - `yx` (latitude or northing first, as EPSG:4326) swaps the axes, on every dialect;
+    - an SRID other than 4326 is reprojected by the database: PostgreSQL, with PostGIS's `ST_Transform` in a scalar
+      subquery, computed once, the GiST index still used. Elsewhere it is `unsupported` (`details.srid`);
+    - `sqlReprojects(options)` says where.
+    - The comparison stays planar in CRS84. Two literals are then decided by the database, after its transform. A box
+      running backwards is refused outside 4326.
+  - **`evaluate` and `toText` stay CRS84:** an application converts first.
+  - **Tested on PostGIS 3.1–3.7, amd64 and arm64,** in EPSG:3857, EPSG:4326 and UTM:
+    - every literal selects exactly what it selects converted to CRS84 first;
+    - with GEOS 3.13 or later, exactly what `evaluate` selects.
+  - SQL without `literals` is unchanged, byte for byte.
+- **`SqlLiterals`** (the type) and **`sqlReprojects`** in `ogc-cql2/sql`.
+
+### Documentation
+
+- **[Literals in another CRS](docs/guide/spatial.md#literals-in-another-crs-filter-crs)** in the guide:
+  - reading, converting or giving `toSql` the CRS;
+  - boxes and boundaries after conversion;
+  - coordinates outside a CRS's area of use, which the server refuses;
+  - the one silent mistake.
+- **JSTS as `evaluate`'s spatial engine,** beside GEOS: the adapter and what was measured (the standard's Table 14
+  right, the same answers as GEOS on the US states, 5 to 6 times slower).
+
 ## [1.6.2] - Unreleased
 
 ### Fixed

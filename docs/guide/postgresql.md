@@ -50,12 +50,38 @@ const { rows } = await client.query(`SELECT ${select} FROM myschema.places WHERE
   ```
 
   Data stored in another CRS isn't exact on its original vertices any more (5 comes back as 4.999999999999998).
+- **Literals in another CRS** (since 1.7.0; OGC API Features' `filter-crs`; the rules in
+  [Spatial filters](spatial.md#literals-in-another-crs-filter-crs)): see [below](#literals-in-another-crs).
 - **`postgresValue(column)`** is what to SELECT for each column, so that what you serve is exactly what the SQL
   compared: dates as `YYYY-MM-DD`, instants as UTC `…Z` with milliseconds, numbers as double precision.
 - **Tested on real databases:** thousands of generated filters give the same features from a GeoJSON file
   (`evaluate`), a GeoPackage (SQLite) and PostgreSQL / PostGIS.
 - **The classes:** every class the package implements (`sqlConformance({ dialect: "postgres" })`); the spatial ones
   need PostGIS in the database, and the others `postgresFunctions` installed.
+
+## Literals in another CRS
+
+With `literals: { srid: 3857 }`, each literal is read in its SRID and transformed to 4326 in a scalar subquery:
+
+```sql
+("geom" && (SELECT ST_Transform(ST_MakeEnvelope($3::double precision, $1::double precision, $4::double precision,
+  $2::double precision, 3857), 4326)) AND NOT ST_Relate("geom", (SELECT ST_Transform(…, 4326)), 'FF*FF****'))
+```
+
+- **Computed once a query:** without the subquery, PostgreSQL would transform the literal again for every candidate
+  row it relates (measured: half the time with it). The GiST index is still used, with parameters and generic plans
+  (PostGIS 3.1–3.7).
+- **The SRID must be in `spatial_ref_sys`:** PostGIS refuses an SRID it doesn't know (`Invalid reserved SRID`).
+- **Axis order:** PostGIS reads every SRID as x, y (EPSG:4326 as longitude first), so give `yx: true` for a
+  latitude-first `filter-crs`; the package swaps the numbers before PostGIS reads them.
+- **Two literals** compared with each other (S_INTERSECTS of a point and a box) are decided by PostGIS too, after the
+  transform. The package decides them itself only in CRS84.
+- **Tested on PostGIS 3.1–3.7, amd64 and arm64:** 5,805 literals × 8 relations, in EPSG:3857, EPSG:4326 latitude
+  first and UTM 14N, on the US states. Each selects exactly what the same literal, converted to CRS84 by that PostGIS
+  and given without `literals`, selects.
+  - With GEOS 3.13 or later (PostGIS 3.6, 3.7) it is also exactly what `evaluate` selects with GEOS.
+  - Older GEOS (3.9, 3.11) errors (`TopologyException`) or answers differently on geometry nearly touching a
+    boundary, in CRS84 as much: that is the database's GEOS, whoever converts.
 
 ## Array Functions
 

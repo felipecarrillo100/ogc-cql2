@@ -83,7 +83,7 @@ strings. More in [Comparing two properties](property-property-and-arithmetic.md)
 
 `s_intersects` (Basic Spatial Functions, with any geometry) works out of the box, on each feature's `geometry`. The
 Spatial Functions class (`s_disjoint`, `s_within`, `s_touches`, …) needs a geometry engine you plug in with
-`spatialEngine`, GEOS through geos.js for one. How, and the rules: [Spatial filters](spatial.md#in-memory).
+`spatialEngine`: GEOS through geos.js, or JSTS. How, and the rules: [Spatial filters](spatial.md#in-memory).
 
 ## The classes `evaluate` supports
 

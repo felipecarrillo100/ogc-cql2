@@ -83,7 +83,8 @@ An `"integer"` queryable is checked as a number: `storeys = 1.5` is valid, and `
 the filter's literals, so a decimal isn't refused. `storeys = 1.5` selects nothing; a UI that wants whole numbers in
 its inputs checks them itself.
 
-Both options combine: `validate(filter, { conformance, queryables })`.
+Both options combine: `validate(filter, { conformance, queryables })`. A third, `crs84: false`, is for geometries in
+a `filter-crs` CRS: [Literals in another CRS](spatial.md#literals-in-another-crs-filter-crs).
 
 ## Offering only what is supported
 

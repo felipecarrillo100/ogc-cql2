@@ -280,6 +280,46 @@ describe("refusals, as application/problem+json", () => {
   });
 });
 
+describe('"filter-crs" (OGC API Features Part 3, Requirement 8) on the file stores; PostgreSQL in its own tests', () => {
+  const EPSG = (code: number) => `http://www.opengis.net/def/crs/EPSG/0/${code}`;
+  const intersects = (bbox: number[]) => ({ op: "s_intersects", args: [{ property: "geometry" }, { bbox }] });
+  const colorado = [-106.3, 36.4, -100.7, 41.6];
+  const latitudeFirst = [36.4, -106.3, 41.6, -100.7];
+
+  it("EPSG:4326, latitude first, on the SQL stores (GeoPackage, GeoParquet): the same states as CRS84, text and JSON", async () => {
+    const expected = ids(await read(query("states", { filter: intersects(colorado) })));
+    assert.ok(expected.length > 3);
+    for (const collection of ["gpkg-states", "parquet-states"]) {
+      const json = await read(query(collection, { filter: intersects(latitudeFirst), "filter-crs": EPSG(4326) }));
+      const text = await read(query(collection, { filter: `S_INTERSECTS(geometry, BBOX(${latitudeFirst.join(", ")}))`, "filter-lang": "cql2-text", "filter-crs": EPSG(4326) }));
+      assert.deepEqual(ids(json), expected, collection);
+      assert.deepEqual(ids(text), expected, collection);
+    }
+  });
+
+  it("refuses a CRS the store doesn't take: EPSG:3857 where the dialect doesn't reproject, anything but CRS84 in memory", async () => {
+    const refusal = async (collection: string, crs: unknown) => {
+      const res = await query(collection, { filter: intersects([0, 0, 1, 1]), "filter-crs": crs });
+      return [res.status, (await read(res)).code];
+    };
+    assert.deepEqual(await refusal("gpkg-states", EPSG(3857)), [400, "invalid-request"]);
+    assert.deepEqual(await refusal("parquet-states", EPSG(3857)), [400, "invalid-request"]);
+    assert.deepEqual(await refusal("states", EPSG(4326)), [400, "invalid-request"]);
+    assert.deepEqual(await refusal("states", 4326), [400, "invalid-request"]);
+    // CRS84 named is the default.
+    const named = await query("states", { filter: intersects(colorado), "filter-crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84" });
+    assert.equal(named.status, 200);
+  });
+
+  it("a latitude out of range in EPSG:4326 is the client's error, where it wrote it", async () => {
+    const res = await query("gpkg-states", { filter: intersects([95, -106, 96, -105]), "filter-crs": EPSG(4326) });
+    assert.equal(res.status, 400);
+    const answer = await read(res);
+    assert.equal(answer.code, "invalid-filter");
+    assert.deepEqual(answer.problems.map((p: { path: string }) => p.path), ["/args/1/bbox/0", "/args/1/bbox/2"]);
+  });
+});
+
 describe("collections.json: the database sources", () => {
   const withConfig = <T>(collections: unknown[], body: (path: string) => T): T => {
     const dir = mkdtempSync(join(tmpdir(), "ogc-cql2-config-"));

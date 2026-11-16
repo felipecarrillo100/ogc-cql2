@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 import { CONFORMANCE, type Cql2Filter } from "ogc-cql2";
 import { toPredicate } from "ogc-cql2/evaluate";
+import { toSql, type SqlLiterals } from "ogc-cql2/sql";
 import pg from "pg";
 import { distance, fromGeoJSON } from "geos.js";
 import { geosEngine } from "../src/geos-engine.ts";
@@ -380,5 +381,176 @@ describe("Basic Spatial Functions: the sqlserver dialect, through the SQL Server
     } finally {
       await sqlServerPool.close();
     }
+  });
+});
+
+// --- Literals in another CRS (SqlOptions.literals, OGC API Features' filter-crs), since 1.7.0 ------------------------
+
+/**
+ * Each literal, in CRS84, converted to another CRS by PostGIS (any numbers would do: they are only the input). The
+ * postgres dialect with `literals` must select exactly what evaluate (GEOS for the relations) selects with the same
+ * numbers converted back to CRS84 by the same PostGIS, vertex by vertex, read back exactly: the conversion a server
+ * would do itself, then the comparison in CRS84, as CQL2's. A box in a projected CRS is its four corners converted
+ * back, a polygon (`ST_MakeEnvelope`'s ring); in EPSG:4326 latitude first, the same box, axes swapped.
+ */
+describe("Literals in another CRS: the postgres dialect with literals, as converting first, and against evaluate", () => {
+  type Pos = number[];
+  /** Converts each position from `from` to `to` in PostGIS, exactly (float8, shortest round trip), heights kept. */
+  const convert = async (positions: readonly Pos[], from: number, to: number): Promise<Pos[]> => {
+    if (positions.length === 0) return [];
+    const { rows } = await pool!.query(
+      `SELECT ST_X(p) AS x, ST_Y(p) AS y FROM (SELECT ST_Transform(ST_SetSRID(ST_MakePoint(x, y), ${from}), ${to}) AS p, o
+         FROM unnest($1::float8[], $2::float8[]) WITH ORDINALITY AS u(x, y, o)) t ORDER BY o`,
+      [positions.map((p) => p[0]), positions.map((p) => p[1])],
+    );
+    return rows.map((r: { x: number; y: number }, i: number) => [r.x, r.y, ...positions[i]!.slice(2)]);
+  };
+  /** A geometry's positions in order, and the geometry rebuilt from replacements in that order. */
+  const positionsOf = (l: Literal): Pos[] => {
+    const walk = (c: unknown): Pos[] => (typeof (c as unknown[])[0] === "number" ? [c as Pos] : (c as unknown[]).flatMap(walk));
+    return l.type === "GeometryCollection" ? (l.geometries as Literal[]).flatMap(positionsOf) : walk(l.coordinates);
+  };
+  const rebuild = (l: Literal, next: () => Pos): Literal => {
+    const walk = (c: unknown): unknown => (typeof (c as unknown[])[0] === "number" ? next() : (c as unknown[]).map(walk));
+    return l.type === "GeometryCollection"
+      ? { ...l, geometries: (l.geometries as Literal[]).map((g) => rebuild(g, next)) }
+      : { ...l, coordinates: walk(l.coordinates) };
+  };
+  /** The literal in `srid` (yx: axes swapped), and the reference: its numbers converted back to CRS84 by PostGIS. */
+  async function inCrs(l: Literal, srid: number, yx: boolean): Promise<{ given: Literal; reference: Literal } | undefined> {
+    const swap = (p: Pos): Pos => (yx ? [p[1]!, p[0]!, ...p.slice(2)] : p);
+    if ("bbox" in l) {
+      const [w, s, e, n] = l.bbox as number[];
+      if (srid === 4326) return { given: { bbox: [s, w, n, e] }, reference: l }; // yx: the box itself, antimeridian included
+      if (w! > e!) return undefined; // across the antimeridian: no box in a projected CRS (refused, tested below)
+      const [[x1, y1], [x2, y2]] = (await convert([[w!, s!], [e!, n!]], 4326, srid)) as [Pos, Pos];
+      const box = [Math.min(x1!, x2!), Math.min(y1!, y2!), Math.max(x1!, x2!), Math.max(y1!, y2!)];
+      const corners = await convert([[box[0]!, box[1]!], [box[0]!, box[3]!], [box[2]!, box[3]!], [box[2]!, box[1]!]], srid, 4326);
+      return { given: { bbox: box }, reference: { type: "Polygon", coordinates: [[...corners, corners[0]!]] } };
+    }
+    const forward = srid === 4326 ? positionsOf(l) : await convert(positionsOf(l), 4326, srid);
+    const back = srid === 4326 ? forward : await convert(forward, srid, 4326);
+    let i = 0;
+    let j = 0;
+    return { given: rebuild(l, () => swap(forward[i++]!)), reference: rebuild(l, () => back[j++]!) };
+  }
+
+  const CRSS = [{ srid: 3857, yx: false }, { srid: 4326, yx: true }, { srid: 32614, yx: false }] as const; // UTM 14N: central US
+  const RELATIONS = ["s_intersects", "s_disjoint", ...Object.keys(POSTGIS_RELATION)];
+  const columns = { geometry: { sqlType: "geometry", column: "geom" } };
+
+  /**
+   * The states each relation selects with `literal`, one query for all eight (each condition a column, its parameters
+   * numbered after the previous ones); or the database's error.
+   */
+  async function selected(literal: Literal, literals?: SqlLiterals): Promise<string[][] | Error> {
+    const params: unknown[] = [];
+    const conditions = RELATIONS.map((op) => {
+      const { where, params: own } = toSql({ op, args: [{ property: "geometry" }, literal] } as unknown as Cql2Filter, {
+        dialect: "postgres", columns, ...(literals ? { literals } : {}),
+      });
+      const offset = params.length;
+      params.push(...own);
+      return `COALESCE(${where.replace(/\$(\d+)/g, (_, n: string) => `$${Number(n) + offset}`)}, FALSE)`;
+    });
+    try {
+      const { rows } = await pool!.query(
+        `SELECT "STATE_NAME" AS name, ${conditions.map((c, k) => `${c} AS r${k}`).join(", ")} FROM cql2demo.states`, params,
+      );
+      return RELATIONS.map((_, k) => rows.filter((r: Record<string, unknown>) => r[`r${k}`] === true).map((r: { name: string }) => r.name).sort());
+    } catch (error) {
+      return error as Error;
+    }
+  }
+
+  /**
+   * Two checks a literal. The contract, on every server: the SQL with `literals` selects exactly what the literal
+   * converted back gives in plain CRS84 on the same server (what a server converting itself would run), and errors
+   * where it errors. And against evaluate with geos.js, failed only on GEOS 3.13 or later: older GEOS (PostGIS 3.1–3.5's
+   * images) errors (`TopologyException`) or differs from it on near-coincident geometry, in CRS84 as much (measured:
+   * research/filter-crs), so those differences are reported, not failed.
+   */
+  for (const { srid, yx } of CRSS) {
+    it(`SRID ${srid}${yx ? " (yx)" : ""}: 8 relations × ${LITERALS.length} literals, as converting first; and as evaluate`, async (t) => {
+      if (skip) return t.skip(skip);
+      const { rows: [{ v }] } = await pool!.query("SELECT postgis_geos_version() AS v");
+      const [major, minor] = (v as string).split(/[.-]/).map(Number) as [number, number];
+      const newGeos = major > 3 || (major === 3 && minor >= 13);
+      const contract: string[] = [];
+      const differences: string[] = [];
+      let [compared, errors] = [0, 0];
+      for (const literal of LITERALS) {
+        const converted = await inCrs(literal, srid, yx);
+        if (!converted) continue;
+        const [given, plain] = [await selected(converted.given, { srid, yx }), await selected(converted.reference)];
+        const at = JSON.stringify(converted.given).slice(0, 120);
+        if (given instanceof Error || plain instanceof Error) {
+          if (!(given instanceof Error && plain instanceof Error)) contract.push(`${at}: ${given instanceof Error ? "only with literals" : "only in CRS84"} an error`);
+          errors++;
+          continue;
+        }
+        RELATIONS.forEach((op, k) => {
+          compared++;
+          if (JSON.stringify(given[k]) !== JSON.stringify(plain[k])) contract.push(`${op} ${at}\n    literals ${given[k]!.join(", ")} / CRS84 ${plain[k]!.join(", ")}`);
+          const reference = { op, args: [{ property: "geometry" }, converted.reference] } as unknown as Cql2Filter;
+          const ours = states.filter(toPredicate(reference, { spatialEngine: geosEngine })).map((f) => f.properties.STATE_NAME).sort();
+          if (JSON.stringify(ours) !== JSON.stringify(given[k])) differences.push(`${op} ${at}\n    evaluate ${ours.join(", ")} / sql ${given[k]!.join(", ")}`);
+        });
+      }
+      t.diagnostic(`GEOS ${v}: ${compared} comparisons, ${errors} literals the database errors on (in CRS84 too), ${differences.length} differences from evaluate`);
+      assert.ok(compared > 7 * LITERALS.length, `compared ${compared}`);
+      assert.equal(contract.slice(0, 10).join("\n"), "");
+      if (newGeos) {
+        assert.equal(errors, 0);
+        assert.equal(differences.slice(0, 10).join("\n"), "");
+      }
+    });
+  }
+
+  it("two literals in 3857: decided by PostGIS in CRS84, as evaluate decides the two converted back", async (t) => {
+    if (skip) return t.skip(skip);
+    const differences: string[] = [];
+    let compared = 0;
+    // First a pair where the two planes disagree: (−50, 45) is above the triangle's long edge in CRS84 (outside), below
+    // it in Web Mercator's metres (inside), so a test in the literals' own numbers would answer TRUE.
+    const triangle = { type: "Polygon", coordinates: [[[-100, 0], [0, 80], [0, 0], [-100, 0]]] };
+    const pairs: [Literal, Literal][] = [[{ type: "Point", coordinates: [-50, 45] }, triangle]];
+    for (let i = 0; i + 1 < LITERALS.length; i += 7) pairs.push([LITERALS[i]!, LITERALS[(i * 13 + 1) % LITERALS.length]!]);
+    for (const [first, second] of pairs) {
+      const [a, b] = [await inCrs(first, 3857, false), await inCrs(second, 3857, false)];
+      if (!a || !b) continue;
+      for (const op of ["s_intersects", "s_disjoint"]) {
+        const { where, params } = toSql({ op, args: [a.given, b.given] } as unknown as Cql2Filter, { dialect: "postgres", columns, literals: { srid: 3857 } });
+        const { rows } = await pool!.query(`SELECT COALESCE(${where}, FALSE) AS r`, [...params]);
+        const ours = toPredicate({ op, args: [a.reference, b.reference] } as unknown as Cql2Filter, { spatialEngine: geosEngine })({});
+        compared++;
+        if (rows[0].r !== ours) differences.push(`${op} ${JSON.stringify(a.given).slice(0, 80)} ${JSON.stringify(b.given).slice(0, 80)}: sql ${rows[0].r}, evaluate ${ours}`);
+      }
+    }
+    t.diagnostic(`${compared} pairs`);
+    assert.equal(differences.slice(0, 10).join("\n"), "");
+  });
+
+  it("Part 3's Conformance Test 11: the collection's extent, converted to 3857, selects every state", async (t) => {
+    if (skip) return t.skip(skip);
+    const { rows: [extent] } = await pool!.query(
+      `SELECT ST_XMin(e) AS w, ST_YMin(e) AS s, ST_XMax(e) AS e, ST_YMax(e) AS n FROM (SELECT ST_Extent(geom)::geometry AS e FROM cql2demo.states) x`,
+    );
+    const [[w, s], [e, n]] = (await convert([[extent.w, extent.s], [extent.e, extent.n]], 4326, 3857)) as [Pos, Pos];
+    const box = { bbox: [w!, s!, e!, n!] };
+    const { where, params } = toSql({ op: "s_intersects", args: [{ property: "geometry" }, box] } as unknown as Cql2Filter, {
+      dialect: "postgres", columns, literals: { srid: 3857 },
+    });
+    const { rows } = await pool!.query(`SELECT count(*)::int AS n FROM cql2demo.states WHERE ${where}`, [...params]);
+    assert.equal(rows[0].n, states.length);
+  });
+
+  it("a box across the antimeridian in 3857 (west above east) is refused, not turned round", () => {
+    assert.throws(
+      () => toSql({ op: "s_intersects", args: [{ property: "geometry" }, { bbox: [18924313, 6446275, -18924313, 8399737] }] } as unknown as Cql2Filter, {
+        dialect: "postgres", columns, literals: { srid: 3857 },
+      }),
+      { code: "invalid-filter" },
+    );
   });
 });

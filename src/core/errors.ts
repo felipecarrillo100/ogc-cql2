@@ -13,7 +13,8 @@ export type Cql2ErrorCode =
   | "unknown-property"
   /**
    * `evaluate`, `toSql`: the filter is valid, but uses a conformance class this part doesn't evaluate (yet);
-   * `details.conformance` names it.
+   * `details.conformance` names it. `toSql` also: literals in a SRID the dialect doesn't reproject
+   * (`SqlOptions.literals`, see `sqlReprojects`); `details.srid` names it.
    */
   | "unsupported";
 

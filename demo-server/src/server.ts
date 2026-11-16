@@ -6,10 +6,13 @@
  * | `GET /collections` | the collections |
  * | `GET /collections/{id}` | one collection |
  * | `GET /collections/{id}/queryables` | its properties and their types, as OGC API Features Part 3 queryables |
- * | `POST /collections/{id}/query` `{ filter, "filter-lang"?, limit?, offset? }` | the matching features, a GeoJSON FeatureCollection |
+ * | `POST /collections/{id}/query` `{ filter, "filter-lang"?, "filter-crs"?, limit?, offset? }` | the matching features, a GeoJSON FeatureCollection |
  *
  * `filter-lang` takes OGC API Features Part 3's values: `cql2-json` (the default here), the filter as CQL2-JSON, or
- * `cql2-text`, the filter as a CQL2-text string. Refusals are `application/problem+json`. Run: `npm start` (builds the package first) or `npm run serve`; port 3100
+ * `cql2-text`, the filter as a CQL2-text string. `filter-crs` (Part 3, Requirement 8) names the CRS of the filter's
+ * geometries: CRS84 (the default); EPSG:4326 (latitude first) on the SQL stores; EPSG:3857 where the store's dialect
+ * reprojects (PostgreSQL). Another value, or one the store doesn't take, is refused; so is a literal outside its CRS's
+ * area of use. Refusals are `application/problem+json`. Run: `npm start` (builds the package first) or `npm run serve`; port 3100
  * unless `PORT` says otherwise.
  */
 import { fileURLToPath } from "node:url";
@@ -18,6 +21,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import type { Cql2Error, Cql2Filter } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
 import { validate, type ValidateOptions } from "ogc-cql2/validate";
+import { CRS84, LITERALS, outsideArea } from "./stores/filter-crs.ts";
 
 /**
  * A store's queryables, with the features' geometry as OGC API Features Part 3 lists it (unless a property has that
@@ -91,7 +95,7 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
     if (!store) return;
     const body = req.body as Record<string, unknown> | undefined;
     if (typeof body !== "object" || body === null || Array.isArray(body) || !("filter" in body)) {
-      return refuse(req, res, 400, "invalid-request", "Invalid request", 'Send a JSON object: { "filter": <CQL2-JSON or CQL2-text>, "filter-lang"?, "limit"?, "offset"? }.');
+      return refuse(req, res, 400, "invalid-request", "Invalid request", 'Send a JSON object: { "filter": <CQL2-JSON or CQL2-text>, "filter-lang"?, "filter-crs"?, "limit"?, "offset"? }.');
     }
     const lang = body["filter-lang"] ?? "cql2-json";
     if (lang !== "cql2-json" && lang !== "cql2-text") {
@@ -99,6 +103,12 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
     }
     if (lang === "cql2-text" && typeof body.filter !== "string") {
       return refuse(req, res, 400, "invalid-request", "Invalid request", 'With "filter-lang": "cql2-text", the filter is a string.');
+    }
+    // filter-crs: one of the CRSs this store takes (Part 3, Requirement 8 C: an error for any other).
+    const crs = body["filter-crs"] ?? CRS84;
+    const accepted = store.filterCrs?.() ?? [CRS84];
+    if (typeof crs !== "string" || !accepted.includes(crs)) {
+      return refuse(req, res, 400, "invalid-request", "Invalid request", `"filter-crs" is one of ${accepted.join(", ")} for this collection.`);
     }
     const limit = integer(body.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
     const offset = integer(body.offset, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -108,7 +118,8 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
 
     // The collection's queryables: an unknown property, or a literal of another type than the property's, is refused
     // here (CQL2 lets a server answer a type mismatch with an error), instead of silently matching nothing.
-    const options: ValidateOptions = { queryables: queryablesOf(store), conformance: store.conformance() };
+    // In another CRS than CRS84, the literals' numbers aren't CRS84's: toSql checks them in their CRS (`literals`).
+    const options: ValidateOptions = { queryables: queryablesOf(store), conformance: store.conformance(), crs84: crs === CRS84 };
     let filter: Cql2Filter;
     if (lang === "cql2-text") {
       try {
@@ -129,7 +140,22 @@ export function createApp(stores: ReadonlyMap<string, Store>, log: (line: string
       filter = result.filter;
     }
 
-    const { features, numberMatched } = await store.query(filter, { limit, offset });
+    const outside = outsideArea(filter, crs);
+    if (outside.length > 0) {
+      return refuse(req, res, 400, "invalid-filter", "Invalid filter", `A geometry lies outside the area of use of ${crs}.`, outside);
+    }
+    let result: Awaited<ReturnType<Store["query"]>>;
+    try {
+      result = await store.query(filter, { limit, offset }, LITERALS[crs]);
+    } catch (error) {
+      // toSql's own checks in the literals' CRS (EPSG:4326's latitudes, a box running backwards in 3857).
+      const e = error as Cql2Error;
+      if (e.name === "Cql2Error" && e.code === "invalid-filter") {
+        return refuse(req, res, 400, "invalid-filter", "Invalid filter", `The filter's geometries aren't valid in ${crs}.`, e.details.problems as unknown[]);
+      }
+      throw error;
+    }
+    const { features, numberMatched } = result;
     res.type("application/geo+json").send(
       JSON.stringify({ type: "FeatureCollection", numberMatched, numberReturned: features.length, features }),
     );

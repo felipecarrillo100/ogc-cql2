@@ -3,6 +3,7 @@
  * table or (later) a PostgreSQL table are interchangeable behind it.
  */
 import type { Cql2Filter } from "ogc-cql2";
+import type { SqlLiterals } from "ogc-cql2/sql";
 
 export type FeatureId = string | number;
 
@@ -57,6 +58,13 @@ export interface Store {
   hasGeometry(): boolean;
   /** The CQL2 conformance classes this store evaluates: its engine's (`evaluateConformance`, `sqlConformance`). */
   conformance(): readonly string[];
-  /** The features the filter selects (TRUE), in the store's order, one page of them. The filter is valid. */
-  query(filter: Cql2Filter, page: Page): Promise<QueryResult>;
+  /**
+   * The `filter-crs` URIs this store accepts (OGC API Features Part 3): absent, CRS84 only. See `filter-crs.ts`.
+   */
+  filterCrs?(): readonly string[];
+  /**
+   * The features the filter selects (TRUE), in the store's order, one page of them. The filter is valid; `literals`,
+   * the CRS of its literals when it isn't CRS84 (one `filterCrs` accepts), for `toSql`.
+   */
+  query(filter: Cql2Filter, page: Page, literals?: SqlLiterals): Promise<QueryResult>;
 }

@@ -32,6 +32,7 @@ import { implementedBut, refuseUnsupported } from "../core/unsupported.js";
 import { compute, isArithmetic, readsProperty } from "../core/arithmetic.js";
 import { CONFORMANCE } from "../core/conformance.js";
 import { assertValid, requiredConformance } from "../validate/index.js";
+import { literalsOf, prepareLiterals } from "./literals.js";
 import { duckdb } from "./dialects/duckdb.js";
 import { oracle } from "./dialects/oracle.js";
 import { sqlserver } from "./dialects/sqlserver.js";
@@ -41,7 +42,7 @@ import {
   quote, type ArrayElements, type ArrayLiteralValue, type Dialect, type Kind, type PairSide, type SqlColumn, type SqlOptions, type SqlValue, type SqlWhere, type View,
 } from "./types.js";
 
-export type { SqlColumn, SqlDialect, SqlOptions, SqlValue, SqlWhere } from "./types.js";
+export type { SqlColumn, SqlDialect, SqlLiterals, SqlOptions, SqlValue, SqlWhere } from "./types.js";
 export { sqliteFunctions } from "./dialects/sqlite.js";
 export { postgresFunctions, postgresValue } from "./dialects/postgres.js";
 export { duckdbFunctions, duckdbValue, type DuckdbFunction } from "./dialects/duckdb.js";
@@ -107,17 +108,34 @@ export function sqlConformance(options: Omit<SqlOptions, "columns"> & Partial<Pi
 }
 
 /**
+ * Whether `toSql` accepts `literals` with a SRID other than 4326 with these options: whether the dialect reprojects a
+ * filter's literals (`postgres`, with PostGIS). A server offering `filter-crs` asks it, rather than naming dialects.
+ */
+export function sqlReprojects(options: Omit<SqlOptions, "columns"> & Partial<Pick<SqlOptions, "columns">>): boolean {
+  return DIALECTS[options.dialect].reprojects === true;
+}
+
+/**
  * Builds the `WHERE` condition and its values.
  *
  * @throws Cql2Error `invalid-filter` for a value that isn't a valid filter in the profile.
  * @throws Cql2Error `unknown-property` for a property not in `options.columns`.
  * @throws Cql2Error `unsupported` for a filter of a class not in {@link sqlConformance}: Spatial Functions on `sqlite`
- * without `spatialite` (S_DISJOINT included), Spatial Functions on `sqlserver`.
+ * without `spatialite` (S_DISJOINT included), Spatial Functions on `sqlserver`; `literals` with a SRID other than
+ * 4326 where {@link sqlReprojects} is false.
+ * @throws TypeError for `literals.srid` that isn't a positive integer.
  */
 export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
-  const valid = assertValid(filter);
+  const literals = literalsOf(options.literals);
+  const valid = literals ? prepareLiterals(filter, literals) : assertValid(filter);
   const dialect = DIALECTS[options.dialect];
   refuseUnsupported(requiredConformance(valid), sqlConformance(options), `ogc-cql2/sql (${options.dialect})`);
+  const srid = literals?.srid ?? 4326;
+  if (srid !== 4326 && !sqlReprojects(options)) {
+    throw new Cql2Error(
+      "unsupported", `ogc-cql2/sql (${options.dialect}) doesn't reproject literals: only SRID 4326 (CRS84's axes, or yx).`, "", { srid },
+    );
+  }
   const params: SqlValue[] = [];
   const param = (value: SqlValue, cast = ""): string => {
     params.push(value);
@@ -275,13 +293,13 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
   /** `op(property, literal)`, the property at `refPath`. */
   const spatialLeaf = (op: SpatialOperator, ref: PropertyRef, refPath: string, literal: SpatialLiteral, positive: boolean): string => {
     const { column, sql } = columnOf(ref, refPath);
-    if (op === "s_intersects") return dialect.intersects!(sql, column, literal, param, positive, fn) ?? dialect.never;
+    if (op === "s_intersects") return dialect.intersects!(sql, column, literal, param, positive, fn, srid) ?? dialect.never;
     if (op === "s_disjoint") {
       // NOT S_INTERSECTS, the leaf's polarity flipped: the same NULLs, and a prefilter only where it is exact.
-      const intersects = dialect.intersects!(sql, column, literal, param, !positive, fn);
+      const intersects = dialect.intersects!(sql, column, literal, param, !positive, fn, srid);
       return intersects === undefined ? dialect.never : `NOT (${intersects})`;
     }
-    return dialect.relate!(op, sql, column, literal, param, positive, fn) ?? dialect.never;
+    return dialect.relate!(op, sql, column, literal, param, positive, fn, srid) ?? dialect.never;
   };
 
   /**
@@ -293,17 +311,18 @@ export function toSql(filter: Cql2Filter, options: SqlOptions): SqlWhere {
     const isRef = (x: PropertyRef | SpatialLiteral): x is PropertyRef => "property" in x;
     if (isRef(a) && !isRef(b)) return spatialLeaf(op, a, `${path}/args/0`, b, positive);
     if (!isRef(a) && isRef(b)) return spatialLeaf(CONVERSE[op], b, `${path}/args/1`, a, positive);
-    if (!isRef(a) && !isRef(b) && (op === "s_intersects" || op === "s_disjoint")) {
+    if (!isRef(a) && !isRef(b) && (op === "s_intersects" || op === "s_disjoint") && srid === 4326) {
       // The package's own engine, which needs no spatialEngine (evaluate's refusal is by class: S_DISJOINT's needs one).
+      // In another SRID the database decides, in CRS84 after its transform, as for every other literal.
       return intersects(literalParts(a), literalParts(b)) !== (op === "s_disjoint") ? dialect.true : dialect.false;
     }
     const side = (x: PropertyRef | SpatialLiteral, at: string): PairSide => (isRef(x) ? columnOf(x, at) : { literal: x });
     const [sa, sb] = [side(a, `${path}/args/0`), side(b, `${path}/args/1`)];
     if (op === "s_disjoint") {
-      const intersects = dialect.spatialPair!("s_intersects", sa, sb, param, fn);
+      const intersects = dialect.spatialPair!("s_intersects", sa, sb, param, fn, srid);
       return intersects === undefined ? dialect.never : `NOT (${intersects})`;
     }
-    return dialect.spatialPair!(op, sa, sb, param, fn) ?? dialect.never;
+    return dialect.spatialPair!(op, sa, sb, param, fn, srid) ?? dialect.never;
   };
 
   /** An end of a temporal function's operand: a constant (a literal's day or instant, ±Infinity for ".."), or a property. */
