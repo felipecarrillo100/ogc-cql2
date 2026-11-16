@@ -5,7 +5,82 @@ All notable changes to this package are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Since 1.0.0, a minor version adds and never breaks (README,
 "Versioning and stability"); before it, a minor version could change the API.
 
-## [1.5.0] - unreleased
+## [1.6.0] - 2026-11-16
+
+The Array Functions class: a property holding an array compared with a set of values, or with another array
+property, in every part and every engine. Arrays can be held natively (PostgreSQL arrays, DuckDB lists) or as JSON
+(PostgreSQL `jsonb`, GeoPackage text as GDAL writes list fields, Oracle, SQL Server). A minor version: every filter
+valid in 1.5.0 gives the same SQL, the same text and the same answers.
+
+### Added
+
+- **Array Functions** (OGC 21-065r2 §7.9, Requirement 16), in `validate`, `toText`, `fromText`, `evaluate` and every
+  `toSql` dialect: `a_equals`, `a_contains`, `a_containedBy`, `a_overlaps`. CQL2-text writes an array as `('a', 'b')`,
+  and the empty one as `()`.
+  - New `Cql2Filter` members: `ArrayPredicate` (a property, then a set of literals) and `OperandArrayPredicate` (with
+    Property-Property Comparisons: a literal first, two properties, two literals). Also `CONFORMANCE.arrays`, appended
+    last.
+  - **Array queryables:** `{ type: "array", items }`. `items` types the literal elements (`type-mismatch`) and says
+    how two array properties compare.
+  - **What CQL2 leaves open, decided the same everywhere:**
+    - the arrays are sets: order and repeats don't matter;
+    - a NULL or missing value, or one that isn't an array, gives NULL;
+    - a NULL element is left out;
+    - elements compare as `=` does, never converted: `1` = `1.0`, `true` ≠ `1`, `"1"` ≠ `1`, text exactly after NFC,
+      and a string as a day against a date, as an instant against a timestamp;
+    - a filter's elements are strings, numbers, booleans, dates and timestamps. Anything else inside an array is
+      refused as `outside-profile`.
+- **In SQL,** a column holds arrays natively, by its type, or as JSON, declared with **`SqlColumn.items`**:
+  - `postgres`: native arrays (`text[]`, `float8[]`, `date[]`…) and `jsonb` / `json`. New in `postgresFunctions`:
+    `cql2_text_array` and its siblings (IMMUTABLE, so a GIN index on one serves the four functions) and
+    `cql2_json_double`. Run it again after upgrading.
+  - `duckdb`: lists (`VARCHAR[]`, `DOUBLE[]`…), in Node and DuckDB-WASM.
+  - `sqlite`: JSON text, as GDAL writes GeoPackage list fields, through `cql2_array` and `cql2_array_pair`, new in
+    `sqliteFunctions`. They run `evaluate`'s own code on the value as `JSON.parse` reads it.
+  - `oracle`: the `JSON` type, and JSON text in VARCHAR2 or CLOB, through `JSON_TABLE`.
+  - `sqlserver`: JSON text in nvarchar or varchar, and the `json` type of SQL Server 2025, through `OPENJSON`.
+- **`postgresValue`, `duckdbValue`, `oracleValue`, `sqlserverValue`** serve an array column as the dialect compares
+  it. JSON text is served for the application to `JSON.parse`.
+- **`sqlConformance`** lists Array Functions for every dialect, and `evaluateConformance` lists it with or without a
+  `spatialEngine`.
+- **The guide:** a page, [Array filters](docs/guide/arrays.md), and an Array Functions section on each database's
+  page.
+
+### Changed
+
+- The standard's array examples (`clause7_15`, `example79`–`example82`) are now valid by default, where 1.5.0 refused
+  them as `outside-profile`.
+
+### Documented, where the engines differ
+
+- **No index serves the JSON stores:** each value is read and checked, because a value that isn't an array gives
+  NULL, never an error. PostgreSQL's native arrays take a GIN index on `cql2_text_array(column)` and its siblings.
+- **Stored text is assumed to be in NFC** in Oracle and SQL Server, as for their text columns.
+- **Oracle:** a lone surrogate (`"\ud800"`, no Unicode text), compared between a text column and a `JSON` column,
+  can be decided otherwise than on the served values.
+- **SQL Server:** a JSON number below 2.2250738585072014e-308 in magnitude (subnormal) reads as 0; T-SQL has no exact
+  reading of it.
+- **DuckDB** holds arrays as lists only, not as JSON text.
+
+### Tested
+
+- The standard's array examples, and conformance tests 44 and 45.
+- Generated array filters against `evaluate`, over values chosen where engines disagree: NULL arrays and elements,
+  repeats, `[]`, `""`, `"a "`, `"A"`, NFC and NFD, `1` / `1.0`, `-0`, dates and instants as text, integers beyond
+  2^53, `1e400`, lone surrogates, `\u0000`, and malformed or non-array JSON. No differences on:
+  - PostgreSQL 13.5 and 18 (amd64 and arm64), native arrays and `jsonb`;
+  - DuckDB 2.0.0 and 1.5.4 in Node, and DuckDB-WASM 1.33.1-dev57.0 in Chrome;
+  - SQLite (`node:sqlite`) and a GeoPackage that GDAL reads;
+  - Oracle AI Database 26ai Free 23.26.3, also under other NLS settings;
+  - SQL Server 2022 and 2025, in a case-insensitive database and in a case- and accent-insensitive UTF-8 one, also
+    under another language and date format.
+- demo-server serves an arrays collection from each store: GeoParquet, GeoPackage, PostgreSQL, Oracle and SQL Server.
+- **The stand-in for DuckDB-WASM's engine moved** from `@duckdb/node-api` 1.4.3 to 1.5.4, the engine DuckDB-WASM
+  1.33.1-dev57.0 ships. Under the full test run, node-api 1.4.3 deadlocked when a registered JavaScript function ran
+  inside a correlated `unnest` or a lambda. DuckDB 1.5.4, 2.0 and DuckDB-WASM never did, and the `duckdb` dialect
+  writes neither form.
+
+## [1.5.0] - 2026-11-15
 
 Two more SQL databases, for enterprise GIS: **Oracle Database** and **SQL Server**, each selecting exactly what
 `evaluate` selects, but for the rules each documents. A minor version: every existing filter gives the same SQL, the
@@ -654,6 +729,7 @@ The package's foundation, published to claim the name. No filter functions yet.
   entry point.
 - A demo page (`npm run demo`), not part of the published package.
 
+[1.6.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.4.0...v1.5.0
 [1.2.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/felipecarrillo100/ogc-cql2/compare/v1.0.0...v1.1.0

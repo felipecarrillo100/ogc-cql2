@@ -31,6 +31,15 @@ const rows = db.prepare(`SELECT * FROM places WHERE ${where}`).all(...params);
 - **The classes:** every class but Spatial Functions; with SpatiaLite (below), every class.
   `sqlConformance({ dialect: "sqlite", spatialite })` says so in code.
 
+## Array Functions
+
+GeoPackage has no array type. GDAL writes a list field as TEXT holding JSON (`["a", "b"]`), marked `application/json`
+in `gpkg_data_columns`. Declare such a column with `items`, what its elements hold: `{ items: { type: "string" } }`
+(`{}` for any). The SQL is one call of `cql2_array` (two columns: `cql2_array_pair`), both in `sqliteFunctions`. They
+run `evaluate`'s own code on the value as `JSON.parse` reads it, so the answers are `evaluate`'s exactly. Text that
+isn't a JSON array is NULL. SQLite's own `json_each` isn't used: it errors on malformed JSON, and reads integers
+beyond 2^53, lone surrogates and `\u0000` differently from `JSON.parse`. More on arrays: [Array filters](arrays.md).
+
 ## Spatial filters
 
 - **`s_intersects`:** give the geometry column as `{ format: "geometry-any", column: "geom" }` (any `geometry-…`

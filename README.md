@@ -39,6 +39,7 @@ The package implements these conformance classes:
 | Property-Property Comparisons | a property or a literal on either side: comparisons, `like` (a string on the left), `between`, `in`, the spatial functions | ✅ | ✅ | ✅ |
 | Arithmetic Expressions | `+` `-` `*` `/` `%` `div` `^` wherever a number goes | ✅ | ✅ | ✅ |
 | Temporal Functions | `t_after` `t_before` `t_disjoint` `t_equals` `t_intersects` `t_contains` `t_during` `t_finishedBy` `t_finishes` `t_meets` `t_metBy` `t_overlappedBy` `t_overlaps` `t_startedBy` `t_starts`, `{ "interval" }` literals | ✅ | ✅ | ✅ |
+| Array Functions | `a_equals` `a_contains` `a_containedBy` `a_overlaps`, array literals | ✅ | ✅ | ✅ |
 
 - **Spatial:** `evaluate` tests `s_intersects` in memory, and the Spatial Functions class (`s_disjoint` and the other
   relations) with a geometry engine you plug in (GEOS in WebAssembly, for one); `sql` translates them for PostGIS,
@@ -48,10 +49,13 @@ The package implements these conformance classes:
 - **Property-Property Comparisons:** either side may be a property or a literal (`name = nameascii`,
   `'København' < name`, `S_WITHIN(BBOX(7,50,8,51), geom)`). **Arithmetic:** `area > population * 0.001`.
   **Temporal:** `T_DURING(INTERVAL(start, end), INTERVAL('2023-01-01', '2023-12-31'))`.
+- **Arrays:** `A_CONTAINS(tags, ('a', 'b'))`, compared as sets. The arrays can be held natively (PostgreSQL arrays,
+  DuckDB lists) or as JSON (PostgreSQL `jsonb`, GeoPackage text as GDAL writes list fields, Oracle, SQL Server)
+  ([guide](docs/guide/arrays.md)).
 - **Each engine says what it supports:** `evaluateConformance(options)` and `sqlConformance(options)` return the
   classes, as conformance URIs, to pass to `validate`; a filter valid against them is never refused as `unsupported`.
-- **Anything else that is valid CQL2** (array functions, custom functions) is refused as `outside-profile`, with the
-  conformance class it would need. More classes will follow.
+- **Anything else that is valid CQL2** (custom functions) is refused as `outside-profile`, with the conformance class
+  it would need.
 
 ## The parts at a glance
 
@@ -108,11 +112,11 @@ const { where, params } = toSql(filter, { dialect: "sqlite", columns });
 
 | Database | Dialect | What you get |
 |---|---|---|
-| SQLite, GeoPackage | `sqlite` | `?` placeholders, GeoPackage's types, its R-tree for spatial filters; Spatial Functions with SpatiaLite ([guide](docs/guide/sqlite-geopackage.md)) |
-| PostgreSQL, PostGIS | `postgres` | `$1` placeholders, code point order, PostGIS's GiST index, exact on arm64 too, any SRID ([guide](docs/guide/postgresql.md)) |
-| DuckDB, GeoParquet | `duckdb` | the same SQL in Node and in the browser (DuckDB-WASM), straight on files, GeoParquet's bbox covering ([guide](docs/guide/duckdb.md)) |
-| Oracle Database 23ai+, Oracle Spatial | `oracle` | `:1` placeholders, code point order whatever the session's NLS settings, every spatial relation planar with a planar index ([guide](docs/guide/oracle.md)) |
-| SQL Server 2022+ | `sqlserver` | `@p1` placeholders, code point order without blank padding, S_INTERSECTS on `geometry` with the spatial index; no Spatial Functions ([guide](docs/guide/sqlserver.md)) |
+| SQLite, GeoPackage | `sqlite` | `?` placeholders, GeoPackage's types, its R-tree for spatial filters; Spatial Functions with SpatiaLite; arrays as JSON text ([guide](docs/guide/sqlite-geopackage.md)) |
+| PostgreSQL, PostGIS | `postgres` | `$1` placeholders, code point order, PostGIS's GiST index, exact on arm64 too, any SRID; native and `jsonb` arrays, GIN-indexable ([guide](docs/guide/postgresql.md)) |
+| DuckDB, GeoParquet | `duckdb` | the same SQL in Node and in the browser (DuckDB-WASM), straight on files, GeoParquet's bbox covering; lists as arrays ([guide](docs/guide/duckdb.md)) |
+| Oracle Database 23ai+, Oracle Spatial | `oracle` | `:1` placeholders, code point order whatever the session's NLS settings, every spatial relation planar with a planar index; arrays as JSON ([guide](docs/guide/oracle.md)) |
+| SQL Server 2022+ | `sqlserver` | `@p1` placeholders, code point order without blank padding, S_INTERSECTS on `geometry` with the spatial index; arrays as JSON; no Spatial Functions ([guide](docs/guide/sqlserver.md)) |
 
 Every refusal is a `Cql2Error` with a stable `code` ([guide](docs/guide/errors.md)).
 
@@ -137,9 +141,10 @@ format), filtered in the database with `ogc-cql2/sql`: one entry serves every ta
 `gpkg_contents`. A **GeoParquet** (or Parquet) file is read in place by DuckDB (`@duckdb/node-api`), filtered with the
 `duckdb` dialect, its bbox covering used when the file has one. A **PostgreSQL** entry serves the tables it lists, from the database in `demo-server/.env`
 (copy `.env_sample`), filtered with the `postgres` dialect; **Oracle** and **SQL Server** entries likewise, with the
-`oracle` and `sqlserver` dialects (a database left out of `.env` is reported, and its collections aren't served). The
-samples: the states, the census sub-regions and a
-"kitchen sink" of every type and edge case, the same rows in every source (`demo-server/data/README.md` says how to load
+`oracle` and `sqlserver` dialects (a database left out of `.env` is reported, and its collections aren't served). A table's
+JSON columns that hold arrays are listed under `"arrays"`, with their elements' type. The samples: the states, the
+census sub-regions, a "kitchen sink" of every type and edge case, and an arrays table of the values where engines
+disagree, the same rows in every source (`demo-server/data/README.md` says how to load
 them into PostgreSQL, Oracle and SQL Server). Its routes:
 
 | Route | Answer |
@@ -193,12 +198,12 @@ Older versions may well work, but haven't been tested.
 | `pg` (node-postgres) | 8.23.1 | |
 | SQLite (`node:sqlite`) | 3.51.3 (Node 24.15), 3.53.4 (Node 22.23) | GeoPackage 1.4 |
 | SpatiaLite | 5.1.0 (GEOS 3.15.0, 3.14.1) | for Spatial Functions in `sqlite`; GEOS 3.13 or later for GeometryCollection literals |
-| DuckDB, Node (`@duckdb/node-api`) | 2.0.0, 1.5.4, 1.4.3 | 1.5.4 by `npm run check:duckdb`, which tests the newest releases |
-| DuckDB-WASM (`@duckdb/duckdb-wasm`) | 1.32.0 (DuckDB 1.4.3), 1.33.1-dev57.0 (DuckDB 1.5.4) | with the spatial extension |
+| DuckDB, Node (`@duckdb/node-api`) | 2.0.0, 1.5.4 | 1.5.4 is DuckDB-WASM's engine; `npm run check:duckdb` tests the newest releases |
+| DuckDB-WASM (`@duckdb/duckdb-wasm`) | 1.33.1-dev57.0 (DuckDB 1.5.4) | with the spatial extension |
 | geos.js (as `spatialEngine`) | 0.1.5 (GEOS 3.14.0) | |
-| Oracle Database | 26ai Free 23.26.3 (arm64) | every filter, every spatial relation, against GEOS. Not in CI |
+| Oracle Database | 26ai Free 23.26.3 (arm64) | every filter, arrays as text and in the `JSON` type, every spatial relation, against GEOS. Not in CI |
 | `oracledb` | 26.0.0 (thin mode) | |
-| SQL Server | 2022 (16.0.4305.5), 2025 (17.0.5035.5), amd64 (under emulation) | every filter, S_INTERSECTS against GEOS. Not in CI |
+| SQL Server | 2022 (16.0.4305.5), 2025 (17.0.5035.5), amd64 (under emulation) | every filter, arrays as text and in 2025's `json` type, S_INTERSECTS against GEOS. Not in CI |
 | `mssql` (tedious) | 12.7.13 | |
 
 ## More
@@ -208,6 +213,7 @@ Older versions may well work, but haven't been tested.
 - [docs/architecture.md](docs/architecture.md): how it is built and tested.
 - [docs/spatial-research.md](docs/spatial-research.md): spatial support: the standard, the engines measured, the decisions.
 - [docs/accent-research.md](docs/accent-research.md): accent-insensitive comparison: the standard, the engines, the decisions.
+- [docs/array-research.md](docs/array-research.md): Array Functions: the standard, the engines measured, the decisions.
 - [docs/duckdb-case.md](docs/duckdb-case.md): why the package has a DuckDB dialect, and what was measured first.
 - [CHANGELOG.md](CHANGELOG.md)
 

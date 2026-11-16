@@ -20,6 +20,9 @@ const { where, params } = toSql(filter, { dialect: "sqlite", columns });
 - **`columns` are the table's queryables:** each column's type, as its queryable gives it, decides how it is compared.
   A property can map to a column of another name (`column`); each dialect adds keys of its own (`sqlType`, `rtree`,
   `covering`…, on its page).
+- **Array columns:** a native array type says it (PostgreSQL `text[]`, DuckDB `VARCHAR[]`). A column holding arrays
+  as JSON needs `items`, what its elements hold (`{}` for any), as the queryable has it:
+  `{ sqlType: "jsonb", items: { type: "string" } }`. See [Array filters](arrays.md#in-sql).
 - **Safe by construction:** values are always parameters, never text in the query, and a property that isn't in
   `columns` is refused (`unknown-property`), so no name reaches the SQL unchecked.
 - **Each database needs the package's functions** registered or installed once (`sqliteFunctions`,

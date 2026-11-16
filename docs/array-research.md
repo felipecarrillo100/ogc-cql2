@@ -1,14 +1,14 @@
 # Research: CQL2's Array Functions
 
-**Status: research, 2026-11-04; feasibility study added 2026-11-15 (at the end); not implemented, nothing
-decided.** It records what CQL2 1.0.0 defines for arrays,
+**Status: implemented in 1.6.0** (in every part and every engine), with the decisions proposed at the end, as taken.
+The research dates from 2026-11-04, and the feasibility study from 2026-11-15. It records what CQL2 1.0.0 defines for arrays,
 what it leaves open, what other implementations do (their code read, and run), and what each engine of the package
 offers (measured). It ends with the questions a design has to answer, each with the option the measurements favour,
 and a rough cost. Sources: CQL2 1.0.0 (OGC 21-065r2), its released grammar and JSON Schema (`cql2.bnf`, `cql2.json`,
 tag `cql2-1.0.0` of github.com/opengeospatial/ogcapi-features), and OGC API - Features - Part 3: Filtering
 (OGC 19-079r2) for the queryables.
 
-## What the package does today
+## What the package did before 1.6.0
 
 - `ogc-cql2/parse` already reads the whole `arrayPredicate` rule: `A_EQUALS`, `A_CONTAINS`, `A_CONTAINEDBY`,
   `A_OVERLAPS`, and array literals, `(` always opening an array in that position, even of one element or none.
@@ -404,7 +404,7 @@ The first step is research on the standard itself, then a few spikes, and only t
 
 **Optional split, also backwards compatible:** release phases 1–4 as one minor version, with SQLite, Oracle and SQL
 Server leaving the class out of `sqlConformance` (as SQL Server leaves out Spatial Functions today), and phase 5 as
-the next.
+the next. (Not taken: 1.6.0 has every engine.)
 
 ### Risks
 
@@ -428,7 +428,7 @@ the next.
 
 ## Decisions proposed (Phase 1, 2026-11-15)
 
-**Status:** proposed, for the owner to decide; nothing implemented. The evidence is in `research/arrays/README.md`
+**Status:** taken, and implemented in 1.6.0 (how, in [architecture.md](architecture.md)). The evidence is in `research/arrays/README.md`
 ("Phase 1"):
 - the standard read again (21-065r2, the 1.0.1 draft, Part 3);
 - the trackers since 2025-10;

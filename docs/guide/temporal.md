@@ -30,7 +30,7 @@ The package reads the standard plainly, the same in `evaluate` and every SQL dia
   where an interval reads the table. One property against literals (`t_intersects(datetime, INTERVAL(…))`, the usual
   query) needs no `CASE`, so a DATE column keeps its index.
 - **Tested** with the standard's own 72 temporal rows (Annex A, and Table 16's) on its test data, in `evaluate`,
-  SQLite and DuckDB 2.0 and 1.4.3; and with generated filters (NULL ends, equal ends, a start after its end, `".."`,
+  SQLite and DuckDB 2.0 and 1.5.4; and with generated filters (NULL ends, equal ends, a start after its end, `".."`,
   sub-millisecond values, ±infinity) against `evaluate` in SQLite, PostgreSQL, DuckDB and DuckDB-WASM.
 
 ## Infinite dates and timestamps
